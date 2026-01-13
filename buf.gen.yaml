@@ -1,0 +1,15 @@
+version: v2
+plugins:
+  # Go code
+  - local: protoc-gen-go
+    out: gen/go
+    opt: paths=source_relative
+
+  # Connect RPC (replaces grpc + grpc-gateway)
+  - local: protoc-gen-connect-go
+    out: gen/go
+    opt: paths=source_relative
+
+  # OpenAPI 3.1 spec (TODO: install plugin)
+  # - local: protoc-gen-connect-openapi
+  #   out: gen/openapi

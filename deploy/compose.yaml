@@ -1,0 +1,74 @@
+# Deployment configuration for development environment
+volumes:
+  postgres_data: # DB data
+  go_modules: # cache go modules
+
+services:
+  # psina
+  # Default profile for development
+  psina-dev:
+    profiles: ["default", "dev"]
+    build:
+      context: ..
+      dockerfile: build/dev.Dockerfile
+      args:
+        _path: cmd/psina
+    container_name: psina-dev
+    ports:
+      - "8080:8080"
+    # Development specific configuration working with source code
+    volumes:
+      # Mount source code for live reload
+      - ..:/go/src/github.com/foxcool/psina
+      - go_modules:/go/pkg/mod
+    working_dir: /go/src/github.com/foxcool/psina
+    # Use air for running the application
+    command: ["air", "-c", ".air.toml"]
+    env_file: secrets.env
+    environment:
+      PSINA_LOG_LEVEL: INFO
+      PSINA_DB_URL: "postgres://psina:password@postgres:5432/psina?sslmode=disable"
+      PSINA_PORT: "8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Database needed by the psina application for storing data
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: psina
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: psina
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U psina -d psina"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Service for running tests in isolation
+  psina-test:
+    profiles: ["test"]
+    build:
+      context: ..
+      dockerfile: build/dev.Dockerfile
+      args:
+        _path: cmd/psina
+    container_name: psina-test
+    volumes:
+      - ..:/go/src/github.com/foxcool/psina
+      - go_modules:/go/pkg/mod
+    working_dir: /go/src/github.com/foxcool/psina
+    env_file: secrets.env
+    environment:
+      PSINA_LOG_LEVEL: INFO
+      PSINA_DB_URL: "postgres://psina:password@postgres:5432/psina?sslmode=disable"
+      # Flag to indicate running in test environment
+      DOCKER_COMPOSE_TEST: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy

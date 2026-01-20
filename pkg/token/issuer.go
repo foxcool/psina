@@ -24,11 +24,12 @@ const (
 
 // Issuer implements psina.TokenIssuer using RS256 JWT.
 type Issuer struct {
-	privateKey  *rsa.PrivateKey
-	publicKey   *rsa.PublicKey
-	signer      jose.Signer
-	jwks        *jose.JSONWebKeySet
-	tokenStore  psina.TokenStore
+	privateKey *rsa.PrivateKey
+	publicKey  *rsa.PublicKey
+	signer     jose.Signer
+	jwks       *jose.JSONWebKeySet
+	tokenStore psina.TokenStore
+	userStore  psina.UserStore
 }
 
 // customClaims extends jwt.Claims with custom fields.
@@ -38,18 +39,18 @@ type customClaims struct {
 }
 
 // New creates a new Issuer with generated RSA keys.
-func New(tokenStore psina.TokenStore) (*Issuer, error) {
+func New(tokenStore psina.TokenStore, userStore psina.UserStore) (*Issuer, error) {
 	// Generate RSA-2048 key pair
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return nil, fmt.Errorf("generate RSA key: %w", err)
 	}
 
-	return NewWithKey(privateKey, tokenStore)
+	return NewWithKey(privateKey, tokenStore, userStore)
 }
 
 // NewWithKey creates an Issuer with an existing private key.
-func NewWithKey(privateKey *rsa.PrivateKey, tokenStore psina.TokenStore) (*Issuer, error) {
+func NewWithKey(privateKey *rsa.PrivateKey, tokenStore psina.TokenStore, userStore psina.UserStore) (*Issuer, error) {
 	publicKey := &privateKey.PublicKey
 
 	// Create signer for JWT
@@ -74,11 +75,12 @@ func NewWithKey(privateKey *rsa.PrivateKey, tokenStore psina.TokenStore) (*Issue
 	}
 
 	return &Issuer{
-		privateKey:  privateKey,
-		publicKey:   publicKey,
-		signer:      signer,
-		jwks:        jwks,
-		tokenStore:  tokenStore,
+		privateKey: privateKey,
+		publicKey:  publicKey,
+		signer:     signer,
+		jwks:       jwks,
+		tokenStore: tokenStore,
+		userStore:  userStore,
 	}, nil
 }
 
@@ -87,9 +89,17 @@ func (i *Issuer) Issue(ctx context.Context, identity *psina.Identity) (*psina.To
 	now := time.Now()
 	expiresAt := now.Add(AccessTokenTTL)
 
+	// Generate unique JWT ID
+	jtiBytes := make([]byte, 16)
+	if _, err := rand.Read(jtiBytes); err != nil {
+		return nil, fmt.Errorf("generate jti: %w", err)
+	}
+	jti := base64.RawURLEncoding.EncodeToString(jtiBytes)
+
 	// Build JWT claims
 	claims := customClaims{
 		Claims: jwt.Claims{
+			ID:        jti,
 			Subject:   identity.UserID,
 			Issuer:    JWTIssuer,
 			IssuedAt:  jwt.NewNumericDate(now),
@@ -184,6 +194,12 @@ func (i *Issuer) Refresh(ctx context.Context, refreshToken string) (*psina.Token
 		return nil, fmt.Errorf("refresh token expired")
 	}
 
+	// Lookup user to get current email
+	user, err := i.userStore.GetByID(ctx, rt.UserID)
+	if err != nil {
+		return nil, fmt.Errorf("get user: %w", err)
+	}
+
 	// Revoke old refresh token
 	if err := i.tokenStore.RevokeRefreshToken(ctx, hash); err != nil {
 		return nil, fmt.Errorf("revoke old token: %w", err)
@@ -191,9 +207,8 @@ func (i *Issuer) Refresh(ctx context.Context, refreshToken string) (*psina.Token
 
 	// Issue new token pair
 	identity := &psina.Identity{
-		UserID: rt.UserID,
-		// Note: Email is not stored in refresh token, would need UserStore lookup
-		// For MVP, we'll leave it empty or require passing email separately
+		UserID: user.ID,
+		Email:  user.Email,
 	}
 
 	return i.Issue(ctx, identity)

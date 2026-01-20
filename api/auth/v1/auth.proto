@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package auth.v1;
 
-option go_package = "github.com/foxcool/psina/gen/go/auth/v1;authv1";
+option go_package = "github.com/foxcool/psina/pkg/api/auth/v1;authv1";
 
 service AuthService {
   rpc Register(RegisterRequest) returns (RegisterResponse);
@@ -20,6 +20,9 @@ message RegisterRequest {
 message RegisterResponse {
   string user_id = 1;
   string email = 2;
+  string access_token = 3;
+  string refresh_token = 4;
+  int64 expires_in = 5;  // seconds
 }
 
 message LoginRequest {

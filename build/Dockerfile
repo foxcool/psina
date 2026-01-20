@@ -27,7 +27,7 @@ FROM alpine:latest
 RUN apk --no-cache add ca-certificates curl
 
 # Copy migrations if they exist
-COPY --from=builder /go/src/github.com/foxcool/psina/deploy/migrations /migrations
+COPY --from=builder /go/src/github.com/foxcool/psina/migrations /migrations
 
 # Copy the binary
 COPY --from=builder /go/bin/app /app

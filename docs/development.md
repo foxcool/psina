@@ -94,19 +94,19 @@ psina/
 ├── build/                  # Docker images
 │   ├── Dockerfile          # Production
 │   └── dev.Dockerfile      # Development
-├── cmd/psina/              # Entrypoint (TODO)
+├── cmd/psina/              # Server entrypoint
 ├── deploy/                 # Deployment configs
 │   ├── compose.yaml        # Docker Compose
-│   ├── migrations/         # SQL migrations
+│   ├── examples/           # Gateway integration examples
 │   └── secrets.env         # Local secrets (gitignored)
 ├── docs/                   # Documentation
-├── gen/                    # Generated code (gitignored)
-├── pkg/                    # Public API
-│   ├── psina/              # Core interfaces
-│   ├── provider/           # Auth providers
-│   ├── store/              # Storage backends
-│   └── token/              # JWT management
-└── internal/               # Private code
+├── gen/                    # Generated code (proto + connect)
+├── migrations/             # SQL migrations
+└── pkg/                    # Public API
+    ├── psina/              # Core (service, handler, interfaces)
+    ├── provider/           # Auth providers (local)
+    ├── store/              # Storage backends (postgres, memory)
+    └── token/              # JWT management
 ```
 
 ## Development Workflow
@@ -157,10 +157,10 @@ docker compose -f deploy/compose.yaml --profile test run psina-test go test ./..
 See `deploy/secrets.env.example` for all available variables.
 
 Key variables:
-- `PSINA_DB_URL` — PostgreSQL connection string
-- `PSINA_PORT` — Server port (default: 8080)
-- `PSINA_LOG_LEVEL` — Log level (DEBUG, INFO, WARN, ERROR)
-- `PSINA_JWT_*` — JWT configuration
+- `PSINA_DB_URL` — PostgreSQL connection string (if empty, uses in-memory store)
+- `PSINA_SERVER_PORT` — Server port (default: 8080)
+- `PSINA_LOGGER_LEVEL` — Log level: debug, info, warn, error
+- `PSINA_LOGGER_FORMAT` — Log format: json, text
 
 ## CI/CD
 

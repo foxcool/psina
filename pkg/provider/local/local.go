@@ -193,6 +193,6 @@ func verifyPassword(password, encodedHash string) bool {
 // TODO: Use UUID in production.
 func generateUserID() string {
 	b := make([]byte, 16)
-	rand.Read(b)
+	_, _ = rand.Read(b)
 	return base64.RawURLEncoding.EncodeToString(b)
 }

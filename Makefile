@@ -48,7 +48,7 @@ test-unit:
 	@echo "Running unit tests..."
 	go test -v -race -coverprofile=coverage-unit.out -covermode=atomic ./...
 
-# Run integration tests with postgres
+# Run integration tests with postgres (local)
 test-integration:
 	@echo "Running integration tests..."
 	@echo "Starting postgres..."
@@ -56,17 +56,17 @@ test-integration:
 	@echo "Waiting for postgres to be ready..."
 	@sleep 5
 	@echo "Running tests..."
+	DOCKER_COMPOSE_TEST=true \
 	PSINA_DB_URL="postgres://psina:password@localhost:5432/psina?sslmode=disable" \
 		go test -v -tags=integration -coverprofile=coverage-integration.out ./...
 	@echo "Stopping postgres..."
 	$(COMPOSE) -f $(COMPOSE_FILE) down
 
-# Run e2e tests in docker
-test-e2e:
-	@echo "Running e2e tests in docker..."
-	$(COMPOSE) -f $(COMPOSE_FILE) --profile test run --rm \
-		-e DOCKER_COMPOSE_TEST=true \
-		psina-test go test -v -tags=e2e ./...
+# Run integration tests in docker (isolated)
+test-docker:
+	@echo "Running integration tests in docker..."
+	$(COMPOSE) -f $(COMPOSE_FILE) --profile test up --build --abort-on-container-exit --exit-code-from psina-test
+	$(COMPOSE) -f $(COMPOSE_FILE) --profile test down
 
 # Run default/development profile services in detached mode
 up:

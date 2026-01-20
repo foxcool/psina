@@ -20,20 +20,17 @@ knows pack from strangers.
 psina/
 ├── cmd/psina/          # Standalone binary entrypoint
 ├── pkg/                # Public API (importable by other projects)
-│   ├── psina/          # Main package: Service, Config, Options
-│   ├── provider/       # Auth provider interfaces + implementations
-│   │   ├── local/      # Username/password
-│   │   ├── passkey/    # WebAuthn/Passkeys
-│   │   └── wallet/     # Web3 wallet signatures (ETH, etc.)
+│   ├── api/            # Generated proto code (pb.go, connect.go)
+│   ├── psina/          # Main package: Service, Handler, interfaces
+│   ├── provider/       # Auth provider implementations
+│   │   └── local/      # Username/password (Argon2id)
 │   ├── token/          # JWT issuance, validation, JWKS
-│   ├── store/          # User/session storage interfaces
-│   │   ├── postgres/
-│   │   └── memory/     # For testing/embedded use
-│   └── gateway/        # API gateway integrations
-│       └── traefik/    # ForwardAuth middleware
-├── internal/           # Private implementation details
-├── api/                # Proto definitions (gRPC + gRPC-Gateway)
+│   └── store/          # Storage backends
+│       ├── postgres/   # Production store
+│       └── memory/     # For testing/dev
+├── api/                # Proto definitions (Connect RPC)
 ├── migrations/         # SQL migrations (golang-migrate format)
+├── deploy/             # Docker, compose, examples
 └── docs/               # Architecture documentation
 ```
 
@@ -46,11 +43,13 @@ psina/
 
 ## Tech Stack
 
-- Go 1.22+
+- Go 1.24+
 - Connect RPC (gRPC + HTTP/JSON on same port)
-- PostgreSQL (primary) / SQLite (dev/embedded)
+- PostgreSQL (primary) / Memory store (dev/testing)
 - buf for protobuf management (local plugins only)
 - golang-migrate for migrations
+- koanf for configuration
+- slog for structured logging
 
 ## Go Dependencies
 
@@ -65,10 +64,12 @@ golang.org/x/crypto                 // Argon2id
 
 // Database
 github.com/jackc/pgx/v5             // PostgreSQL driver
-github.com/golang-migrate/migrate/v4 // Migrations
+
+// Configuration
+github.com/knadh/koanf/v2           // Config management
 
 // HTTP
-golang.org/x/net/http2/h2c          // HTTP/2 cleartext (for gRPC)
+golang.org/x/net/http2/h2c          // HTTP/2 cleartext (for Connect)
 
 // Testing
 github.com/stretchr/testify         // Assertions
@@ -102,35 +103,31 @@ plugins:
   - local: protoc-gen-go
     out: gen/go
     opt: paths=source_relative
-  
+
   # Connect RPC (replaces grpc + grpc-gateway)
   - local: protoc-gen-connect-go
     out: gen/go
     opt: paths=source_relative
-  
-  # OpenAPI 3.1 spec
-  - local: protoc-gen-connect-openapi
-    out: gen/openapi
+
+  # OpenAPI 3.1 spec (optional, install protoc-gen-connect-openapi)
+  # - local: protoc-gen-connect-openapi
+  #   out: gen/openapi
 ```
 
-## Current Phase: MVP (v0.1)
+## Current Status: v0.1 Complete ✅
 
-Focus:
+**Implemented:**
 
-- Local auth (username/password)
-- JWT issuance (RS256)
-- JWKS endpoint
-- Traefik ForwardAuth
-- PostgreSQL store
-- Memory store (testing)
+- Local auth (email/password with Argon2id)
+- JWT tokens (RS256, 15min access, 7d refresh)
+- JWKS endpoint (/.well-known/jwks.json)
+- Connect RPC API (HTTP/JSON + gRPC on same port)
+- PostgreSQL store (production)
+- Memory store (dev/testing)
+- Traefik ForwardAuth integration
+- Docker support + CI/CD
 
-NOT in scope for v0.1:
-
-- OAuth providers
-- Passkeys/WebAuthn
-- Web3 wallet auth
-- TOTP 2FA
-- Admin UI
+**Next phase (v0.2):** Passkeys/WebAuthn — see docs/ROADMAP.md
 
 ## Core Interfaces
 
@@ -248,21 +245,21 @@ POST /auth.v1.AuthService/Verify       - Validate token (ForwardAuth)
 GET  /.well-known/jwks.json            - Public keys (standard HTTP)
 ```
 
-## MVP Implementation Order
+## Key Files
 
-1. **Setup**: buf.yaml, buf.gen.yaml, go.mod dependencies
-2. **Proto**: api/auth/v1/auth.proto → buf generate
-3. **Domain**: pkg/psina/types.go (User, Identity, TokenPair)
-4. **Interfaces**: pkg/psina/provider.go, store.go, token.go
-5. **Token Issuer**: pkg/token/issuer.go (RS256, JWKS)
-6. **Local Provider**: pkg/provider/local/local.go (Argon2id)
-7. **Memory Store**: pkg/store/memory/memory.go
-8. **Service**: pkg/psina/service.go (orchestrates everything)
-9. **Connect Handler**: pkg/psina/handler.go
-10. **JWKS Handler**: pkg/psina/jwks.go (/.well-known/jwks.json)
-11. **Standalone**: cmd/psina/main.go
-12. **PostgreSQL Store**: pkg/store/postgres/
-13. **Migrations**: migrations/
+| File | Purpose |
+|------|---------|
+| `pkg/psina/service.go` | Orchestration layer |
+| `pkg/psina/handler.go` | Connect RPC handler |
+| `pkg/psina/types.go` | Domain types (User, Identity, TokenPair) |
+| `pkg/psina/provider.go` | Provider interface |
+| `pkg/psina/store.go` | Store interfaces (User, Token, Credential) |
+| `pkg/token/issuer.go` | JWT issuance, validation, JWKS |
+| `pkg/provider/local/local.go` | Local auth (Argon2id) |
+| `pkg/store/postgres/postgres.go` | PostgreSQL store |
+| `pkg/store/memory/memory.go` | In-memory store (testing) |
+| `cmd/psina/main.go` | Server entrypoint |
+| `cmd/psina/config.go` | Configuration (koanf) |
 
 ## Code Style
 

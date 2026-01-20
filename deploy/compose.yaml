@@ -63,7 +63,8 @@ services:
       - ..:/go/src/github.com/foxcool/psina
       - go_modules:/go/pkg/mod
     working_dir: /go/src/github.com/foxcool/psina
-    env_file: secrets.env
+    # Run integration tests
+    command: ["go", "test", "-v", "-tags=integration", "./..."]
     environment:
       PSINA_LOG_LEVEL: INFO
       PSINA_DB_URL: "postgres://psina:password@postgres:5432/psina?sslmode=disable"

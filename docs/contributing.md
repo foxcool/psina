@@ -6,10 +6,10 @@ Thanks for your interest in contributing! 🐕
 
 ### Prerequisites
 
-- Go 1.22+
-- PostgreSQL 14+ (or Docker)
+- Go 1.24+
+- PostgreSQL 16+ (or Docker)
 - buf (for protobuf)
-- golang-migrate
+- make
 
 ### Clone and setup
 
@@ -17,23 +17,15 @@ Thanks for your interest in contributing! 🐕
 git clone https://github.com/foxcool/psina.git
 cd psina
 
-# Install dependencies
-go mod download
+# Start dev environment (postgres + psina with live reload)
+make up
 
-# Start PostgreSQL (Docker)
-docker run -d --name psina-db \
-  -e POSTGRES_USER=psina \
-  -e POSTGRES_PASSWORD=psina \
-  -e POSTGRES_DB=psina \
-  -p 5432:5432 \
-  postgres:16
+# Or run tests only
+make test-unit           # unit tests
+make test-integration    # with postgres
 
-# Run migrations
-export DATABASE_URL="postgres://psina:psina@localhost:5432/psina?sslmode=disable"
-migrate -path migrations -database $DATABASE_URL up
-
-# Run tests
-go test ./...
+# Stop environment
+make down
 ```
 
 ## Code Style
@@ -48,16 +40,15 @@ go test ./...
 
 ```text
 pkg/           # Public API (maintain backward compatibility!)
-├── psina/     # Main package
-├── provider/  # Auth providers
-├── store/     # Storage backends
-├── token/     # JWT handling
-└── gateway/   # Gateway integrations
+├── psina/     # Main package (service, handler, interfaces)
+├── provider/  # Auth providers (local, passkey, wallet)
+├── store/     # Storage backends (postgres, memory)
+└── token/     # JWT handling
 
-internal/      # Private implementation (can change freely)
 cmd/psina/     # Standalone binary
 api/           # Proto definitions
 migrations/    # SQL migrations
+deploy/        # Docker, compose, examples
 ```
 
 ## Making Changes
@@ -94,14 +85,13 @@ git checkout -b fix/your-fix
 
 ## Adding a New Provider
 
-Providers implement the `Provider` interface:
+Providers implement the `Provider` interface defined in `pkg/psina/provider.go`:
 
 ```go
-// pkg/provider/provider.go
 type Provider interface {
     Type() string
-    Authenticate(ctx context.Context, req AuthRequest) (*Identity, error)
-    Register(ctx context.Context, req RegisterRequest) (*Identity, error)
+    Authenticate(ctx context.Context, req *AuthRequest) (*Identity, error)
+    Register(ctx context.Context, req *RegisterRequest) (*Identity, error)
 }
 ```
 
@@ -110,20 +100,23 @@ Steps:
 1. Create `pkg/provider/yourprovider/` directory
 2. Implement the interface
 3. Add tests
-4. Add registration in `pkg/psina/options.go`
-5. Update documentation
+4. Update documentation
 
 ## Adding a New Store
 
-Stores implement `UserStore` and `TokenStore` interfaces:
+Stores implement interfaces defined in `pkg/psina/store.go`:
 
 ```go
-// pkg/store/store.go
 type UserStore interface {
     Create(ctx context.Context, user *User) error
     GetByID(ctx context.Context, id string) (*User, error)
     GetByEmail(ctx context.Context, email string) (*User, error)
-    Update(ctx context.Context, user *User) error
+}
+
+type TokenStore interface {
+    SaveRefreshToken(ctx context.Context, token *RefreshToken) error
+    GetRefreshToken(ctx context.Context, hash string) (*RefreshToken, error)
+    RevokeRefreshToken(ctx context.Context, hash string) error
 }
 ```
 
@@ -132,7 +125,6 @@ Steps:
 1. Create `pkg/store/yourstore/` directory
 2. Implement interfaces
 3. Add integration tests
-4. Add option in `pkg/psina/options.go`
 
 ## Commit Messages
 

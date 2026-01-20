@@ -13,7 +13,7 @@ import (
 
 func TestIssuer_Issue(t *testing.T) {
 	store := memory.New()
-	issuer, err := token.New(store)
+	issuer, err := token.New(store, store)
 	require.NoError(t, err)
 
 	identity := &psina.Identity{
@@ -32,7 +32,7 @@ func TestIssuer_Issue(t *testing.T) {
 
 func TestIssuer_Validate(t *testing.T) {
 	store := memory.New()
-	issuer, err := token.New(store)
+	issuer, err := token.New(store, store)
 	require.NoError(t, err)
 
 	identity := &psina.Identity{
@@ -55,7 +55,15 @@ func TestIssuer_Validate(t *testing.T) {
 
 func TestIssuer_Refresh(t *testing.T) {
 	store := memory.New()
-	issuer, err := token.New(store)
+	issuer, err := token.New(store, store)
+	require.NoError(t, err)
+
+	// Create user in store (required for Refresh to lookup email)
+	user := &psina.User{
+		ID:    "user-123",
+		Email: "test@example.com",
+	}
+	err = store.Create(context.Background(), user)
 	require.NoError(t, err)
 
 	identity := &psina.Identity{
@@ -83,7 +91,7 @@ func TestIssuer_Refresh(t *testing.T) {
 
 func TestIssuer_JWKS(t *testing.T) {
 	store := memory.New()
-	issuer, err := token.New(store)
+	issuer, err := token.New(store, store)
 	require.NoError(t, err)
 
 	jwks := issuer.JWKS()

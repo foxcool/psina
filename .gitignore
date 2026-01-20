@@ -5,7 +5,7 @@ bin/
 *.dll
 *.so
 *.dylib
-psina
+/psina
 
 # Test binary
 *.test
@@ -48,9 +48,6 @@ secrets/
 *.db
 *.sqlite
 
-# Generated
-gen/
-api/gen/
 
 # Logs
 *.log
@@ -66,3 +63,4 @@ tmp/
 docs/archive/
 docs/ROADMAP.md
 docs/SESSION_LOG.md
+.aider*

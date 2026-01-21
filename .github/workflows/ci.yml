@@ -47,41 +47,18 @@ jobs:
     name: Run integration tests
     runs-on: ubuntu-latest
 
-    services:
-      postgres:
-        image: postgres:17-alpine
-        env:
-          POSTGRES_USER: psina
-          POSTGRES_PASSWORD: password
-          POSTGRES_DB: psina
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U psina -d psina"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: stable
 
-      - name: Wait for Postgres
-        run: |
-          for i in $(seq 1 10); do
-            pg_isready -h localhost -p 5432 -U psina && break
-            echo "Waiting for postgres..."
-            sleep 2
-          done
+      - name: Install Atlas CLI
+        run: curl -sSf https://atlasgo.sh | sh
 
       - name: Run integration tests
-        env:
-          PSINA_DB_URL: postgres://psina:password@localhost:5432/psina?sslmode=disable
-          DOCKER_COMPOSE_TEST: true
         run: |
-          go test -v -p 1 -tags=integration -coverprofile=coverage-integration.out ./...
+          go test -v -p 1 -tags=integration -coverprofile=coverage-integration.out ./pkg/store/postgres/... ./pkg/psina/...
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4

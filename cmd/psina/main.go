@@ -52,7 +52,7 @@ func run() error {
 
 	if config.DB.URL != "" {
 		// Production: use PostgreSQL
-		slog.Info("using postgresql store", "url", maskDSN(config.DB.URL))
+		slog.Info("using postgresql store")
 
 		pgStore, err := postgres.NewWithDSN(ctx, config.DB.URL)
 		if err != nil {
@@ -154,28 +154,6 @@ func run() error {
 
 	slog.Info("server stopped")
 	return nil
-}
-
-// maskDSN hides password in DSN for logging.
-func maskDSN(dsn string) string {
-	// Simple masking: replace password in postgres://user:pass@host format
-	if idx := len("postgres://"); len(dsn) > idx {
-		if atIdx := findChar(dsn[idx:], '@'); atIdx > 0 {
-			if colonIdx := findChar(dsn[idx:idx+atIdx], ':'); colonIdx > 0 {
-				return dsn[:idx+colonIdx+1] + "****" + dsn[idx+atIdx:]
-			}
-		}
-	}
-	return dsn
-}
-
-func findChar(s string, c byte) int {
-	for i := 0; i < len(s); i++ {
-		if s[i] == c {
-			return i
-		}
-	}
-	return -1
 }
 
 func setupLogger(config LoggerConfig) *slog.Logger {

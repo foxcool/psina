@@ -8,70 +8,34 @@ import (
 	"os"
 	"testing"
 
-	"github.com/foxcool/psina/migrations"
 	"github.com/foxcool/psina/pkg/psina"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/foxcool/psina/pkg/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-var testPool *pgxpool.Pool
+var testDB *testutil.TestDB
 
 func TestMain(m *testing.M) {
-	// Check if running in integration test environment
-	if os.Getenv("DOCKER_COMPOSE_TEST") != "true" {
-		slog.Info("Skipping integration tests (DOCKER_COMPOSE_TEST not set)")
-		os.Exit(0)
-	}
-
-	dsn := os.Getenv("PSINA_DB_URL")
-	if dsn == "" {
-		slog.Error("PSINA_DB_URL not set")
-		os.Exit(1)
-	}
+	ctx := context.Background()
 
 	var err error
-	testPool, err = pgxpool.New(context.Background(), dsn)
+	testDB, err = testutil.NewTestDB(ctx)
 	if err != nil {
-		slog.Error("failed to create pool", "error", err)
-		os.Exit(1)
-	}
-	defer testPool.Close()
-
-	// Run migrations
-	if err := migrations.Apply(context.Background(), testPool); err != nil {
-		slog.Error("failed to run migrations", "error", err)
+		slog.Error("failed to create test database", "error", err)
 		os.Exit(1)
 	}
 
 	code := m.Run()
+
+	testDB.Close(ctx)
 	os.Exit(code)
 }
 
-// getTestStore returns a store with transaction for test isolation.
-// Rollback is called automatically after test.
 func getTestStore(t *testing.T) *Store {
 	t.Helper()
-
-	ctx := context.Background()
-
-	// Start transaction for test isolation
-	tx, err := testPool.Begin(ctx)
-	require.NoError(t, err)
-
-	// Cleanup after test
-	t.Cleanup(func() {
-		_ = tx.Rollback(ctx)
-	})
-
-	// Create a pool-like wrapper that uses the transaction
-	// For simplicity, we'll clean tables instead of using transaction
-	_, err = testPool.Exec(ctx, `
-		TRUNCATE TABLE refresh_tokens, local_credentials, users CASCADE
-	`)
-	require.NoError(t, err)
-
-	return New(testPool)
+	testDB.MustTruncate(t)
+	return New(testDB.Pool)
 }
 
 func TestStore_UserCRUD(t *testing.T) {

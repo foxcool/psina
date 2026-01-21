@@ -26,8 +26,11 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o ${GOPATH}/bin/app ./${_path}
 FROM alpine:latest
 RUN apk --no-cache add ca-certificates curl
 
-# Copy migrations if they exist
-COPY --from=builder /go/src/github.com/foxcool/psina/migrations /migrations
+# Install Atlas CLI
+RUN curl -sSf https://atlasgo.sh | sh
+
+# Copy schema for Atlas
+COPY --from=builder /go/src/github.com/foxcool/psina/schema.hcl /schema.hcl
 
 # Copy the binary
 COPY --from=builder /go/bin/app /app

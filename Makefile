@@ -5,7 +5,7 @@ COMPOSE=docker compose -p psina
 # Path to the compose file
 COMPOSE_FILE=deploy/compose.yaml
 
-.PHONY: gen buf-gen go-gen test test-unit test-integration test-e2e up down clean logs help
+.PHONY: gen buf-gen go-gen test test-unit test-integration up down clean logs help schema-apply schema-diff
 
 # Default target
 help:
@@ -15,8 +15,9 @@ help:
 	@echo "  go-gen            - Generate go code (go generate)"
 	@echo "  test              - Run all tests"
 	@echo "  test-unit         - Run unit tests only"
-	@echo "  test-integration  - Run integration tests with postgres"
-	@echo "  test-e2e          - Run e2e tests in docker"
+	@echo "  test-integration  - Run integration tests (requires Atlas CLI)"
+	@echo "  schema-apply      - Apply schema to database (declarative)"
+	@echo "  schema-diff       - Show schema diff without applying"
 	@echo "  up                - Start development environment"
 	@echo "  down              - Stop and remove containers"
 	@echo "  clean             - Stop and remove containers + volumes"
@@ -48,25 +49,21 @@ test-unit:
 	@echo "Running unit tests..."
 	go test -v -race -coverprofile=coverage-unit.out -covermode=atomic ./...
 
-# Run integration tests with postgres (local)
+# Run integration tests (requires Atlas CLI and Docker)
 test-integration:
 	@echo "Running integration tests..."
-	@echo "Starting postgres..."
-	$(COMPOSE) -f $(COMPOSE_FILE) up -d postgres
-	@echo "Waiting for postgres to be ready..."
-	@sleep 5
-	@echo "Running tests..."
-	DOCKER_COMPOSE_TEST=true \
-	PSINA_DB_URL="postgres://psina:password@localhost:5432/psina?sslmode=disable" \
-		go test -v -tags=integration -coverprofile=coverage-integration.out ./...
-	@echo "Stopping postgres..."
-	$(COMPOSE) -f $(COMPOSE_FILE) down
+	@which atlas > /dev/null || (echo "Atlas CLI required: curl -sSf https://atlasgo.sh | sh" && exit 1)
+	go test -v -tags=integration -coverprofile=coverage-integration.out ./pkg/store/postgres/... ./pkg/psina/...
 
-# Run integration tests in docker (isolated)
-test-docker:
-	@echo "Running integration tests in docker..."
-	$(COMPOSE) -f $(COMPOSE_FILE) --profile test up --build --abort-on-container-exit --exit-code-from psina-test
-	$(COMPOSE) -f $(COMPOSE_FILE) --profile test down
+# Atlas: apply schema declaratively
+schema-apply:
+	@echo "Applying schema to database..."
+	atlas schema apply --env local --auto-approve
+
+# Atlas: show schema diff
+schema-diff:
+	@echo "Showing schema diff..."
+	atlas schema diff --env local
 
 # Run default/development profile services in detached mode
 up:

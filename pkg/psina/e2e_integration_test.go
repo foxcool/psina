@@ -8,61 +8,38 @@ import (
 	"os"
 	"testing"
 
-	"github.com/foxcool/psina/migrations"
 	"github.com/foxcool/psina/pkg/provider/local"
 	"github.com/foxcool/psina/pkg/psina"
 	"github.com/foxcool/psina/pkg/store/postgres"
+	"github.com/foxcool/psina/pkg/testutil"
 	"github.com/foxcool/psina/pkg/token"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-var testPool *pgxpool.Pool
+var testDB *testutil.TestDB
 
 func TestMain(m *testing.M) {
-	if os.Getenv("DOCKER_COMPOSE_TEST") != "true" {
-		slog.Info("Skipping integration tests")
-		os.Exit(0)
-	}
-
-	dsn := os.Getenv("PSINA_DB_URL")
-	if dsn == "" {
-		slog.Error("PSINA_DB_URL not set")
-		os.Exit(1)
-	}
+	ctx := context.Background()
 
 	var err error
-	testPool, err = pgxpool.New(context.Background(), dsn)
+	testDB, err = testutil.NewTestDB(ctx)
 	if err != nil {
-		slog.Error("failed to create pool", "error", err)
-		os.Exit(1)
-	}
-	defer testPool.Close()
-
-	// Run migrations
-	if err := migrations.Apply(context.Background(), testPool); err != nil {
-		slog.Error("failed to run migrations", "error", err)
+		slog.Error("failed to create test database", "error", err)
 		os.Exit(1)
 	}
 
 	code := m.Run()
-	os.Exit(code)
-}
 
-func cleanupTables(t *testing.T) {
-	t.Helper()
-	_, err := testPool.Exec(context.Background(), `
-		TRUNCATE TABLE refresh_tokens, local_credentials, users CASCADE
-	`)
-	require.NoError(t, err)
+	testDB.Close(ctx)
+	os.Exit(code)
 }
 
 func getTestService(t *testing.T) *psina.Service {
 	t.Helper()
-	cleanupTables(t)
+	testDB.MustTruncate(t)
 
-	store := postgres.New(testPool)
+	store := postgres.New(testDB.Pool)
 	provider := local.New(store, store)
 	tokenIssuer, err := token.New(store, store)
 	require.NoError(t, err)

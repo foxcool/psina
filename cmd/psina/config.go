@@ -15,32 +15,20 @@ import (
 
 // Config holds application configuration.
 type Config struct {
-	Logger LoggerConfig `koanf:"logger"`
-	Server ServerConfig `koanf:"server"`
-	DB     DBConfig     `koanf:"db"`
-	JWT    JWTConfig    `koanf:"jwt"`
-}
-
-// LoggerConfig holds logging configuration.
-type LoggerConfig struct {
-	Level  string `koanf:"level"`
-	Format string `koanf:"format"` // "json" or "text"
-}
-
-// ServerConfig holds HTTP server configuration.
-type ServerConfig struct {
-	Port int `koanf:"port"`
-}
-
-// DBConfig holds database configuration.
-type DBConfig struct {
-	URL string `koanf:"url"`
-}
-
-// JWTConfig holds JWT configuration.
-type JWTConfig struct {
-	PrivateKeyPath string `koanf:"privateKeyPath"`
-	// If empty, generates ephemeral key (for dev)
+	Logger struct {
+		Level  string `koanf:"level"`
+		Format string `koanf:"format"` // "json" or "text"
+	} `koanf:"logger"`
+	Server struct {
+		Port int `koanf:"port"`
+	} `koanf:"server"`
+	DB struct {
+		URL string `koanf:"url"`
+	} `koanf:"db"`
+	JWT struct {
+		PrivateKeyPath string `koanf:"privateKeyPath"`
+		// If empty, generates ephemeral key (for dev)
+	} `koanf:"jwt"`
 }
 
 func loadConfig() (*Config, error) {

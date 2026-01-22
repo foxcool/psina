@@ -39,7 +39,7 @@ func run() error {
 	}
 
 	// Setup logger
-	logger := setupLogger(config.Logger)
+	logger := setupLogger(config)
 	slog.SetDefault(logger)
 
 	slog.Info("starting psina", "port", config.Server.Port)
@@ -156,9 +156,9 @@ func run() error {
 	return nil
 }
 
-func setupLogger(config LoggerConfig) *slog.Logger {
+func setupLogger(config *Config) *slog.Logger {
 	var level slog.Level
-	switch config.Level {
+	switch config.Logger.Level {
 	case "debug":
 		level = slog.LevelDebug
 	case "info":
@@ -174,7 +174,7 @@ func setupLogger(config LoggerConfig) *slog.Logger {
 	opts := &slog.HandlerOptions{Level: level}
 
 	var handler slog.Handler
-	if config.Format == "text" {
+	if config.Logger.Format == "text" {
 		handler = slog.NewTextHandler(os.Stdout, opts)
 	} else {
 		handler = slog.NewJSONHandler(os.Stdout, opts)

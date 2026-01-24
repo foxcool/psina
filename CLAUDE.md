@@ -71,7 +71,7 @@ type UserStore interface {
 type TokenStore interface {
     SaveRefreshToken(ctx context.Context, token *entity.RefreshToken) error
     GetRefreshToken(ctx context.Context, hash string) (*entity.RefreshToken, error)
-    RevokeRefreshToken(ctx context.Context, hash string) error
+    RevokeTokens(ctx context.Context, hash string) error  // revokes token and its family
 }
 
 // CredentialStore handles password hashes (separated from UserStore)

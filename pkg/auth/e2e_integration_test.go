@@ -91,6 +91,35 @@ func TestE2E_FullAuthFlow(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestE2E_TokenReuseDetection(t *testing.T) {
+	service := getTestService(t)
+	ctx := context.Background()
+
+	// 1. Register → tokenA (root of the family)
+	regResult, err := service.Register(ctx, "reuse@example.com", "password123")
+	require.NoError(t, err)
+	tokenA := regResult.TokenPair.RefreshToken
+
+	// 2. Refresh tokenA → tokenB (tokenA now revoked)
+	tokenPairB, err := service.Refresh(ctx, tokenA)
+	require.NoError(t, err)
+	tokenB := tokenPairB.RefreshToken
+
+	// 3. Refresh tokenB → tokenC (tokenB now revoked)
+	tokenPairC, err := service.Refresh(ctx, tokenB)
+	require.NoError(t, err)
+	tokenC := tokenPairC.RefreshToken
+
+	// 4. Attacker reuses stolen tokenA (already revoked)
+	// This should trigger family revocation
+	_, err = service.Refresh(ctx, tokenA)
+	assert.ErrorIs(t, err, auth.ErrTokenReuse)
+
+	// 5. Now tokenC should also be invalid (entire family was revoked)
+	_, err = service.Refresh(ctx, tokenC)
+	assert.Error(t, err, "tokenC should be revoked after tokenA reuse detected")
+}
+
 func TestE2E_DuplicateRegistration(t *testing.T) {
 	service := getTestService(t)
 	ctx := context.Background()

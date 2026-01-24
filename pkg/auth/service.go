@@ -18,6 +18,7 @@ var (
 	ErrUserExists         = errors.New("user already exists")
 	ErrTokenRevoked       = errors.New("refresh token revoked")
 	ErrTokenExpired       = errors.New("refresh token expired")
+	ErrTokenReuse         = errors.New("refresh token reuse detected")
 )
 
 // Service orchestrates authentication operations.
@@ -73,8 +74,8 @@ func (s *Service) Register(ctx context.Context, email, password string) (*Regist
 		return nil, fmt.Errorf("register: %w", err)
 	}
 
-	// Issue tokens
-	tokenPair, err := s.issueTokens(ctx, identity.UserID, identity.Email)
+	// Issue tokens (new session, no parent)
+	tokenPair, err := s.issueTokens(ctx, identity.UserID, identity.Email, "")
 	if err != nil {
 		return nil, fmt.Errorf("issue tokens: %w", err)
 	}
@@ -111,8 +112,8 @@ func (s *Service) Login(ctx context.Context, email, password string) (*LoginResu
 		return nil, ErrInvalidCredentials
 	}
 
-	// Issue tokens
-	tokenPair, err := s.issueTokens(ctx, identity.UserID, identity.Email)
+	// Issue tokens (new session, no parent)
+	tokenPair, err := s.issueTokens(ctx, identity.UserID, identity.Email, "")
 	if err != nil {
 		return nil, fmt.Errorf("issue tokens: %w", err)
 	}
@@ -126,45 +127,48 @@ func (s *Service) Login(ctx context.Context, email, password string) (*LoginResu
 
 // Refresh exchanges a refresh token for a new token pair.
 func (s *Service) Refresh(ctx context.Context, refreshToken string) (*entity.TokenPair, error) {
-	// Hash for lookup
 	hash := token.HashToken(refreshToken)
 
-	// Retrieve stored token
 	rt, err := s.tokenStore.GetRefreshToken(ctx, hash)
 	if err != nil {
 		return nil, fmt.Errorf("get refresh token: %w", err)
 	}
 
-	// Check if revoked
+	// Token reuse detection — revoke entire family
 	if rt.Revoked {
-		// TODO: Token reuse detection - revoke all children (requires Parent field)
-		return nil, ErrTokenRevoked
+		familyRoot := rt.Parent
+		if familyRoot == "" {
+			familyRoot = rt.Hash
+		}
+		_ = s.tokenStore.RevokeTokens(ctx, familyRoot)
+		return nil, ErrTokenReuse
 	}
 
-	// Check expiration
 	if time.Now().After(rt.ExpiresAt) {
 		return nil, ErrTokenExpired
 	}
 
-	// Revoke old token
-	if err := s.tokenStore.RevokeRefreshToken(ctx, hash); err != nil {
-		return nil, fmt.Errorf("revoke old token: %w", err)
-	}
+	// Revoke current token (and family, but there are no children yet)
+	_ = s.tokenStore.RevokeTokens(ctx, hash)
 
-	// Get current user data
 	user, err := s.userStore.GetByID(ctx, rt.UserID)
 	if err != nil {
 		return nil, fmt.Errorf("get user: %w", err)
 	}
 
-	// Issue new tokens
-	return s.issueTokens(ctx, user.ID, user.Email)
+	// Preserve family root for new token
+	parent := rt.Parent
+	if parent == "" {
+		parent = rt.Hash
+	}
+
+	return s.issueTokens(ctx, user.ID, user.Email, parent)
 }
 
-// Logout revokes a refresh token.
+// Logout revokes a refresh token and its family.
 func (s *Service) Logout(ctx context.Context, refreshToken string) error {
 	hash := token.HashToken(refreshToken)
-	return s.tokenStore.RevokeRefreshToken(ctx, hash)
+	return s.tokenStore.RevokeTokens(ctx, hash)
 }
 
 // Verify validates an access token and returns claims.
@@ -178,17 +182,17 @@ func (s *Service) JWKS() *jose.JSONWebKeySet {
 }
 
 // issueTokens generates tokens and saves refresh token to store.
-func (s *Service) issueTokens(ctx context.Context, userID, email string) (*entity.TokenPair, error) {
-	// Generate tokens
+// parent is empty for new sessions, or contains the family root hash for refreshed tokens.
+func (s *Service) issueTokens(ctx context.Context, userID, email, parent string) (*entity.TokenPair, error) {
 	tokenPair, refreshHash, err := s.issuer.GenerateTokens(userID, email)
 	if err != nil {
 		return nil, fmt.Errorf("generate tokens: %w", err)
 	}
 
-	// Save refresh token
 	rt := &entity.RefreshToken{
 		Hash:      refreshHash,
 		UserID:    userID,
+		Parent:    parent,
 		ExpiresAt: time.Now().Add(token.RefreshTokenTTL),
 		CreatedAt: time.Now(),
 		Revoked:   false,

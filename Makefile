@@ -53,7 +53,7 @@ test-unit:
 test-integration:
 	@echo "Running integration tests..."
 	@which atlas > /dev/null || (echo "Atlas CLI required: curl -sSf https://atlasgo.sh | sh" && exit 1)
-	go test -v -tags=integration -coverprofile=coverage-integration.out ./pkg/store/postgres/... ./pkg/psina/...
+	go test -v -tags=integration -coverprofile=coverage-integration.out ./pkg/...
 
 # Atlas: apply schema declaratively
 schema-apply:

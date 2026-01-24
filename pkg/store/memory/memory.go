@@ -117,17 +117,16 @@ func (s *Store) GetRefreshToken(ctx context.Context, hash string) (*entity.Refre
 	return token, nil
 }
 
-// RevokeRefreshToken marks a refresh token as revoked.
-func (s *Store) RevokeRefreshToken(ctx context.Context, hash string) error {
+// RevokeTokens revokes a token and all tokens in its family.
+func (s *Store) RevokeTokens(ctx context.Context, hash string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	token, exists := s.refreshTokens[hash]
-	if !exists {
-		return fmt.Errorf("refresh token not found")
+	for _, token := range s.refreshTokens {
+		if token.Hash == hash || token.Parent == hash {
+			token.Revoked = true
+		}
 	}
-
-	token.Revoked = true
 
 	return nil
 }

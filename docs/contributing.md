@@ -116,7 +116,7 @@ type UserStore interface {
 type TokenStore interface {
     SaveRefreshToken(ctx context.Context, token *RefreshToken) error
     GetRefreshToken(ctx context.Context, hash string) (*RefreshToken, error)
-    RevokeRefreshToken(ctx context.Context, hash string) error
+    RevokeTokens(ctx context.Context, hash string) error  // revokes token and its family
 }
 ```
 

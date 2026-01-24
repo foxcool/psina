@@ -38,8 +38,10 @@ type TokenStore interface {
 	// GetRefreshToken retrieves a refresh token by its hash.
 	GetRefreshToken(ctx context.Context, hash string) (*entity.RefreshToken, error)
 
-	// RevokeRefreshToken marks a refresh token as revoked.
-	RevokeRefreshToken(ctx context.Context, hash string) error
+	// RevokeTokens revokes a token and all tokens in its family.
+	// Works for both single token revocation and family revocation.
+	// Query: WHERE hash = $1 OR parent = $1
+	RevokeTokens(ctx context.Context, hash string) error
 }
 
 // CredentialStore handles password hash persistence for local auth.

@@ -22,6 +22,7 @@ type Claims struct {
 type RefreshToken struct {
 	Hash      string // SHA256 hash of the token
 	UserID    string
+	Parent    string // Hash of the root token in this family (empty for root tokens)
 	ExpiresAt time.Time
 	CreatedAt time.Time
 	Revoked   bool

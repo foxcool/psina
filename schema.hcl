@@ -87,6 +87,12 @@ table "refresh_tokens" {
     null = false
   }
 
+  column "parent" {
+    type    = varchar(255)
+    null    = false
+    default = ""
+  }
+
   column "expires_at" {
     type = timestamptz
     null = false
@@ -120,5 +126,9 @@ table "refresh_tokens" {
 
   index "idx_refresh_tokens_expires_at" {
     columns = [column.expires_at]
+  }
+
+  index "idx_refresh_tokens_parent" {
+    columns = [column.parent]
   }
 }

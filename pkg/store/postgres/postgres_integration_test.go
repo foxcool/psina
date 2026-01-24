@@ -98,7 +98,7 @@ func TestStore_RefreshTokens(t *testing.T) {
 	assert.False(t, found.Revoked)
 
 	// Revoke token
-	err = store.RevokeRefreshToken(ctx, token.Hash)
+	err = store.RevokeTokens(ctx, token.Hash)
 	require.NoError(t, err)
 
 	// Verify revoked

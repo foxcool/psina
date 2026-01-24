@@ -8,7 +8,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/foxcool/psina/pkg/psina"
+	"github.com/foxcool/psina/pkg/entity"
 	"github.com/foxcool/psina/pkg/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -43,7 +43,7 @@ func TestStore_UserCRUD(t *testing.T) {
 	ctx := context.Background()
 
 	// Create user
-	user := &psina.User{
+	user := &entity.User{
 		ID:    "user-123",
 		Email: "test@example.com",
 	}
@@ -62,7 +62,7 @@ func TestStore_UserCRUD(t *testing.T) {
 	assert.Equal(t, user.ID, found.ID)
 
 	// Duplicate email should fail
-	duplicate := &psina.User{
+	duplicate := &entity.User{
 		ID:    "user-456",
 		Email: "test@example.com",
 	}
@@ -76,14 +76,14 @@ func TestStore_RefreshTokens(t *testing.T) {
 	ctx := context.Background()
 
 	// Create user first
-	user := &psina.User{
+	user := &entity.User{
 		ID:    "user-123",
 		Email: "test@example.com",
 	}
 	require.NoError(t, store.Create(ctx, user))
 
 	// Save refresh token
-	token := &psina.RefreshToken{
+	token := &entity.RefreshToken{
 		Hash:   "token-hash-123",
 		UserID: user.ID,
 	}
@@ -112,7 +112,7 @@ func TestStore_Credentials(t *testing.T) {
 	ctx := context.Background()
 
 	// Create user first
-	user := &psina.User{
+	user := &entity.User{
 		ID:    "user-123",
 		Email: "test@example.com",
 	}

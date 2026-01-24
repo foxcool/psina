@@ -58,7 +58,7 @@ jobs:
 
       - name: Run integration tests
         run: |
-          go test -v -p 1 -tags=integration -coverprofile=coverage-integration.out ./pkg/store/postgres/... ./pkg/psina/...
+          go test -v -p 1 -tags=integration -coverprofile=coverage-integration.out ./...
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4

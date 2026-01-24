@@ -1,97 +1,71 @@
 package token_test
 
 import (
-	"context"
 	"testing"
 
-	"github.com/foxcool/psina/pkg/psina"
-	"github.com/foxcool/psina/pkg/store/memory"
 	"github.com/foxcool/psina/pkg/token"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestIssuer_Issue(t *testing.T) {
-	store := memory.New()
-	issuer, err := token.New(store, store)
+func TestIssuer_GenerateTokens(t *testing.T) {
+	issuer, err := token.New()
 	require.NoError(t, err)
 
-	identity := &psina.Identity{
-		UserID:   "user-123",
-		Email:    "test@example.com",
-		Provider: "local",
-	}
-
-	// Issue token pair
-	pair, err := issuer.Issue(context.Background(), identity)
+	pair, hash, err := issuer.GenerateTokens("user-123", "test@example.com")
 	require.NoError(t, err)
+
 	assert.NotEmpty(t, pair.AccessToken)
 	assert.NotEmpty(t, pair.RefreshToken)
+	assert.NotEmpty(t, hash)
 	assert.Equal(t, int64(900), pair.ExpiresIn) // 15 minutes
+
+	// Hash should match HashToken output
+	assert.Equal(t, hash, token.HashToken(pair.RefreshToken))
 }
 
-func TestIssuer_Validate(t *testing.T) {
-	store := memory.New()
-	issuer, err := token.New(store, store)
+func TestIssuer_ParseToken(t *testing.T) {
+	issuer, err := token.New()
 	require.NoError(t, err)
 
-	identity := &psina.Identity{
-		UserID:   "user-123",
-		Email:    "test@example.com",
-		Provider: "local",
-	}
-
-	// Issue token
-	pair, err := issuer.Issue(context.Background(), identity)
+	pair, _, err := issuer.GenerateTokens("user-123", "test@example.com")
 	require.NoError(t, err)
 
-	// Validate token
-	claims, err := issuer.Validate(context.Background(), pair.AccessToken)
+	claims, err := issuer.ParseToken(pair.AccessToken)
 	require.NoError(t, err)
-	assert.Equal(t, identity.UserID, claims.UserID)
-	assert.Equal(t, identity.Email, claims.Email)
+
+	assert.Equal(t, "user-123", claims.UserID)
+	assert.Equal(t, "test@example.com", claims.Email)
 	assert.Equal(t, "psina", claims.Issuer)
+	assert.Greater(t, claims.Exp, claims.Iat)
 }
 
-func TestIssuer_Refresh(t *testing.T) {
-	store := memory.New()
-	issuer, err := token.New(store, store)
+func TestIssuer_ParseToken_Invalid(t *testing.T) {
+	issuer, err := token.New()
 	require.NoError(t, err)
 
-	// Create user in store (required for Refresh to lookup email)
-	user := &psina.User{
-		ID:    "user-123",
-		Email: "test@example.com",
-	}
-	err = store.Create(context.Background(), user)
+	_, err = issuer.ParseToken("invalid-token")
+	assert.Error(t, err)
+}
+
+func TestIssuer_ParseToken_WrongKey(t *testing.T) {
+	issuer1, err := token.New()
 	require.NoError(t, err)
 
-	identity := &psina.Identity{
-		UserID:   "user-123",
-		Email:    "test@example.com",
-		Provider: "local",
-	}
-
-	// Issue initial token pair
-	pair1, err := issuer.Issue(context.Background(), identity)
+	issuer2, err := token.New()
 	require.NoError(t, err)
 
-	// Refresh tokens
-	pair2, err := issuer.Refresh(context.Background(), pair1.RefreshToken)
+	// Generate with issuer1
+	pair, _, err := issuer1.GenerateTokens("user-123", "test@example.com")
 	require.NoError(t, err)
-	assert.NotEmpty(t, pair2.AccessToken)
-	assert.NotEmpty(t, pair2.RefreshToken)
-	assert.NotEqual(t, pair1.AccessToken, pair2.AccessToken)
-	assert.NotEqual(t, pair1.RefreshToken, pair2.RefreshToken)
 
-	// Old refresh token should be revoked
-	_, err = issuer.Refresh(context.Background(), pair1.RefreshToken)
+	// Verify with issuer2 should fail
+	_, err = issuer2.ParseToken(pair.AccessToken)
 	assert.Error(t, err)
 }
 
 func TestIssuer_JWKS(t *testing.T) {
-	store := memory.New()
-	issuer, err := token.New(store, store)
+	issuer, err := token.New()
 	require.NoError(t, err)
 
 	jwks := issuer.JWKS()
@@ -102,8 +76,17 @@ func TestIssuer_JWKS(t *testing.T) {
 	assert.Equal(t, "sig", jwks.Keys[0].Use)
 }
 
-func TestIssuer_ValidateExpiredToken(t *testing.T) {
-	// This test would require mocking time or waiting for token expiration
-	// Skipped for MVP - can be added with time mocking library
-	t.Skip("Token expiration testing requires time mocking")
+func TestHashToken(t *testing.T) {
+	hash1 := token.HashToken("token-123")
+	hash2 := token.HashToken("token-123")
+	hash3 := token.HashToken("token-456")
+
+	// Same input = same output
+	assert.Equal(t, hash1, hash2)
+
+	// Different input = different output
+	assert.NotEqual(t, hash1, hash3)
+
+	// Hash is not empty
+	assert.NotEmpty(t, hash1)
 }

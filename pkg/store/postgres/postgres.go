@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/foxcool/psina/pkg/psina"
+	"github.com/foxcool/psina/pkg/entity"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -49,7 +49,7 @@ func (s *Store) Close() {
 // --- UserStore implementation ---
 
 // Create persists a new user.
-func (s *Store) Create(ctx context.Context, user *psina.User) error {
+func (s *Store) Create(ctx context.Context, user *entity.User) error {
 	now := time.Now()
 	if user.CreatedAt.IsZero() {
 		user.CreatedAt = now
@@ -62,7 +62,6 @@ func (s *Store) Create(ctx context.Context, user *psina.User) error {
 		INSERT INTO users (id, email, created_at, updated_at)
 		VALUES ($1, $2, $3, $4)
 	`, user.ID, user.Email, user.CreatedAt, user.UpdatedAt)
-
 	if err != nil {
 		if isDuplicateKeyError(err) {
 			return fmt.Errorf("user already exists: %s", user.Email)
@@ -74,14 +73,13 @@ func (s *Store) Create(ctx context.Context, user *psina.User) error {
 }
 
 // GetByID retrieves a user by ID.
-func (s *Store) GetByID(ctx context.Context, id string) (*psina.User, error) {
-	user := &psina.User{}
+func (s *Store) GetByID(ctx context.Context, id string) (*entity.User, error) {
+	user := &entity.User{}
 	err := s.pool.QueryRow(ctx, `
 		SELECT id, email, created_at, updated_at
 		FROM users
 		WHERE id = $1
 	`, id).Scan(&user.ID, &user.Email, &user.CreatedAt, &user.UpdatedAt)
-
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, fmt.Errorf("user not found: %s", id)
@@ -93,14 +91,13 @@ func (s *Store) GetByID(ctx context.Context, id string) (*psina.User, error) {
 }
 
 // GetByEmail retrieves a user by email address.
-func (s *Store) GetByEmail(ctx context.Context, email string) (*psina.User, error) {
-	user := &psina.User{}
+func (s *Store) GetByEmail(ctx context.Context, email string) (*entity.User, error) {
+	user := &entity.User{}
 	err := s.pool.QueryRow(ctx, `
 		SELECT id, email, created_at, updated_at
 		FROM users
 		WHERE email = $1
 	`, email).Scan(&user.ID, &user.Email, &user.CreatedAt, &user.UpdatedAt)
-
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, fmt.Errorf("user not found: %s", email)
@@ -114,7 +111,7 @@ func (s *Store) GetByEmail(ctx context.Context, email string) (*psina.User, erro
 // --- TokenStore implementation ---
 
 // SaveRefreshToken persists a refresh token.
-func (s *Store) SaveRefreshToken(ctx context.Context, token *psina.RefreshToken) error {
+func (s *Store) SaveRefreshToken(ctx context.Context, token *entity.RefreshToken) error {
 	now := time.Now()
 	if token.CreatedAt.IsZero() {
 		token.CreatedAt = now
@@ -124,7 +121,6 @@ func (s *Store) SaveRefreshToken(ctx context.Context, token *psina.RefreshToken)
 		INSERT INTO refresh_tokens (hash, user_id, expires_at, created_at, revoked)
 		VALUES ($1, $2, $3, $4, $5)
 	`, token.Hash, token.UserID, token.ExpiresAt, token.CreatedAt, token.Revoked)
-
 	if err != nil {
 		return fmt.Errorf("insert refresh token: %w", err)
 	}
@@ -133,14 +129,13 @@ func (s *Store) SaveRefreshToken(ctx context.Context, token *psina.RefreshToken)
 }
 
 // GetRefreshToken retrieves a refresh token by its hash.
-func (s *Store) GetRefreshToken(ctx context.Context, hash string) (*psina.RefreshToken, error) {
-	token := &psina.RefreshToken{}
+func (s *Store) GetRefreshToken(ctx context.Context, hash string) (*entity.RefreshToken, error) {
+	token := &entity.RefreshToken{}
 	err := s.pool.QueryRow(ctx, `
 		SELECT hash, user_id, expires_at, created_at, revoked
 		FROM refresh_tokens
 		WHERE hash = $1
 	`, hash).Scan(&token.Hash, &token.UserID, &token.ExpiresAt, &token.CreatedAt, &token.Revoked)
-
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, fmt.Errorf("refresh token not found")
@@ -158,7 +153,6 @@ func (s *Store) RevokeRefreshToken(ctx context.Context, hash string) error {
 		SET revoked = true
 		WHERE hash = $1
 	`, hash)
-
 	if err != nil {
 		return fmt.Errorf("revoke refresh token: %w", err)
 	}
@@ -179,7 +173,6 @@ func (s *Store) SavePasswordHash(ctx context.Context, userID, hash string) error
 		VALUES ($1, $2, NOW(), NOW())
 		ON CONFLICT (user_id) DO UPDATE SET password_hash = $2, updated_at = NOW()
 	`, userID, hash)
-
 	if err != nil {
 		return fmt.Errorf("save password hash: %w", err)
 	}
@@ -195,7 +188,6 @@ func (s *Store) GetPasswordHash(ctx context.Context, userID string) (string, err
 		FROM local_credentials
 		WHERE user_id = $1
 	`, userID).Scan(&hash)
-
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return "", fmt.Errorf("password hash not found for user: %s", userID)

@@ -1,26 +1,42 @@
-package psina
+package auth
 
-import "context"
+import (
+	"context"
+
+	"github.com/foxcool/psina/pkg/entity"
+)
+
+// Provider authenticates users via a specific method (local, passkey, wallet, etc.).
+type Provider interface {
+	// Type returns the provider type identifier.
+	Type() string
+
+	// Authenticate verifies credentials and returns an authenticated identity.
+	Authenticate(ctx context.Context, req *entity.AuthRequest) (*entity.Identity, error)
+
+	// Register creates a new user account and returns the identity.
+	Register(ctx context.Context, req *entity.RegisterRequest) (*entity.Identity, error)
+}
 
 // UserStore handles user persistence.
 type UserStore interface {
 	// Create persists a new user.
-	Create(ctx context.Context, user *User) error
+	Create(ctx context.Context, user *entity.User) error
 
 	// GetByID retrieves a user by ID.
-	GetByID(ctx context.Context, id string) (*User, error)
+	GetByID(ctx context.Context, id string) (*entity.User, error)
 
 	// GetByEmail retrieves a user by email address.
-	GetByEmail(ctx context.Context, email string) (*User, error)
+	GetByEmail(ctx context.Context, email string) (*entity.User, error)
 }
 
 // TokenStore handles refresh token persistence.
 type TokenStore interface {
 	// SaveRefreshToken persists a refresh token.
-	SaveRefreshToken(ctx context.Context, token *RefreshToken) error
+	SaveRefreshToken(ctx context.Context, token *entity.RefreshToken) error
 
 	// GetRefreshToken retrieves a refresh token by its hash.
-	GetRefreshToken(ctx context.Context, hash string) (*RefreshToken, error)
+	GetRefreshToken(ctx context.Context, hash string) (*entity.RefreshToken, error)
 
 	// RevokeRefreshToken marks a refresh token as revoked.
 	RevokeRefreshToken(ctx context.Context, hash string) error

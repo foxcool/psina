@@ -1,4 +1,4 @@
-package psina
+package auth
 
 import (
 	"context"

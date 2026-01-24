@@ -8,7 +8,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/foxcool/psina/pkg/psina"
+	"github.com/foxcool/psina/pkg/auth"
+	"github.com/foxcool/psina/pkg/entity"
 	"golang.org/x/crypto/argon2"
 )
 
@@ -25,14 +26,14 @@ const (
 	argon2KeyLength   = 32
 )
 
-// Provider implements psina.Provider for username/password authentication.
+// Provider implements auth.Provider for username/password authentication.
 type Provider struct {
-	userStore       psina.UserStore
-	credentialStore psina.CredentialStore
+	userStore       auth.UserStore
+	credentialStore auth.CredentialStore
 }
 
 // New creates a new local authentication provider.
-func New(userStore psina.UserStore, credentialStore psina.CredentialStore) *Provider {
+func New(userStore auth.UserStore, credentialStore auth.CredentialStore) *Provider {
 	return &Provider{
 		userStore:       userStore,
 		credentialStore: credentialStore,
@@ -45,7 +46,7 @@ func (p *Provider) Type() string {
 }
 
 // Register creates a new user account with password.
-func (p *Provider) Register(ctx context.Context, req *psina.RegisterRequest) (*psina.Identity, error) {
+func (p *Provider) Register(ctx context.Context, req *entity.RegisterRequest) (*entity.Identity, error) {
 	if req.Email == "" {
 		return nil, fmt.Errorf("email required")
 	}
@@ -66,7 +67,7 @@ func (p *Provider) Register(ctx context.Context, req *psina.RegisterRequest) (*p
 	}
 
 	// Create user (using email as ID for MVP, should use UUID in production)
-	user := &psina.User{
+	user := &entity.User{
 		ID:    generateUserID(),
 		Email: req.Email,
 	}
@@ -82,7 +83,7 @@ func (p *Provider) Register(ctx context.Context, req *psina.RegisterRequest) (*p
 		return nil, fmt.Errorf("store password: %w", err)
 	}
 
-	return &psina.Identity{
+	return &entity.Identity{
 		UserID:   user.ID,
 		Email:    user.Email,
 		Provider: ProviderType,
@@ -91,7 +92,7 @@ func (p *Provider) Register(ctx context.Context, req *psina.RegisterRequest) (*p
 }
 
 // Authenticate verifies email and password credentials.
-func (p *Provider) Authenticate(ctx context.Context, req *psina.AuthRequest) (*psina.Identity, error) {
+func (p *Provider) Authenticate(ctx context.Context, req *entity.AuthRequest) (*entity.Identity, error) {
 	if req.Email == "" {
 		return nil, fmt.Errorf("email required")
 	}
@@ -116,7 +117,7 @@ func (p *Provider) Authenticate(ctx context.Context, req *psina.AuthRequest) (*p
 		return nil, fmt.Errorf("invalid credentials")
 	}
 
-	return &psina.Identity{
+	return &entity.Identity{
 		UserID:   user.ID,
 		Email:    user.Email,
 		Provider: ProviderType,

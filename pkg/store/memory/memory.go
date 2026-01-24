@@ -6,25 +6,25 @@ import (
 	"sync"
 	"time"
 
-	"github.com/foxcool/psina/pkg/psina"
+	"github.com/foxcool/psina/pkg/entity"
 )
 
 // Store is an in-memory implementation of UserStore, TokenStore, and CredentialStore.
 // Suitable for testing and embedded use cases. NOT for production.
 type Store struct {
-	mu              sync.RWMutex
-	users           map[string]*psina.User           // userID -> User
-	usersByEmail    map[string]*psina.User           // email -> User
-	refreshTokens   map[string]*psina.RefreshToken   // hash -> RefreshToken
-	passwordHashes  map[string]string                // userID -> passwordHash
+	mu             sync.RWMutex
+	users          map[string]*entity.User         // userID -> User
+	usersByEmail   map[string]*entity.User         // email -> User
+	refreshTokens  map[string]*entity.RefreshToken // hash -> RefreshToken
+	passwordHashes map[string]string               // userID -> passwordHash
 }
 
 // New creates a new in-memory store.
 func New() *Store {
 	return &Store{
-		users:          make(map[string]*psina.User),
-		usersByEmail:   make(map[string]*psina.User),
-		refreshTokens:  make(map[string]*psina.RefreshToken),
+		users:          make(map[string]*entity.User),
+		usersByEmail:   make(map[string]*entity.User),
+		refreshTokens:  make(map[string]*entity.RefreshToken),
 		passwordHashes: make(map[string]string),
 	}
 }
@@ -32,7 +32,7 @@ func New() *Store {
 // --- UserStore implementation ---
 
 // Create persists a new user.
-func (s *Store) Create(ctx context.Context, user *psina.User) error {
+func (s *Store) Create(ctx context.Context, user *entity.User) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -61,7 +61,7 @@ func (s *Store) Create(ctx context.Context, user *psina.User) error {
 }
 
 // GetByID retrieves a user by ID.
-func (s *Store) GetByID(ctx context.Context, id string) (*psina.User, error) {
+func (s *Store) GetByID(ctx context.Context, id string) (*entity.User, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -74,7 +74,7 @@ func (s *Store) GetByID(ctx context.Context, id string) (*psina.User, error) {
 }
 
 // GetByEmail retrieves a user by email address.
-func (s *Store) GetByEmail(ctx context.Context, email string) (*psina.User, error) {
+func (s *Store) GetByEmail(ctx context.Context, email string) (*entity.User, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -89,7 +89,7 @@ func (s *Store) GetByEmail(ctx context.Context, email string) (*psina.User, erro
 // --- TokenStore implementation ---
 
 // SaveRefreshToken persists a refresh token.
-func (s *Store) SaveRefreshToken(ctx context.Context, token *psina.RefreshToken) error {
+func (s *Store) SaveRefreshToken(ctx context.Context, token *entity.RefreshToken) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -105,7 +105,7 @@ func (s *Store) SaveRefreshToken(ctx context.Context, token *psina.RefreshToken)
 }
 
 // GetRefreshToken retrieves a refresh token by its hash.
-func (s *Store) GetRefreshToken(ctx context.Context, hash string) (*psina.RefreshToken, error) {
+func (s *Store) GetRefreshToken(ctx context.Context, hash string) (*entity.RefreshToken, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 

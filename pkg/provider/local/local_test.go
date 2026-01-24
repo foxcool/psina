@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/foxcool/psina/pkg/entity"
 	"github.com/foxcool/psina/pkg/provider/local"
-	"github.com/foxcool/psina/pkg/psina"
 	"github.com/foxcool/psina/pkg/store/memory"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -15,7 +15,7 @@ func TestProvider_Register(t *testing.T) {
 	store := memory.New()
 	provider := local.New(store, store)
 
-	req := &psina.RegisterRequest{
+	req := &entity.RegisterRequest{
 		Email:    "test@example.com",
 		Password: "SecurePassword123!",
 	}
@@ -31,7 +31,7 @@ func TestProvider_RegisterDuplicateEmail(t *testing.T) {
 	store := memory.New()
 	provider := local.New(store, store)
 
-	req := &psina.RegisterRequest{
+	req := &entity.RegisterRequest{
 		Email:    "test@example.com",
 		Password: "SecurePassword123!",
 	}
@@ -51,7 +51,7 @@ func TestProvider_Authenticate(t *testing.T) {
 	provider := local.New(store, store)
 
 	// Register user
-	registerReq := &psina.RegisterRequest{
+	registerReq := &entity.RegisterRequest{
 		Email:    "test@example.com",
 		Password: "SecurePassword123!",
 	}
@@ -59,7 +59,7 @@ func TestProvider_Authenticate(t *testing.T) {
 	require.NoError(t, err)
 
 	// Authenticate
-	authReq := &psina.AuthRequest{
+	authReq := &entity.AuthRequest{
 		Email:    "test@example.com",
 		Password: "SecurePassword123!",
 	}
@@ -74,7 +74,7 @@ func TestProvider_AuthenticateWrongPassword(t *testing.T) {
 	provider := local.New(store, store)
 
 	// Register user
-	registerReq := &psina.RegisterRequest{
+	registerReq := &entity.RegisterRequest{
 		Email:    "test@example.com",
 		Password: "SecurePassword123!",
 	}
@@ -82,7 +82,7 @@ func TestProvider_AuthenticateWrongPassword(t *testing.T) {
 	require.NoError(t, err)
 
 	// Authenticate with wrong password
-	authReq := &psina.AuthRequest{
+	authReq := &entity.AuthRequest{
 		Email:    "test@example.com",
 		Password: "WrongPassword",
 	}
@@ -95,7 +95,7 @@ func TestProvider_AuthenticateNonexistentUser(t *testing.T) {
 	store := memory.New()
 	provider := local.New(store, store)
 
-	authReq := &psina.AuthRequest{
+	authReq := &entity.AuthRequest{
 		Email:    "nonexistent@example.com",
 		Password: "password",
 	}
@@ -109,14 +109,14 @@ func TestProvider_PasswordHashing(t *testing.T) {
 	provider := local.New(store, store)
 
 	// Register two users with same password
-	req1 := &psina.RegisterRequest{
+	req1 := &entity.RegisterRequest{
 		Email:    "user1@example.com",
 		Password: "SamePassword123!",
 	}
 	identity1, err := provider.Register(context.Background(), req1)
 	require.NoError(t, err)
 
-	req2 := &psina.RegisterRequest{
+	req2 := &entity.RegisterRequest{
 		Email:    "user2@example.com",
 		Password: "SamePassword123!",
 	}

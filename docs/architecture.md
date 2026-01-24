@@ -2,8 +2,8 @@
 
 ## Overview
 
-Modular authentication service for Go microservices. Embeddable as
-library or deployable as standalone microservice.
+Modular authentication service. Embeddable as
+Go library or deployable as standalone microservice.
 
 Based on arc42 template + C4 model.
 
@@ -15,7 +15,7 @@ Based on arc42 template + C4 model.
 
 **Business Requirements:**
 
-- Reusable authentication for Go microservices
+- Reusable authentication
 - Embed in monolith or deploy as separate service
 - Multiple auth providers (local, passkeys, Web3 wallets)
 - Easy integration with API gateways (Traefik, KrakenD)
@@ -39,8 +39,8 @@ Based on arc42 template + C4 model.
 
 ### 1.2 Quality Goals
 
-| Priority | Goal              | Metric                              |
-| -------- | ----------------- | ----------------------------------- |
+| Priority | Goal              | Metric                          |
+| -------- | ----------------- | ------------------------------- |
 | 1        | **Embeddability** | Import and use in 10 lines of code  |
 | 2        | **Extensibility** | Add new provider in < 200 LOC       |
 | 3        | **Security**      | OWASP compliance, Argon2id, RS256   |
@@ -60,8 +60,8 @@ Based on arc42 template + C4 model.
 
 ### 2.1 Technical
 
-- **Language**: Go 1.22+
-- **Database**: PostgreSQL 14+ (primary), SQLite (dev/embedded)
+- **Language**: Go 1.24+
+- **Database**: PostgreSQL 17+ (primary), in-memory store (dev/testing)
 - **Protocol**: Connect RPC (gRPC + HTTP/JSON on same port)
 - **Container**: Docker, single binary
 
@@ -134,6 +134,7 @@ graph TB
 ```
 
 **psina Responsibilities:**
+
 - Authentication primitives (who are you?)
 - Credential CRUD operations
 - JWT issuance and validation
@@ -141,12 +142,14 @@ graph TB
 - **NO authorization logic**
 
 **Application Responsibilities:**
+
 - Authorization (who can do what?)
 - Business logic and domain rules
 - Resource ownership checks
 - Multi-service orchestration (e.g., cleanup before user deletion)
 
 **Example Authorization Flow:**
+
 ```go
 // Application enforces authorization
 func (app *Service) DeleteUser(ctx context.Context, targetUserID string) error {
@@ -185,7 +188,7 @@ func (app *Service) DeleteUser(ctx context.Context, targetUserID string) error {
 | JWT signing   | RS256           | Asymmetric, gateways validate w/o secret |
 | Password hash | Argon2id        | Current best practice                    |
 | Protobuf      | buf (local)     | OpenAPI 3.1 via connect-openapi          |
-| Migrations    | golang-migrate  | Standard, embedded support               |
+| Schema        | Atlas           | Declarative, type-safe HCL              |
 
 ### 4.3 Why Connect RPC
 

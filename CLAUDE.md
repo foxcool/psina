@@ -1,133 +1,54 @@
-# CLAUDE.md - Project Instructions for Claude Code
+# CLAUDE.md — psina project instructions
 
 ## Project Overview
 
-**psina** — embeddable Go authentication service. Works as library
-(import into your app) or standalone microservice.
+**psina** — embeddable Go authentication service. Works as library (import into your app) or standalone microservice.
 
-Name origin: "psina" (rus. "псина") = "doggy" — a guard dog that
-knows pack from strangers.
+Name origin: "psina" (рус. "псина") = "doggy" — a guard dog that knows pack from strangers.
 
-## Architecture
+## Current Status
 
-- **Hexagonal architecture**: domain isolated from adapters
-- **Plugin system**: authentication providers as pluggable modules
-- **Dual deployment**: `pkg/` for embedding, `cmd/psina/` for standalone
+**v0.1 MVP** — Local auth working, needs polish before public release.
+
+See `docs/ROADMAP.md` for detailed task list.
 
 ## Directory Structure
 
-```text
+```
 psina/
-├── cmd/psina/          # Standalone binary entrypoint
-├── pkg/                # Public API (importable by other projects)
-│   ├── api/            # Generated proto code (pb.go, connect.go)
-│   ├── psina/          # Main package: Service, Handler, interfaces
-│   ├── provider/       # Auth provider implementations
-│   │   └── local/      # Username/password (Argon2id)
-│   ├── token/          # JWT issuance, validation, JWKS
-│   └── store/          # Storage backends
-│       ├── postgres/   # Production store
-│       └── memory/     # For testing/dev
-├── api/                # Proto definitions (Connect RPC)
-├── migrations/         # SQL migrations (golang-migrate format)
-├── deploy/             # Docker, compose, examples
-└── docs/               # Architecture documentation
+├── cmd/psina/           # Standalone binary
+│   ├── main.go          # Server entrypoint (koanf + slog + graceful shutdown)
+│   └── config.go        # Configuration loading
+├── pkg/
+│   ├── api/auth/v1/     # Generated Connect RPC code (DO NOT EDIT)
+│   ├── auth/            # Service layer (orchestration + handler)
+│   │   ├── service.go   # Business logic orchestration
+│   │   ├── handler.go   # Connect RPC handler
+│   │   ├── ports.go     # Interface definitions (Provider, Stores)
+│   │   └── validation.go
+│   ├── entity/          # Domain types (User, Identity, TokenPair, etc.)
+│   ├── token/           # JWT issuer (pure cryptography, no storage)
+│   ├── provider/        # Auth provider implementations
+│   │   └── local/       # Username/password (Argon2id)
+│   ├── store/           # Storage backends
+│   │   ├── postgres/    # Production store
+│   │   └── memory/      # Testing/dev store
+│   └── testutil/        # Test helpers (testcontainers)
+├── api/auth/v1/         # Proto definitions
+│   └── auth.proto
+├── deploy/              # Docker, compose, examples
+├── docs/                # Documentation
+└── schema.hcl           # Database schema (Atlas)
 ```
 
-## Key Design Decisions
+## Architecture
 
-1. **pkg/ over internal/**: Public API for embedding in other Go projects
-2. **Provider interface**: All auth methods implement same contract
-3. **Store interface**: Pluggable storage backends
-4. **Stateless JWT**: RS256 with JWKS endpoint for gateway validation
+**Hexagonal (Ports & Adapters)**:
+- `pkg/auth/ports.go` — interfaces (Provider, UserStore, TokenStore, CredentialStore)
+- `pkg/auth/service.go` — orchestration (implements business flows)
+- `pkg/provider/`, `pkg/store/` — adapters
 
-## Tech Stack
-
-- Go 1.24+
-- Connect RPC (gRPC + HTTP/JSON on same port)
-- PostgreSQL (primary) / Memory store (dev/testing)
-- buf for protobuf management (local plugins only)
-- golang-migrate for migrations
-- koanf for configuration
-- slog for structured logging
-
-## Go Dependencies
-
-```go
-// Core
-connectrpc.com/connect              // Connect RPC framework
-google.golang.org/protobuf          // Protobuf runtime
-
-// JWT & Crypto
-github.com/go-jose/go-jose/v4       // JOSE/JWT/JWK
-golang.org/x/crypto                 // Argon2id
-
-// Database
-github.com/jackc/pgx/v5             // PostgreSQL driver
-
-// Configuration
-github.com/knadh/koanf/v2           // Config management
-
-// HTTP
-golang.org/x/net/http2/h2c          // HTTP/2 cleartext (for Connect)
-
-// Testing
-github.com/stretchr/testify         // Assertions
-```
-
-## Development Commands
-
-```bash
-# Run standalone
-go run cmd/psina/main.go
-
-# Run tests
-go test ./...
-
-# Generate proto (Connect RPC + OpenAPI 3.1)
-buf generate
-
-# Run migrations
-migrate -path migrations -database $DATABASE_URL up
-
-# Build binary
-go build -o bin/psina cmd/psina/main.go
-```
-
-## buf.gen.yaml
-
-```yaml
-version: v2
-plugins:
-  # Go code
-  - local: protoc-gen-go
-    out: gen/go
-    opt: paths=source_relative
-
-  # Connect RPC (replaces grpc + grpc-gateway)
-  - local: protoc-gen-connect-go
-    out: gen/go
-    opt: paths=source_relative
-
-  # OpenAPI 3.1 spec (optional, install protoc-gen-connect-openapi)
-  # - local: protoc-gen-connect-openapi
-  #   out: gen/openapi
-```
-
-## Current Status: v0.1 Complete ✅
-
-**Implemented:**
-
-- Local auth (email/password with Argon2id)
-- JWT tokens (RS256, 15min access, 7d refresh)
-- JWKS endpoint (/.well-known/jwks.json)
-- Connect RPC API (HTTP/JSON + gRPC on same port)
-- PostgreSQL store (production)
-- Memory store (dev/testing)
-- Traefik ForwardAuth integration
-- Docker support + CI/CD
-
-**Next phase (v0.2):** Passkeys/WebAuthn — see docs/ROADMAP.md
+**Key principle**: Domain logic in `pkg/auth/` and `pkg/entity/`, adapters are replaceable.
 
 ## Core Interfaces
 
@@ -135,172 +56,154 @@ plugins:
 // Provider authenticates users via specific method
 type Provider interface {
     Type() string  // "local", "passkey", "wallet"
-    Authenticate(ctx context.Context, req *AuthRequest) (*Identity, error)
-    Register(ctx context.Context, req *RegisterRequest) (*Identity, error)
+    Authenticate(ctx context.Context, req *entity.AuthRequest) (*entity.Identity, error)
+    Register(ctx context.Context, req *entity.RegisterRequest) (*entity.Identity, error)
 }
 
-type Identity struct {
-    UserID   string
-    Email    string
-    Provider string
-    Metadata map[string]string
-}
-
-// Store persists users and tokens
+// UserStore persists users
 type UserStore interface {
-    Create(ctx context.Context, user *User) error
-    GetByID(ctx context.Context, id string) (*User, error)
-    GetByEmail(ctx context.Context, email string) (*User, error)
+    Create(ctx context.Context, user *entity.User) error
+    GetByID(ctx context.Context, id string) (*entity.User, error)
+    GetByEmail(ctx context.Context, email string) (*entity.User, error)
 }
 
+// TokenStore handles refresh tokens
 type TokenStore interface {
-    SaveRefreshToken(ctx context.Context, token *RefreshToken) error
-    GetRefreshToken(ctx context.Context, hash string) (*RefreshToken, error)
+    SaveRefreshToken(ctx context.Context, token *entity.RefreshToken) error
+    GetRefreshToken(ctx context.Context, hash string) (*entity.RefreshToken, error)
     RevokeRefreshToken(ctx context.Context, hash string) error
 }
 
-// TokenIssuer handles JWT lifecycle
-type TokenIssuer interface {
-    Issue(ctx context.Context, identity *Identity) (*TokenPair, error)
-    Validate(ctx context.Context, accessToken string) (*Claims, error)
-    Refresh(ctx context.Context, refreshToken string) (*TokenPair, error)
-    JWKS() *jose.JSONWebKeySet
+// CredentialStore handles password hashes (separated from UserStore)
+type CredentialStore interface {
+    SavePasswordHash(ctx context.Context, userID, hash string) error
+    GetPasswordHash(ctx context.Context, userID string) (string, error)
 }
 ```
 
-## Proto API (api/auth/v1/auth.proto)
+## Tech Stack
 
-```protobuf
-syntax = "proto3";
-package auth.v1;
+- **Go 1.24+**
+- **Connect RPC** — gRPC + HTTP/JSON on same port
+- **PostgreSQL** — production storage
+- **Atlas** — declarative schema management
+- **buf** — protobuf generation (local plugins)
+- **koanf** — configuration
+- **slog** — structured logging
+- **testcontainers** — integration tests
 
-service AuthService {
-  rpc Register(RegisterRequest) returns (RegisterResponse);
-  rpc Login(LoginRequest) returns (LoginResponse);
-  rpc Refresh(RefreshRequest) returns (RefreshResponse);
-  rpc Logout(LogoutRequest) returns (LogoutResponse);
-  rpc Verify(VerifyRequest) returns (VerifyResponse);  // For ForwardAuth
-}
+## Development Commands
 
-message RegisterRequest {
-  string email = 1;
-  string password = 2;
-}
+```bash
+# Run standalone (dev mode, in-memory store)
+go run ./cmd/psina/...
 
-message LoginRequest {
-  string email = 1;
-  string password = 2;
-}
+# Run with postgres
+PSINA_DB_URL="postgres://user:pass@localhost:5432/psina?sslmode=disable" go run ./cmd/psina/...
 
-message LoginResponse {
-  string access_token = 1;
-  string refresh_token = 2;
-  int64 expires_in = 3;  // seconds
-}
+# Generate proto
+buf generate
 
-message RefreshRequest {
-  string refresh_token = 1;
-}
+# Apply schema to database
+atlas schema apply --env local --auto-approve
 
-message VerifyRequest {
-  // Token from Authorization header, extracted by Connect interceptor
-}
+# Tests
+make test-unit              # Unit tests only
+make test-integration       # Integration tests (requires Atlas CLI + Docker)
 
-message VerifyResponse {
-  string user_id = 1;
-  string email = 2;
-  // Headers for gateway: X-User-Id, X-User-Email
-}
+# Docker
+make up                     # Start dev environment
+make down                   # Stop
+make logs                   # Follow logs
+```
+
+## Configuration
+
+Priority: defaults → config file → environment variables
+
+```yaml
+# config.yaml
+logger:
+  level: info      # debug, info, warn, error
+  format: json     # json, text
+server:
+  port: 8080
+db:
+  url: ""          # Empty = in-memory store
+jwt:
+  privateKeyPath: "" # Empty = ephemeral key (dev only!)
+```
+
+Environment: `PSINA_SERVER_PORT`, `PSINA_DB_URL`, `PSINA_JWT_PRIVATEKEYPATH`
+
+## HTTP Endpoints
+
+```
+POST /auth.v1.AuthService/Register     - Create account + return tokens
+POST /auth.v1.AuthService/Login        - Authenticate + return tokens
+POST /auth.v1.AuthService/Refresh      - Refresh access token
+POST /auth.v1.AuthService/Logout       - Revoke refresh token
+POST /auth.v1.AuthService/Verify       - Validate token (ForwardAuth)
+GET  /.well-known/jwks.json            - Public keys for gateway validation
+GET  /health                           - Health check
 ```
 
 ## Security Parameters
 
 ```go
 // JWT
-const (
-    AccessTokenTTL  = 15 * time.Minute
-    RefreshTokenTTL = 7 * 24 * time.Hour
-    JWTAlgorithm    = "RS256"
-    JWTIssuer       = "psina"
-)
+AccessTokenTTL  = 15 * time.Minute
+RefreshTokenTTL = 7 * 24 * time.Hour
+Algorithm       = RS256
 
 // Argon2id (OWASP recommendations)
-var Argon2Params = argon2.Params{
-    Memory:      64 * 1024,  // 64 MB
-    Iterations:  3,
-    Parallelism: 2,
-    SaltLength:  16,
-    KeyLength:   32,
-}
+Memory      = 64 * 1024  // 64 MB
+Iterations  = 3
+Parallelism = 2
+SaltLength  = 16
+KeyLength   = 32
 ```
 
-## HTTP Endpoints (Connect RPC)
+## Known Issues (v0.1)
 
-```http
-POST /auth.v1.AuthService/Register     - Create account
-POST /auth.v1.AuthService/Login        - Get tokens
-POST /auth.v1.AuthService/Refresh      - Refresh access token
-POST /auth.v1.AuthService/Logout       - Revoke refresh token
-POST /auth.v1.AuthService/Verify       - Validate token (ForwardAuth)
-GET  /.well-known/jwks.json            - Public keys (standard HTTP)
-```
-
-## Key Files
-
-| File | Purpose |
-|------|---------|
-| `pkg/psina/service.go` | Orchestration layer |
-| `pkg/psina/handler.go` | Connect RPC handler |
-| `pkg/psina/types.go` | Domain types (User, Identity, TokenPair) |
-| `pkg/psina/provider.go` | Provider interface |
-| `pkg/psina/store.go` | Store interfaces (User, Token, Credential) |
-| `pkg/token/issuer.go` | JWT issuance, validation, JWKS |
-| `pkg/provider/local/local.go` | Local auth (Argon2id) |
-| `pkg/store/postgres/postgres.go` | PostgreSQL store |
-| `pkg/store/memory/memory.go` | In-memory store (testing) |
-| `cmd/psina/main.go` | Server entrypoint |
-| `cmd/psina/config.go` | Configuration (koanf) |
+Track in ROADMAP.md. Key items:
+- [ ] Token family revocation not implemented (Parent field missing)
+- [ ] Postgres error handling uses string matching
+- [ ] No rate limiting
+- [ ] Health check doesn't verify DB connection
 
 ## Code Style
 
-- Follow standard Go conventions
-- Interfaces in separate files (`provider.go`, `store.go`)
-- Table-driven tests
-- Structured logging (slog)
+- Standard Go conventions
 - Errors with context: `fmt.Errorf("operation: %w", err)`
+- Table-driven tests
+- Interfaces in `ports.go`, implementations in separate packages
 
-## Integration with greedy-eye
+## Integration Examples
 
-psina is designed to be imported:
-
+**Embedded in greedy-eye:**
 ```go
-import "github.com/foxcool/psina/pkg/psina"
+import (
+    "github.com/foxcool/psina/pkg/auth"
+    "github.com/foxcool/psina/pkg/provider/local"
+    "github.com/foxcool/psina/pkg/store/postgres"
+    "github.com/foxcool/psina/pkg/token"
+)
 
 func main() {
-    auth := psina.New(
-        psina.WithPostgres(dbURL),
-        psina.WithProvider(local.New()),
-        psina.WithJWTKey(privateKey),
-    )
+    store, _ := postgres.NewWithDSN(ctx, dbURL)
+    issuer, _ := token.NewWithKey(privateKey)
+    provider := local.New(store, store)
+    service := auth.NewService(provider, store, store, issuer)
+    handler := auth.NewHandler(service)
     
-    // Mount on your http.ServeMux
-    // Works with gRPC, gRPC-Web, and HTTP/JSON on same port
-    mux := http.NewServeMux()
-    auth.Mount(mux)
-    
-    // Add your app routes
-    mux.Handle("/api/", apiHandler)
-    
-    http.ListenAndServe(":8080", h2c.NewHandler(mux, &http2.Server{}))
+    // Mount on your mux
+    path, rpcHandler := authv1connect.NewAuthServiceHandler(handler)
+    mux.Handle(path, rpcHandler)
 }
 ```
 
-## Gateway Integration
-
-### Traefik (ForwardAuth)
-
-Traefik calls psina on each request to validate:
-
+**Traefik ForwardAuth:**
 ```yaml
 http:
   middlewares:
@@ -312,35 +215,15 @@ http:
           - "X-User-Email"
 ```
 
-### KrakenD (JWKS)
-
-KrakenD fetches public keys once, validates JWT itself:
-
+**KrakenD JWKS:**
 ```json
 {
-  "endpoint": "/api/portfolio",
   "extra_config": {
     "auth/validator": {
       "alg": "RS256",
       "jwk_url": "http://psina:8080/.well-known/jwks.json",
-      "cache": true,
-      "propagate_claims": [
-        ["sub", "X-User-Id"],
-        ["email", "X-User-Email"]
-      ]
+      "cache": true
     }
   }
 }
 ```
-
-## Testing Strategy
-
-- Unit tests: providers, token logic
-- Integration tests: store implementations
-- E2E tests: full auth flows with test containers
-
-## References
-
-- Architecture: `docs/architecture.md`
-- Roadmap: `docs/ROADMAP.md`
-- Original research: Perplexity analysis in project context

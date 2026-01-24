@@ -1,9 +1,9 @@
-package psina_test
+package auth_test
 
 import (
 	"testing"
 
-	"github.com/foxcool/psina/pkg/psina"
+	"github.com/foxcool/psina/pkg/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -27,12 +27,12 @@ func TestValidatePassword(t *testing.T) {
 		{
 			name:     "too short",
 			password: "1234567",
-			wantErr:  psina.ErrPasswordTooShort,
+			wantErr:  auth.ErrPasswordTooShort,
 		},
 		{
 			name:     "empty",
 			password: "",
-			wantErr:  psina.ErrPasswordTooShort,
+			wantErr:  auth.ErrPasswordTooShort,
 		},
 		{
 			name:     "max length",
@@ -42,13 +42,13 @@ func TestValidatePassword(t *testing.T) {
 		{
 			name:     "too long",
 			password: string(make([]byte, 129)),
-			wantErr:  psina.ErrPasswordTooLong,
+			wantErr:  auth.ErrPasswordTooLong,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := psina.ValidatePassword(tt.password)
+			err := auth.ValidatePassword(tt.password)
 			if tt.wantErr != nil {
 				assert.ErrorIs(t, err, tt.wantErr)
 			} else {
@@ -93,31 +93,31 @@ func TestNormalizeEmail(t *testing.T) {
 			name:    "no at sign",
 			email:   "userexample.com",
 			want:    "",
-			wantErr: psina.ErrInvalidEmail,
+			wantErr: auth.ErrInvalidEmail,
 		},
 		{
 			name:    "no domain dot",
 			email:   "user@examplecom",
 			want:    "",
-			wantErr: psina.ErrInvalidEmail,
+			wantErr: auth.ErrInvalidEmail,
 		},
 		{
 			name:    "too short",
 			email:   "a@b",
 			want:    "",
-			wantErr: psina.ErrInvalidEmail,
+			wantErr: auth.ErrInvalidEmail,
 		},
 		{
 			name:    "empty",
 			email:   "",
 			want:    "",
-			wantErr: psina.ErrInvalidEmail,
+			wantErr: auth.ErrInvalidEmail,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := psina.NormalizeEmail(tt.email)
+			got, err := auth.NormalizeEmail(tt.email)
 			if tt.wantErr != nil {
 				assert.ErrorIs(t, err, tt.wantErr)
 			} else {

@@ -1,6 +1,6 @@
 //go:build integration
 
-package psina_test
+package auth_test
 
 import (
 	"context"
@@ -8,8 +8,8 @@ import (
 	"os"
 	"testing"
 
+	"github.com/foxcool/psina/pkg/auth"
 	"github.com/foxcool/psina/pkg/provider/local"
-	"github.com/foxcool/psina/pkg/psina"
 	"github.com/foxcool/psina/pkg/store/postgres"
 	"github.com/foxcool/psina/pkg/testutil"
 	"github.com/foxcool/psina/pkg/token"
@@ -35,16 +35,16 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-func getTestService(t *testing.T) *psina.Service {
+func getTestService(t *testing.T) *auth.Service {
 	t.Helper()
 	testDB.MustTruncate(t)
 
 	store := postgres.New(testDB.Pool)
 	provider := local.New(store, store)
-	tokenIssuer, err := token.New(store, store)
+	issuer, err := token.New()
 	require.NoError(t, err)
 
-	return psina.NewService(provider, store, tokenIssuer)
+	return auth.NewService(provider, store, store, issuer)
 }
 
 func TestE2E_FullAuthFlow(t *testing.T) {

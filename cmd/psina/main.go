@@ -52,6 +52,7 @@ func run() error {
 	var tokenStore auth.TokenStore
 	var credStore auth.CredentialStore
 	var cleanup func()
+	var dbPing func(context.Context) error
 
 	if config.DB.URL != "" {
 		// Production: use PostgreSQL
@@ -62,6 +63,7 @@ func run() error {
 			return fmt.Errorf("connect to postgres: %w", err)
 		}
 		cleanup = func() { pgStore.Close() }
+		dbPing = pgStore.Ping
 
 		userStore = pgStore
 		tokenStore = pgStore
@@ -72,6 +74,7 @@ func run() error {
 
 		memStore := memory.New()
 		cleanup = func() {}
+		dbPing = nil
 
 		userStore = memStore
 		tokenStore = memStore
@@ -117,8 +120,25 @@ func run() error {
 	// Health check
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"status":"ok","service":"psina"}`))
+
+		status := "ok"
+		dbStatus := "not_configured"
+		httpStatus := http.StatusOK
+
+		if dbPing != nil {
+			if err := dbPing(r.Context()); err != nil {
+				status = "degraded"
+				dbStatus = "error"
+				httpStatus = http.StatusServiceUnavailable
+				slog.Warn("health check: db ping failed", "error", err)
+			} else {
+				dbStatus = "connected"
+			}
+		}
+
+		w.WriteHeader(httpStatus)
+		resp := fmt.Sprintf(`{"status":"%s","service":"psina","db":"%s"}`, status, dbStatus)
+		_, _ = w.Write([]byte(resp))
 	})
 
 	// Create server with h2c (HTTP/2 cleartext for gRPC)

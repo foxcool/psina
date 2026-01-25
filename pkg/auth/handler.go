@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 
 	"connectrpc.com/connect"
@@ -71,6 +72,12 @@ func (h *Handler) Refresh(
 ) (*connect.Response[authv1.RefreshResponse], error) {
 	tokenPair, err := h.service.Refresh(ctx, req.Msg.RefreshToken)
 	if err != nil {
+		if errors.Is(err, ErrTokenReuse) {
+			slog.Warn("token reuse detected",
+				"ip", getClientIP(req.Header()),
+				"user_agent", req.Header().Get("User-Agent"),
+			)
+		}
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("invalid refresh token"))
 	}
 
@@ -125,4 +132,20 @@ func (h *Handler) Verify(
 	resp.Header().Set("X-User-Email", claims.Email)
 
 	return resp, nil
+}
+
+// getClientIP extracts client IP from headers.
+func getClientIP(headers interface{ Get(string) string }) string {
+	// Check forwarded headers (reverse proxy)
+	if ip := headers.Get("X-Forwarded-For"); ip != "" {
+		// X-Forwarded-For can contain multiple IPs, take the first
+		if idx := strings.Index(ip, ","); idx != -1 {
+			return strings.TrimSpace(ip[:idx])
+		}
+		return ip
+	}
+	if ip := headers.Get("X-Real-IP"); ip != "" {
+		return ip
+	}
+	return "unknown"
 }

@@ -138,6 +138,57 @@ func TestStore_Credentials(t *testing.T) {
 	assert.Equal(t, newHash, found)
 }
 
+func TestStore_TokenFamilyRevocation(t *testing.T) {
+	store := getTestStore(t)
+	ctx := context.Background()
+
+	// Create user first
+	user := &entity.User{
+		ID:    "user-123",
+		Email: "test@example.com",
+	}
+	require.NoError(t, store.Create(ctx, user))
+
+	// Create root token (parent="")
+	rootToken := &entity.RefreshToken{
+		Hash:   "root-token-hash",
+		UserID: user.ID,
+		Parent: "",
+	}
+	require.NoError(t, store.SaveRefreshToken(ctx, rootToken))
+
+	// Create child token (parent=root.Hash)
+	childToken := &entity.RefreshToken{
+		Hash:   "child-token-hash",
+		UserID: user.ID,
+		Parent: rootToken.Hash,
+	}
+	require.NoError(t, store.SaveRefreshToken(ctx, childToken))
+
+	// Verify both tokens are not revoked initially
+	foundRoot, err := store.GetRefreshToken(ctx, rootToken.Hash)
+	require.NoError(t, err)
+	assert.False(t, foundRoot.Revoked, "root token should not be revoked initially")
+
+	foundChild, err := store.GetRefreshToken(ctx, childToken.Hash)
+	require.NoError(t, err)
+	assert.False(t, foundChild.Revoked, "child token should not be revoked initially")
+
+	// Revoke using root hash — should revoke both root and child
+	err = store.RevokeTokens(ctx, rootToken.Hash)
+	require.NoError(t, err)
+
+	// Verify root token is revoked
+	foundRoot, err = store.GetRefreshToken(ctx, rootToken.Hash)
+	require.NoError(t, err)
+	assert.True(t, foundRoot.Revoked, "root token should be revoked")
+
+	// Verify child token is also revoked
+	foundChild, err = store.GetRefreshToken(ctx, childToken.Hash)
+	require.NoError(t, err)
+	assert.True(t, foundChild.Revoked, "child token should be revoked when parent is revoked")
+}
+
 func TestStore_NotFound(t *testing.T) {
 	store := getTestStore(t)
 	ctx := context.Background()

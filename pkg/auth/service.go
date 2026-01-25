@@ -148,7 +148,7 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*entity.Tok
 		return nil, ErrTokenExpired
 	}
 
-	// Revoke current token (and family, but there are no children yet)
+	// Revoke current token (children have parent=root, not parent=current)
 	_ = s.tokenStore.RevokeTokens(ctx, hash)
 
 	user, err := s.userStore.GetByID(ctx, rt.UserID)

@@ -1,9 +1,14 @@
 package token_test
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
 	"testing"
+	"time"
 
 	"github.com/foxcool/psina/pkg/token"
+	"github.com/go-jose/go-jose/v4"
+	"github.com/go-jose/go-jose/v4/jwt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -89,4 +94,65 @@ func TestHashToken(t *testing.T) {
 
 	// Hash is not empty
 	assert.NotEmpty(t, hash1)
+}
+
+func TestIssuer_ParseToken_Expired(t *testing.T) {
+	// Create an expired token using go-jose directly
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+
+	issuer, err := token.NewWithKey(privateKey)
+	require.NoError(t, err)
+
+	signer, err := jose.NewSigner(
+		jose.SigningKey{Algorithm: jose.RS256, Key: privateKey},
+		(&jose.SignerOptions{}).WithType("JWT").WithHeader("kid", "psina-key-1"),
+	)
+	require.NoError(t, err)
+
+	// Create token that expired 1 hour ago
+	past := time.Now().Add(-1 * time.Hour)
+	claims := jwt.Claims{
+		ID:        "test-jti",
+		Subject:   "user-123",
+		Issuer:    "psina",
+		IssuedAt:  jwt.NewNumericDate(past.Add(-15 * time.Minute)),
+		Expiry:    jwt.NewNumericDate(past),
+		NotBefore: jwt.NewNumericDate(past.Add(-15 * time.Minute)),
+	}
+
+	expiredToken, err := jwt.Signed(signer).Claims(claims).Serialize()
+	require.NoError(t, err)
+
+	// ParseToken should reject expired token
+	_, err = issuer.ParseToken(expiredToken)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "validate claims")
+}
+
+func TestIssuer_ParseToken_WrongAlgorithm(t *testing.T) {
+	issuer, err := token.New()
+	require.NoError(t, err)
+
+	// Create a token with HS256 (symmetric) instead of RS256
+	// This should be rejected because issuer expects RS256
+	key := []byte("symmetric-secret-key-32-bytes!!!")
+	signer, err := jose.NewSigner(
+		jose.SigningKey{Algorithm: jose.HS256, Key: key},
+		(&jose.SignerOptions{}).WithType("JWT"),
+	)
+	require.NoError(t, err)
+
+	claims := jwt.Claims{
+		Subject: "user-123",
+		Issuer:  "psina",
+		Expiry:  jwt.NewNumericDate(time.Now().Add(15 * time.Minute)),
+	}
+
+	wrongAlgToken, err := jwt.Signed(signer).Claims(claims).Serialize()
+	require.NoError(t, err)
+
+	// Should fail - wrong algorithm
+	_, err = issuer.ParseToken(wrongAlgToken)
+	assert.Error(t, err)
 }

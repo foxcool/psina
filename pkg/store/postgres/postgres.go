@@ -56,6 +56,11 @@ func (s *Store) Close() {
 	s.pool.Close()
 }
 
+// Ping checks the database connection.
+func (s *Store) Ping(ctx context.Context) error {
+	return s.pool.Ping(ctx)
+}
+
 // --- UserStore implementation ---
 
 // Create persists a new user.

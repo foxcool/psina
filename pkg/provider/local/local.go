@@ -72,14 +72,15 @@ func (p *Provider) Register(ctx context.Context, req *entity.RegisterRequest) (*
 		Email: req.Email,
 	}
 
-	// Store password hash in metadata (MVP approach)
-	// TODO: Move to separate credentials table in production
+	// Create user
 	if err := p.userStore.Create(ctx, user); err != nil {
 		return nil, fmt.Errorf("create user: %w", err)
 	}
 
-	// Store password hash
+	// Store password hash with compensating delete on failure
 	if err := p.credentialStore.SavePasswordHash(ctx, user.ID, passwordHash); err != nil {
+		// Rollback: delete orphaned user
+		_ = p.userStore.Delete(ctx, user.ID)
 		return nil, fmt.Errorf("store password: %w", err)
 	}
 

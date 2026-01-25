@@ -72,8 +72,10 @@ func (h *Handler) Refresh(
 ) (*connect.Response[authv1.RefreshResponse], error) {
 	tokenPair, err := h.service.Refresh(ctx, req.Msg.RefreshToken)
 	if err != nil {
-		if errors.Is(err, ErrTokenReuse) {
+		var reuseErr *TokenReuseError
+		if errors.As(err, &reuseErr) {
 			slog.Warn("token reuse detected",
+				"user_id", reuseErr.UserID,
 				"ip", getClientIP(req.Header()),
 				"user_agent", req.Header().Get("User-Agent"),
 			)

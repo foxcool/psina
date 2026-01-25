@@ -1,47 +1,18 @@
-//go:build integration
-
-package postgres
+package memory
 
 import (
 	"context"
 	"errors"
-	"log/slog"
-	"os"
 	"testing"
 
 	"github.com/foxcool/psina/pkg/entity"
 	"github.com/foxcool/psina/pkg/store"
-	"github.com/foxcool/psina/pkg/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-var testDB *testutil.TestDB
-
-func TestMain(m *testing.M) {
-	ctx := context.Background()
-
-	var err error
-	testDB, err = testutil.NewTestDB(ctx)
-	if err != nil {
-		slog.Error("failed to create test database", "error", err)
-		os.Exit(1)
-	}
-
-	code := m.Run()
-
-	testDB.Close(ctx)
-	os.Exit(code)
-}
-
-func getTestStore(t *testing.T) *Store {
-	t.Helper()
-	testDB.MustTruncate(t)
-	return New(testDB.Pool)
-}
-
 func TestStore_UserCRUD(t *testing.T) {
-	s := getTestStore(t)
+	s := New()
 	ctx := context.Background()
 
 	// Create user
@@ -71,10 +42,19 @@ func TestStore_UserCRUD(t *testing.T) {
 	err = s.Create(ctx, duplicate)
 	assert.Error(t, err)
 	assert.True(t, errors.Is(err, store.ErrUserExists), "expected ErrUserExists, got: %v", err)
+
+	// Duplicate ID should fail
+	duplicateID := &entity.User{
+		ID:    "user-123",
+		Email: "other@example.com",
+	}
+	err = s.Create(ctx, duplicateID)
+	assert.Error(t, err)
+	assert.True(t, errors.Is(err, store.ErrUserExists), "expected ErrUserExists, got: %v", err)
 }
 
 func TestStore_RefreshTokens(t *testing.T) {
-	s := getTestStore(t)
+	s := New()
 	ctx := context.Background()
 
 	// Create user first
@@ -110,7 +90,7 @@ func TestStore_RefreshTokens(t *testing.T) {
 }
 
 func TestStore_Credentials(t *testing.T) {
-	s := getTestStore(t)
+	s := New()
 	ctx := context.Background()
 
 	// Create user first
@@ -141,7 +121,7 @@ func TestStore_Credentials(t *testing.T) {
 }
 
 func TestStore_TokenFamilyRevocation(t *testing.T) {
-	s := getTestStore(t)
+	s := New()
 	ctx := context.Background()
 
 	// Create user first
@@ -170,11 +150,11 @@ func TestStore_TokenFamilyRevocation(t *testing.T) {
 	// Verify both tokens are not revoked initially
 	foundRoot, err := s.GetRefreshToken(ctx, rootToken.Hash)
 	require.NoError(t, err)
-	assert.False(t, foundRoot.Revoked, "root token should not be revoked initially")
+	assert.False(t, foundRoot.Revoked)
 
 	foundChild, err := s.GetRefreshToken(ctx, childToken.Hash)
 	require.NoError(t, err)
-	assert.False(t, foundChild.Revoked, "child token should not be revoked initially")
+	assert.False(t, foundChild.Revoked)
 
 	// Revoke using root hash — should revoke both root and child
 	err = s.RevokeTokens(ctx, rootToken.Hash)
@@ -183,16 +163,49 @@ func TestStore_TokenFamilyRevocation(t *testing.T) {
 	// Verify root token is revoked
 	foundRoot, err = s.GetRefreshToken(ctx, rootToken.Hash)
 	require.NoError(t, err)
-	assert.True(t, foundRoot.Revoked, "root token should be revoked")
+	assert.True(t, foundRoot.Revoked)
 
 	// Verify child token is also revoked
 	foundChild, err = s.GetRefreshToken(ctx, childToken.Hash)
 	require.NoError(t, err)
-	assert.True(t, foundChild.Revoked, "child token should be revoked when parent is revoked")
+	assert.True(t, foundChild.Revoked)
+}
+
+func TestStore_Delete(t *testing.T) {
+	s := New()
+	ctx := context.Background()
+
+	// Create user with credentials
+	user := &entity.User{
+		ID:    "user-123",
+		Email: "test@example.com",
+	}
+	require.NoError(t, s.Create(ctx, user))
+	require.NoError(t, s.SavePasswordHash(ctx, user.ID, "hash"))
+
+	// Verify user exists
+	_, err := s.GetByID(ctx, user.ID)
+	require.NoError(t, err)
+
+	// Delete user
+	err = s.Delete(ctx, user.ID)
+	require.NoError(t, err)
+
+	// Verify user is gone
+	_, err = s.GetByID(ctx, user.ID)
+	assert.True(t, errors.Is(err, store.ErrUserNotFound))
+
+	// Verify credentials are also gone
+	_, err = s.GetPasswordHash(ctx, user.ID)
+	assert.True(t, errors.Is(err, store.ErrCredentialNotFound))
+
+	// Delete nonexistent user should fail
+	err = s.Delete(ctx, "nonexistent")
+	assert.True(t, errors.Is(err, store.ErrUserNotFound))
 }
 
 func TestStore_NotFound(t *testing.T) {
-	s := getTestStore(t)
+	s := New()
 	ctx := context.Background()
 
 	// User not found by ID
@@ -214,4 +227,9 @@ func TestStore_NotFound(t *testing.T) {
 	_, err = s.GetPasswordHash(ctx, "nonexistent-user")
 	assert.Error(t, err)
 	assert.True(t, errors.Is(err, store.ErrCredentialNotFound), "expected ErrCredentialNotFound, got: %v", err)
+
+	// SavePasswordHash for nonexistent user
+	err = s.SavePasswordHash(ctx, "nonexistent-user", "hash")
+	assert.Error(t, err)
+	assert.True(t, errors.Is(err, store.ErrUserNotFound), "expected ErrUserNotFound, got: %v", err)
 }

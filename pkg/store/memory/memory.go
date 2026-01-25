@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/foxcool/psina/pkg/entity"
+	"github.com/foxcool/psina/pkg/store"
 )
 
 // Store is an in-memory implementation of UserStore, TokenStore, and CredentialStore.
@@ -38,10 +39,10 @@ func (s *Store) Create(ctx context.Context, user *entity.User) error {
 
 	// Check if user already exists
 	if _, exists := s.users[user.ID]; exists {
-		return fmt.Errorf("user already exists: %s", user.ID)
+		return fmt.Errorf("%w: %s", store.ErrUserExists, user.ID)
 	}
 	if _, exists := s.usersByEmail[user.Email]; exists {
-		return fmt.Errorf("email already registered: %s", user.Email)
+		return fmt.Errorf("%w: %s", store.ErrUserExists, user.Email)
 	}
 
 	// Set timestamps if not set
@@ -67,7 +68,7 @@ func (s *Store) GetByID(ctx context.Context, id string) (*entity.User, error) {
 
 	user, exists := s.users[id]
 	if !exists {
-		return nil, fmt.Errorf("user not found: %s", id)
+		return nil, fmt.Errorf("%w: %s", store.ErrUserNotFound, id)
 	}
 
 	return user, nil
@@ -80,10 +81,27 @@ func (s *Store) GetByEmail(ctx context.Context, email string) (*entity.User, err
 
 	user, exists := s.usersByEmail[email]
 	if !exists {
-		return nil, fmt.Errorf("user not found: %s", email)
+		return nil, fmt.Errorf("%w: %s", store.ErrUserNotFound, email)
 	}
 
 	return user, nil
+}
+
+// Delete removes a user by ID.
+func (s *Store) Delete(ctx context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	user, exists := s.users[id]
+	if !exists {
+		return fmt.Errorf("%w: %s", store.ErrUserNotFound, id)
+	}
+
+	delete(s.usersByEmail, user.Email)
+	delete(s.users, id)
+	delete(s.passwordHashes, id)
+
+	return nil
 }
 
 // --- TokenStore implementation ---
@@ -111,7 +129,7 @@ func (s *Store) GetRefreshToken(ctx context.Context, hash string) (*entity.Refre
 
 	token, exists := s.refreshTokens[hash]
 	if !exists {
-		return nil, fmt.Errorf("refresh token not found")
+		return nil, store.ErrTokenNotFound
 	}
 
 	return token, nil
@@ -140,7 +158,7 @@ func (s *Store) SavePasswordHash(ctx context.Context, userID, hash string) error
 
 	// Verify user exists
 	if _, exists := s.users[userID]; !exists {
-		return fmt.Errorf("user not found: %s", userID)
+		return fmt.Errorf("%w: %s", store.ErrUserNotFound, userID)
 	}
 
 	s.passwordHashes[userID] = hash
@@ -155,7 +173,7 @@ func (s *Store) GetPasswordHash(ctx context.Context, userID string) (string, err
 
 	hash, exists := s.passwordHashes[userID]
 	if !exists {
-		return "", fmt.Errorf("password hash not found for user: %s", userID)
+		return "", fmt.Errorf("%w: %s", store.ErrCredentialNotFound, userID)
 	}
 
 	return hash, nil

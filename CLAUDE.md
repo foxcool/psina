@@ -8,7 +8,7 @@ Name origin: "psina" (рус. "псина") = "doggy" — a guard dog that knows
 
 ## Current Status
 
-**v0.1 MVP** — Local auth working, needs polish before public release.
+**v0.1 MVP** — Local auth working, critical issues fixed, ready for polish.
 
 See `docs/ROADMAP.md` for detailed task list.
 
@@ -24,13 +24,14 @@ psina/
 │   ├── auth/            # Service layer (orchestration + handler)
 │   │   ├── service.go   # Business logic orchestration
 │   │   ├── handler.go   # Connect RPC handler
-│   │   ├── ports.go     # Interface definitions (Provider, Stores)
+│   │   ├── ports.go     # Interface definitions (Provider, Stores, TokenIssuer)
 │   │   └── validation.go
 │   ├── entity/          # Domain types (User, Identity, TokenPair, etc.)
 │   ├── token/           # JWT issuer (pure cryptography, no storage)
 │   ├── provider/        # Auth provider implementations
 │   │   └── local/       # Username/password (Argon2id)
 │   ├── store/           # Storage backends
+│   │   ├── errors.go    # Typed storage errors
 │   │   ├── postgres/    # Production store
 │   │   └── memory/      # Testing/dev store
 │   └── testutil/        # Test helpers (testcontainers)
@@ -44,9 +45,9 @@ psina/
 ## Architecture
 
 **Hexagonal (Ports & Adapters)**:
-- `pkg/auth/ports.go` — interfaces (Provider, UserStore, TokenStore, CredentialStore)
+- `pkg/auth/ports.go` — interfaces (Provider, UserStore, TokenStore, CredentialStore, TokenIssuer)
 - `pkg/auth/service.go` — orchestration (implements business flows)
-- `pkg/provider/`, `pkg/store/` — adapters
+- `pkg/provider/`, `pkg/store/`, `pkg/token/` — adapters
 
 **Key principle**: Domain logic in `pkg/auth/` and `pkg/entity/`, adapters are replaceable.
 
@@ -65,6 +66,7 @@ type UserStore interface {
     Create(ctx context.Context, user *entity.User) error
     GetByID(ctx context.Context, id string) (*entity.User, error)
     GetByEmail(ctx context.Context, email string) (*entity.User, error)
+    Delete(ctx context.Context, id string) error
 }
 
 // TokenStore handles refresh tokens
@@ -79,13 +81,20 @@ type CredentialStore interface {
     SavePasswordHash(ctx context.Context, userID, hash string) error
     GetPasswordHash(ctx context.Context, userID string) (string, error)
 }
+
+// TokenIssuer handles JWT operations (extracted for testability)
+type TokenIssuer interface {
+    GenerateTokens(userID, email string) (*entity.TokenPair, string, error)
+    ParseToken(accessToken string) (*entity.Claims, error)
+    JWKS() *jose.JSONWebKeySet
+}
 ```
 
 ## Tech Stack
 
 - **Go 1.24+**
 - **Connect RPC** — gRPC + HTTP/JSON on same port
-- **PostgreSQL** — production storage
+- **PostgreSQL 17+** — production storage
 - **Atlas** — declarative schema management
 - **buf** — protobuf generation (local plugins)
 - **koanf** — configuration
@@ -141,20 +150,21 @@ Environment: `PSINA_SERVER_PORT`, `PSINA_DB_URL`, `PSINA_JWT_PRIVATEKEYPATH`
 ```
 POST /auth.v1.AuthService/Register     - Create account + return tokens
 POST /auth.v1.AuthService/Login        - Authenticate + return tokens
-POST /auth.v1.AuthService/Refresh      - Refresh access token
-POST /auth.v1.AuthService/Logout       - Revoke refresh token
+POST /auth.v1.AuthService/Refresh      - Refresh access token (with rotation)
+POST /auth.v1.AuthService/Logout       - Revoke refresh token family
 POST /auth.v1.AuthService/Verify       - Validate token (ForwardAuth)
 GET  /.well-known/jwks.json            - Public keys for gateway validation
-GET  /health                           - Health check
+GET  /health                           - Health check with DB status
 ```
 
 ## Security Parameters
 
 ```go
 // JWT
-AccessTokenTTL  = 15 * time.Minute
-RefreshTokenTTL = 7 * 24 * time.Hour
-Algorithm       = RS256
+AccessTokenTTL     = 15 * time.Minute
+RefreshTokenTTL    = 7 * 24 * time.Hour
+ClockSkewTolerance = 30 * time.Second  // for nbf claim
+Algorithm          = RS256
 
 // Argon2id (OWASP recommendations)
 Memory      = 64 * 1024  // 64 MB
@@ -162,15 +172,32 @@ Iterations  = 3
 Parallelism = 2
 SaltLength  = 16
 KeyLength   = 32
+
+// Database
+DefaultQueryTimeout = 5000  // milliseconds
 ```
 
-## Known Issues (v0.1)
+## Error Handling
 
-Track in ROADMAP.md. Key items:
-- [ ] Token family revocation not implemented (Parent field missing)
-- [ ] Postgres error handling uses string matching
-- [ ] No rate limiting
-- [ ] Health check doesn't verify DB connection
+Use typed errors from `pkg/store/errors.go`:
+
+```go
+// Store returns typed errors
+return nil, fmt.Errorf("%w: %s", store.ErrUserNotFound, id)
+
+// Service/handler matches with errors.Is()
+if errors.Is(err, store.ErrUserNotFound) {
+    return nil, connect.NewError(connect.CodeNotFound, err)
+}
+```
+
+Available errors: `ErrUserNotFound`, `ErrUserExists`, `ErrTokenNotFound`, `ErrCredentialNotFound`
+
+## Remaining Tasks (v0.1)
+
+Track in ROADMAP.md. Nice to have:
+- [ ] GitHub release workflow (goreleaser)
+- [ ] Unicode password length validation (runes vs bytes)
 
 ## Code Style
 
@@ -178,10 +205,11 @@ Track in ROADMAP.md. Key items:
 - Errors with context: `fmt.Errorf("operation: %w", err)`
 - Table-driven tests
 - Interfaces in `ports.go`, implementations in separate packages
+- Typed errors for matching with `errors.Is()`
 
 ## Integration Examples
 
-**Embedded in greedy-eye:**
+**Embedded in your app:**
 ```go
 import (
     "github.com/foxcool/psina/pkg/auth"
@@ -210,6 +238,8 @@ http:
     auth:
       forwardAuth:
         address: "http://psina:8080/auth.v1.AuthService/Verify"
+        authRequestHeaders:
+          - "Authorization"
         authResponseHeaders:
           - "X-User-Id"
           - "X-User-Email"

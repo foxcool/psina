@@ -11,6 +11,9 @@ import (
 	"github.com/go-jose/go-jose/v4"
 )
 
+// Ensure token.Issuer implements TokenIssuer interface.
+var _ TokenIssuer = (*token.Issuer)(nil)
+
 // Service errors.
 var (
 	ErrUserNotFound       = errors.New("user not found")
@@ -21,12 +24,25 @@ var (
 	ErrTokenReuse         = errors.New("refresh token reuse detected")
 )
 
+// TokenReuseError contains user context for security logging.
+type TokenReuseError struct {
+	UserID string
+}
+
+func (e *TokenReuseError) Error() string {
+	return "refresh token reuse detected"
+}
+
+func (e *TokenReuseError) Is(target error) bool {
+	return target == ErrTokenReuse
+}
+
 // Service orchestrates authentication operations.
 type Service struct {
 	provider   Provider
 	tokenStore TokenStore
 	userStore  UserStore
-	issuer     *token.Issuer
+	issuer     TokenIssuer
 }
 
 // NewService creates a new authentication service.
@@ -34,7 +50,7 @@ func NewService(
 	provider Provider,
 	tokenStore TokenStore,
 	userStore UserStore,
-	issuer *token.Issuer,
+	issuer TokenIssuer,
 ) *Service {
 	return &Service{
 		provider:   provider,
@@ -141,7 +157,7 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*entity.Tok
 			familyRoot = rt.Hash
 		}
 		_ = s.tokenStore.RevokeTokens(ctx, familyRoot)
-		return nil, ErrTokenReuse
+		return nil, &TokenReuseError{UserID: rt.UserID}
 	}
 
 	if time.Now().After(rt.ExpiresAt) {

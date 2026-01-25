@@ -14,6 +14,9 @@ import (
 	"syscall"
 	"time"
 
+	// Build info (set by goreleaser)
+	// -ldflags "-X main.version={{.Version}} -X main.commit={{.ShortCommit}} -X main.date={{.Date}}"
+
 	"connectrpc.com/connect"
 	"github.com/foxcool/psina/pkg/api/auth/v1/authv1connect"
 	"github.com/foxcool/psina/pkg/auth"
@@ -25,7 +28,20 @@ import (
 	"golang.org/x/net/http2/h2c"
 )
 
+// Build information (set by goreleaser via ldflags).
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 func main() {
+	// Handle --version flag
+	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "-v") {
+		fmt.Printf("psina %s (commit: %s, built: %s)\n", version, commit, date)
+		os.Exit(0)
+	}
+
 	if err := run(); err != nil {
 		slog.Error("fatal error", "error", err)
 		os.Exit(1)
@@ -45,7 +61,10 @@ func run() error {
 	logger := setupLogger(config)
 	slog.SetDefault(logger)
 
-	slog.Info("starting psina", "port", config.Server.Port)
+	slog.Info("starting psina",
+		"version", version,
+		"port", config.Server.Port,
+	)
 
 	// Initialize stores based on config
 	var userStore auth.UserStore

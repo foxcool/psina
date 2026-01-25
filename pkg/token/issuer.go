@@ -19,6 +19,8 @@ const (
 	JWTAlgorithm    = jose.RS256
 	JWTIssuer       = "psina"
 	KeyID           = "psina-key-1"
+	// ClockSkewTolerance allows for clock drift between servers.
+	ClockSkewTolerance = 30 * time.Second
 )
 
 // Issuer handles JWT cryptography operations.
@@ -96,7 +98,7 @@ func (i *Issuer) GenerateTokens(userID, email string) (*entity.TokenPair, string
 			Issuer:    JWTIssuer,
 			IssuedAt:  jwt.NewNumericDate(now),
 			Expiry:    jwt.NewNumericDate(now.Add(AccessTokenTTL)),
-			NotBefore: jwt.NewNumericDate(now),
+			NotBefore: jwt.NewNumericDate(now.Add(-ClockSkewTolerance)),
 		},
 		Email: email,
 	}

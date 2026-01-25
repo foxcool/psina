@@ -3,6 +3,7 @@ package auth
 import (
 	"errors"
 	"strings"
+	"unicode/utf8"
 )
 
 // Password constraints
@@ -23,10 +24,10 @@ var ErrInvalidEmail = errors.New("invalid email format")
 // ValidatePassword checks password meets requirements.
 // OWASP/NIST: length matters, complexity doesn't.
 func ValidatePassword(password string) error {
-	if len(password) < MinPasswordLength {
+	if utf8.RuneCountInString(password) < MinPasswordLength {
 		return ErrPasswordTooShort
 	}
-	if len(password) > MaxPasswordLength {
+	if utf8.RuneCountInString(password) > MaxPasswordLength {
 		return ErrPasswordTooLong
 	}
 	return nil

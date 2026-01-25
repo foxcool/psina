@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/foxcool/psina/pkg/entity"
+	"github.com/go-jose/go-jose/v4"
 )
 
 // Provider authenticates users via a specific method (local, passkey, wallet, etc.).
@@ -28,6 +29,9 @@ type UserStore interface {
 
 	// GetByEmail retrieves a user by email address.
 	GetByEmail(ctx context.Context, email string) (*entity.User, error)
+
+	// Delete removes a user by ID.
+	Delete(ctx context.Context, id string) error
 }
 
 // TokenStore handles refresh token persistence.
@@ -52,4 +56,17 @@ type CredentialStore interface {
 
 	// GetPasswordHash retrieves a password hash for a user.
 	GetPasswordHash(ctx context.Context, userID string) (string, error)
+}
+
+// TokenIssuer handles JWT token operations.
+type TokenIssuer interface {
+	// GenerateTokens creates access and refresh tokens.
+	// Returns: TokenPair, refresh token hash (for storage), error.
+	GenerateTokens(userID, email string) (*entity.TokenPair, string, error)
+
+	// ParseToken validates an access token and returns claims.
+	ParseToken(accessToken string) (*entity.Claims, error)
+
+	// JWKS returns the JSON Web Key Set for public key verification.
+	JWKS() *jose.JSONWebKeySet
 }

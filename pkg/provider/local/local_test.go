@@ -2,8 +2,10 @@ package local_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
+	"github.com/foxcool/psina/pkg/auth"
 	"github.com/foxcool/psina/pkg/entity"
 	"github.com/foxcool/psina/pkg/provider/local"
 	"github.com/foxcool/psina/pkg/store/memory"
@@ -131,4 +133,37 @@ func TestProvider_PasswordHashing(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.NotEqual(t, hash1, hash2, "Password hashes should differ due to random salts")
+}
+
+// failingCredentialStore always fails on SavePasswordHash
+type failingCredentialStore struct {
+	auth.CredentialStore
+}
+
+func (f *failingCredentialStore) SavePasswordHash(ctx context.Context, userID, hash string) error {
+	return errors.New("database connection lost")
+}
+
+func (f *failingCredentialStore) GetPasswordHash(ctx context.Context, userID string) (string, error) {
+	return "", errors.New("database connection lost")
+}
+
+func TestProvider_RegisterCompensatingDelete(t *testing.T) {
+	userStore := memory.New()
+	credStore := &failingCredentialStore{}
+	provider := local.New(userStore, credStore)
+
+	req := &entity.RegisterRequest{
+		Email:    "test@example.com",
+		Password: "SecurePassword123!",
+	}
+
+	// Registration should fail due to credential store error
+	_, err := provider.Register(context.Background(), req)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "store password")
+
+	// User should NOT exist (compensating delete worked)
+	_, err = userStore.GetByEmail(context.Background(), "test@example.com")
+	assert.Error(t, err, "user should be deleted after credential store failure")
 }

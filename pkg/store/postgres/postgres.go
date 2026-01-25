@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/foxcool/psina/pkg/entity"
+	"github.com/foxcool/psina/pkg/store"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -20,6 +21,10 @@ const (
 	pqNotNullViolation    = "23502" // not_null_violation
 	pqCheckViolation      = "23514" // check_violation
 )
+
+// DefaultQueryTimeout is the default timeout for database queries.
+// Can be overridden via DSN parameter: ?statement_timeout=5000
+const DefaultQueryTimeout = "5000" // 5 seconds in milliseconds
 
 // Store implements UserStore, TokenStore, and CredentialStore using PostgreSQL.
 type Store struct {
@@ -36,6 +41,14 @@ func NewWithDSN(ctx context.Context, dsn string) (*Store, error) {
 	config, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("parse dsn: %w", err)
+	}
+
+	// Set default query timeout if not specified in DSN
+	if config.ConnConfig.RuntimeParams == nil {
+		config.ConnConfig.RuntimeParams = make(map[string]string)
+	}
+	if _, ok := config.ConnConfig.RuntimeParams["statement_timeout"]; !ok {
+		config.ConnConfig.RuntimeParams["statement_timeout"] = DefaultQueryTimeout
 	}
 
 	pool, err := pgxpool.NewWithConfig(ctx, config)
@@ -79,7 +92,7 @@ func (s *Store) Create(ctx context.Context, user *entity.User) error {
 	`, user.ID, user.Email, user.CreatedAt, user.UpdatedAt)
 	if err != nil {
 		if isDuplicateKeyError(err) {
-			return fmt.Errorf("user already exists: %s", user.Email)
+			return fmt.Errorf("%w: %s", store.ErrUserExists, user.Email)
 		}
 		return fmt.Errorf("insert user: %w", err)
 	}
@@ -97,7 +110,7 @@ func (s *Store) GetByID(ctx context.Context, id string) (*entity.User, error) {
 	`, id).Scan(&user.ID, &user.Email, &user.CreatedAt, &user.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("user not found: %s", id)
+			return nil, fmt.Errorf("%w: %s", store.ErrUserNotFound, id)
 		}
 		return nil, fmt.Errorf("query user: %w", err)
 	}
@@ -115,12 +128,24 @@ func (s *Store) GetByEmail(ctx context.Context, email string) (*entity.User, err
 	`, email).Scan(&user.ID, &user.Email, &user.CreatedAt, &user.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("user not found: %s", email)
+			return nil, fmt.Errorf("%w: %s", store.ErrUserNotFound, email)
 		}
 		return nil, fmt.Errorf("query user: %w", err)
 	}
 
 	return user, nil
+}
+
+// Delete removes a user by ID.
+func (s *Store) Delete(ctx context.Context, id string) error {
+	result, err := s.pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("delete user: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("%w: %s", store.ErrUserNotFound, id)
+	}
+	return nil
 }
 
 // --- TokenStore implementation ---
@@ -153,7 +178,7 @@ func (s *Store) GetRefreshToken(ctx context.Context, hash string) (*entity.Refre
 	`, hash).Scan(&token.Hash, &token.UserID, &token.Parent, &token.ExpiresAt, &token.CreatedAt, &token.Revoked)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("refresh token not found")
+			return nil, store.ErrTokenNotFound
 		}
 		return nil, fmt.Errorf("query refresh token: %w", err)
 	}
@@ -201,7 +226,7 @@ func (s *Store) GetPasswordHash(ctx context.Context, userID string) (string, err
 	`, userID).Scan(&hash)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return "", fmt.Errorf("password hash not found for user: %s", userID)
+			return "", fmt.Errorf("%w: %s", store.ErrCredentialNotFound, userID)
 		}
 		return "", fmt.Errorf("query password hash: %w", err)
 	}

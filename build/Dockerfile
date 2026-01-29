@@ -1,39 +1,18 @@
-FROM golang:1.24-alpine AS builder
-
-ENV PROJECT_PATH=github.com/foxcool/psina
-
-# Get CMD path argument (default: cmd/psina)
-ARG _path="cmd/psina"
-
-# Set environment variable for Go
-ENV GOPATH=/go \
-    PATH="/go/bin:$PATH"
-
-# Copy project files
-WORKDIR ${GOPATH}/src/${PROJECT_PATH}
-
-# Copy go.mod and go.sum first for better caching
-COPY go.mod go.sum ./
-RUN go mod download
-
-# Copy the rest of the source code
-COPY . .
-
-# Build from project root, specifying the cmd path
-RUN CGO_ENABLED=0 GOOS=linux go build -o ${GOPATH}/bin/app ./${_path}
-
-# Init new lightweight container
+# Dockerfile for goreleaser
+# This dockerfile expects the binary to be already built and copied by goreleaser
 FROM alpine:latest
+
 RUN apk --no-cache add ca-certificates curl
 
-# Install Atlas CLI
+# Install Atlas CLI for migrations
 RUN curl -sSf https://atlasgo.sh | sh
 
 # Copy schema for Atlas
-COPY --from=builder /go/src/github.com/foxcool/psina/schema.hcl /schema.hcl
+COPY schema.hcl /schema.hcl
 
-# Copy the binary
-COPY --from=builder /go/bin/app /app
+# Copy the pre-built binary from goreleaser
+COPY psina /psina
 
-# Run the compiled bin by default when the container starts
-CMD ["/app"]
+EXPOSE 8080
+
+ENTRYPOINT ["/psina"]

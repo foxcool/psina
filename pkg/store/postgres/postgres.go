@@ -26,18 +26,48 @@ const (
 // Can be overridden via DSN parameter: ?statement_timeout=5000
 const DefaultQueryTimeout = "5000" // 5 seconds in milliseconds
 
+// DefaultTablePrefix is the default prefix for table names.
+// Empty by default for backward compatibility.
+const DefaultTablePrefix = ""
+
 // Store implements UserStore, TokenStore, and CredentialStore using PostgreSQL.
 type Store struct {
-	pool *pgxpool.Pool
+	pool        *pgxpool.Pool
+	tablePrefix string
+
+	// Table names (with prefix applied)
+	tableUsers            string
+	tableLocalCredentials string
+	tableRefreshTokens    string
+}
+
+// Option configures the Store.
+type Option func(*Store)
+
+// WithTablePrefix sets the table name prefix.
+func WithTablePrefix(prefix string) Option {
+	return func(s *Store) {
+		s.tablePrefix = prefix
+	}
 }
 
 // New creates a new PostgreSQL store.
-func New(pool *pgxpool.Pool) *Store {
-	return &Store{pool: pool}
+func New(pool *pgxpool.Pool, opts ...Option) *Store {
+	s := &Store{
+		pool:        pool,
+		tablePrefix: DefaultTablePrefix,
+	}
+
+	for _, opt := range opts {
+		opt(s)
+	}
+
+	s.initTableNames()
+	return s
 }
 
 // NewWithDSN creates a new PostgreSQL store from a connection string.
-func NewWithDSN(ctx context.Context, dsn string) (*Store, error) {
+func NewWithDSN(ctx context.Context, dsn string, opts ...Option) (*Store, error) {
 	config, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("parse dsn: %w", err)
@@ -61,7 +91,29 @@ func NewWithDSN(ctx context.Context, dsn string) (*Store, error) {
 		return nil, fmt.Errorf("ping: %w", err)
 	}
 
-	return &Store{pool: pool}, nil
+	s := &Store{
+		pool:        pool,
+		tablePrefix: DefaultTablePrefix,
+	}
+
+	for _, opt := range opts {
+		opt(s)
+	}
+
+	s.initTableNames()
+	return s, nil
+}
+
+// initTableNames initializes table names with the configured prefix.
+func (s *Store) initTableNames() {
+	s.tableUsers = s.tablePrefix + "users"
+	s.tableLocalCredentials = s.tablePrefix + "local_credentials"
+	s.tableRefreshTokens = s.tablePrefix + "refresh_tokens"
+}
+
+// TablePrefix returns the current table prefix.
+func (s *Store) TablePrefix() string {
+	return s.tablePrefix
 }
 
 // Close closes the connection pool.
@@ -86,10 +138,12 @@ func (s *Store) Create(ctx context.Context, user *entity.User) error {
 		user.UpdatedAt = now
 	}
 
-	_, err := s.pool.Exec(ctx, `
-		INSERT INTO users (id, email, created_at, updated_at)
+	query := fmt.Sprintf(`
+		INSERT INTO %s (id, email, created_at, updated_at)
 		VALUES ($1, $2, $3, $4)
-	`, user.ID, user.Email, user.CreatedAt, user.UpdatedAt)
+	`, s.tableUsers)
+
+	_, err := s.pool.Exec(ctx, query, user.ID, user.Email, user.CreatedAt, user.UpdatedAt)
 	if err != nil {
 		if isDuplicateKeyError(err) {
 			return fmt.Errorf("%w: %s", store.ErrUserExists, user.Email)
@@ -102,12 +156,14 @@ func (s *Store) Create(ctx context.Context, user *entity.User) error {
 
 // GetByID retrieves a user by ID.
 func (s *Store) GetByID(ctx context.Context, id string) (*entity.User, error) {
-	user := &entity.User{}
-	err := s.pool.QueryRow(ctx, `
+	query := fmt.Sprintf(`
 		SELECT id, email, created_at, updated_at
-		FROM users
+		FROM %s
 		WHERE id = $1
-	`, id).Scan(&user.ID, &user.Email, &user.CreatedAt, &user.UpdatedAt)
+	`, s.tableUsers)
+
+	user := &entity.User{}
+	err := s.pool.QueryRow(ctx, query, id).Scan(&user.ID, &user.Email, &user.CreatedAt, &user.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, fmt.Errorf("%w: %s", store.ErrUserNotFound, id)
@@ -120,12 +176,14 @@ func (s *Store) GetByID(ctx context.Context, id string) (*entity.User, error) {
 
 // GetByEmail retrieves a user by email address.
 func (s *Store) GetByEmail(ctx context.Context, email string) (*entity.User, error) {
-	user := &entity.User{}
-	err := s.pool.QueryRow(ctx, `
+	query := fmt.Sprintf(`
 		SELECT id, email, created_at, updated_at
-		FROM users
+		FROM %s
 		WHERE email = $1
-	`, email).Scan(&user.ID, &user.Email, &user.CreatedAt, &user.UpdatedAt)
+	`, s.tableUsers)
+
+	user := &entity.User{}
+	err := s.pool.QueryRow(ctx, query, email).Scan(&user.ID, &user.Email, &user.CreatedAt, &user.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, fmt.Errorf("%w: %s", store.ErrUserNotFound, email)
@@ -138,7 +196,9 @@ func (s *Store) GetByEmail(ctx context.Context, email string) (*entity.User, err
 
 // Delete removes a user by ID.
 func (s *Store) Delete(ctx context.Context, id string) error {
-	result, err := s.pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, id)
+	query := fmt.Sprintf(`DELETE FROM %s WHERE id = $1`, s.tableUsers)
+
+	result, err := s.pool.Exec(ctx, query, id)
 	if err != nil {
 		return fmt.Errorf("delete user: %w", err)
 	}
@@ -157,10 +217,12 @@ func (s *Store) SaveRefreshToken(ctx context.Context, token *entity.RefreshToken
 		token.CreatedAt = now
 	}
 
-	_, err := s.pool.Exec(ctx, `
-		INSERT INTO refresh_tokens (hash, user_id, parent, expires_at, created_at, revoked)
+	query := fmt.Sprintf(`
+		INSERT INTO %s (hash, user_id, parent, expires_at, created_at, revoked)
 		VALUES ($1, $2, $3, $4, $5, $6)
-	`, token.Hash, token.UserID, token.Parent, token.ExpiresAt, token.CreatedAt, token.Revoked)
+	`, s.tableRefreshTokens)
+
+	_, err := s.pool.Exec(ctx, query, token.Hash, token.UserID, token.Parent, token.ExpiresAt, token.CreatedAt, token.Revoked)
 	if err != nil {
 		return fmt.Errorf("insert refresh token: %w", err)
 	}
@@ -170,12 +232,14 @@ func (s *Store) SaveRefreshToken(ctx context.Context, token *entity.RefreshToken
 
 // GetRefreshToken retrieves a refresh token by its hash.
 func (s *Store) GetRefreshToken(ctx context.Context, hash string) (*entity.RefreshToken, error) {
-	token := &entity.RefreshToken{}
-	err := s.pool.QueryRow(ctx, `
+	query := fmt.Sprintf(`
 		SELECT hash, user_id, parent, expires_at, created_at, revoked
-		FROM refresh_tokens
+		FROM %s
 		WHERE hash = $1
-	`, hash).Scan(&token.Hash, &token.UserID, &token.Parent, &token.ExpiresAt, &token.CreatedAt, &token.Revoked)
+	`, s.tableRefreshTokens)
+
+	token := &entity.RefreshToken{}
+	err := s.pool.QueryRow(ctx, query, hash).Scan(&token.Hash, &token.UserID, &token.Parent, &token.ExpiresAt, &token.CreatedAt, &token.Revoked)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, store.ErrTokenNotFound
@@ -188,11 +252,13 @@ func (s *Store) GetRefreshToken(ctx context.Context, hash string) (*entity.Refre
 
 // RevokeTokens revokes a token and all tokens in its family.
 func (s *Store) RevokeTokens(ctx context.Context, hash string) error {
-	_, err := s.pool.Exec(ctx, `
-		UPDATE refresh_tokens
+	query := fmt.Sprintf(`
+		UPDATE %s
 		SET revoked = true
 		WHERE hash = $1 OR parent = $1
-	`, hash)
+	`, s.tableRefreshTokens)
+
+	_, err := s.pool.Exec(ctx, query, hash)
 	if err != nil {
 		return fmt.Errorf("revoke tokens: %w", err)
 	}
@@ -204,11 +270,13 @@ func (s *Store) RevokeTokens(ctx context.Context, hash string) error {
 
 // SavePasswordHash stores a password hash for a user.
 func (s *Store) SavePasswordHash(ctx context.Context, userID, hash string) error {
-	_, err := s.pool.Exec(ctx, `
-		INSERT INTO local_credentials (user_id, password_hash, created_at, updated_at)
+	query := fmt.Sprintf(`
+		INSERT INTO %s (user_id, password_hash, created_at, updated_at)
 		VALUES ($1, $2, NOW(), NOW())
 		ON CONFLICT (user_id) DO UPDATE SET password_hash = $2, updated_at = NOW()
-	`, userID, hash)
+	`, s.tableLocalCredentials)
+
+	_, err := s.pool.Exec(ctx, query, userID, hash)
 	if err != nil {
 		return fmt.Errorf("save password hash: %w", err)
 	}
@@ -218,12 +286,14 @@ func (s *Store) SavePasswordHash(ctx context.Context, userID, hash string) error
 
 // GetPasswordHash retrieves a password hash for a user.
 func (s *Store) GetPasswordHash(ctx context.Context, userID string) (string, error) {
-	var hash string
-	err := s.pool.QueryRow(ctx, `
+	query := fmt.Sprintf(`
 		SELECT password_hash
-		FROM local_credentials
+		FROM %s
 		WHERE user_id = $1
-	`, userID).Scan(&hash)
+	`, s.tableLocalCredentials)
+
+	var hash string
+	err := s.pool.QueryRow(ctx, query, userID).Scan(&hash)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return "", fmt.Errorf("%w: %s", store.ErrCredentialNotFound, userID)

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/json"
@@ -11,11 +12,9 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
-
-	// Build info (set by goreleaser)
-	// -ldflags "-X main.version={{.Version}} -X main.commit={{.ShortCommit}} -X main.date={{.Date}}"
 
 	"connectrpc.com/connect"
 	"github.com/foxcool/psina/pkg/api/auth/v1/authv1connect"
@@ -64,6 +63,8 @@ func run() error {
 	slog.Info("starting psina",
 		"version", version,
 		"port", config.Server.Port,
+		"jwt_algorithm", config.JWT.Algorithm,
+		"cookies_enabled", config.Cookie.Enabled,
 	)
 
 	// Initialize stores based on config
@@ -75,9 +76,11 @@ func run() error {
 
 	if config.DB.URL != "" {
 		// Production: use PostgreSQL
-		slog.Info("using postgresql store")
+		slog.Info("using postgresql store", "table_prefix", config.DB.TablePrefix)
 
-		pgStore, err := postgres.NewWithDSN(ctx, config.DB.URL)
+		pgStore, err := postgres.NewWithDSN(ctx, config.DB.URL,
+			postgres.WithTablePrefix(config.DB.TablePrefix),
+		)
 		if err != nil {
 			return fmt.Errorf("connect to postgres: %w", err)
 		}
@@ -106,6 +109,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("create token issuer: %w", err)
 	}
+	slog.Info("token issuer initialized", "algorithm", issuer.Algorithm())
 
 	// Initialize provider
 	provider := local.New(userStore, credStore)
@@ -113,8 +117,15 @@ func run() error {
 	// Initialize service
 	service := auth.NewService(provider, tokenStore, userStore, issuer)
 
-	// Initialize handler
-	handler := auth.NewHandler(service)
+	// Initialize handler with cookie config
+	cookieConfig := &auth.CookieConfig{
+		Enabled:  config.Cookie.Enabled,
+		Domain:   config.Cookie.Domain,
+		Path:     config.Cookie.Path,
+		Secure:   config.Cookie.Secure,
+		SameSite: parseSameSite(config.Cookie.SameSite),
+	}
+	handler := auth.NewHandler(service, auth.WithCookieConfig(cookieConfig))
 
 	// Setup HTTP mux
 	mux := http.NewServeMux()
@@ -136,7 +147,32 @@ func run() error {
 		}
 	})
 
-	// Health check
+	// Health endpoints
+	// /healthz - liveness probe (always returns 200 if service is running)
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	})
+
+	// /readyz - readiness probe (checks DB connection)
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		if dbPing != nil {
+			if err := dbPing(r.Context()); err != nil {
+				slog.Warn("readiness check failed", "error", err)
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = w.Write([]byte(`{"status":"not_ready","reason":"database_unavailable"}`))
+				return
+			}
+		}
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ready"}`))
+	})
+
+	// /health - backward compatible health check
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 
@@ -156,8 +192,49 @@ func run() error {
 		}
 
 		w.WriteHeader(httpStatus)
-		resp := fmt.Sprintf(`{"status":"%s","service":"psina","db":"%s"}`, status, dbStatus)
+		resp := fmt.Sprintf(`{"status":"%s","service":"psina","version":"%s","db":"%s"}`, status, version, dbStatus)
 		_, _ = w.Write([]byte(resp))
+	})
+
+	// /verify - HTTP endpoint for Traefik ForwardAuth
+	// This is separate from the Connect RPC Verify method to provide a simple HTTP interface
+	mux.HandleFunc("/verify", func(w http.ResponseWriter, r *http.Request) {
+		// Extract token from Authorization header
+		authHeader := r.Header.Get("Authorization")
+		var accessToken string
+
+		if authHeader != "" {
+			accessToken = strings.TrimPrefix(authHeader, "Bearer ")
+			if accessToken == authHeader {
+				// No "Bearer " prefix, invalid format
+				http.Error(w, "invalid authorization format", http.StatusUnauthorized)
+				return
+			}
+		}
+
+		// Also check cookie if cookies are enabled
+		if accessToken == "" && config.Cookie.Enabled {
+			if cookie, err := r.Cookie("psina_access"); err == nil {
+				accessToken = cookie.Value
+			}
+		}
+
+		if accessToken == "" {
+			http.Error(w, "missing authorization", http.StatusUnauthorized)
+			return
+		}
+
+		// Verify token
+		claims, err := service.Verify(r.Context(), accessToken)
+		if err != nil {
+			http.Error(w, "invalid token", http.StatusUnauthorized)
+			return
+		}
+
+		// Set response headers for the gateway
+		w.Header().Set("X-User-Id", claims.UserID)
+		w.Header().Set("X-User-Email", claims.Email)
+		w.WriteHeader(http.StatusOK)
 	})
 
 	// Create server with h2c (HTTP/2 cleartext for gRPC)
@@ -199,28 +276,48 @@ func run() error {
 }
 
 func createTokenIssuer(config *Config) (*token.Issuer, error) {
-	if config.JWT.PrivateKeyPath != "" {
-		// Production: load key from file
-		privateKey, err := loadPrivateKey(config.JWT.PrivateKeyPath)
-		if err != nil {
-			return nil, fmt.Errorf("load jwt key: %w", err)
-		}
+	// Determine key source
+	var keyData []byte
+	var err error
 
+	if config.JWT.PrivateKey != "" {
+		// Key provided directly in config
+		keyData = []byte(config.JWT.PrivateKey)
+		slog.Info("using jwt key from environment/config")
+	} else if config.JWT.PrivateKeyPath != "" {
+		// Load key from file
+		keyData, err = os.ReadFile(config.JWT.PrivateKeyPath)
+		if err != nil {
+			return nil, fmt.Errorf("read jwt key file: %w", err)
+		}
 		slog.Info("using jwt key from file", "path", config.JWT.PrivateKeyPath)
-		return token.NewWithKey(privateKey)
+	} else {
+		// Development: generate ephemeral key
+		slog.Warn("no JWT key configured, generating ephemeral key (tokens will invalidate on restart)")
+		return token.NewWithAlgorithm(token.Algorithm(config.JWT.Algorithm))
 	}
 
-	// Development: generate ephemeral key
-	slog.Warn("no JWT key configured, generating ephemeral key (tokens will invalidate on restart)")
-	return token.New()
+	// Parse key based on algorithm
+	switch config.JWT.Algorithm {
+	case "ES256":
+		privateKey, err := parseECDSAPrivateKey(keyData)
+		if err != nil {
+			return nil, fmt.Errorf("parse ecdsa key: %w", err)
+		}
+		return token.NewWithECDSAKey(privateKey)
+
+	case "RS256":
+		fallthrough
+	default:
+		privateKey, err := parseRSAPrivateKey(keyData)
+		if err != nil {
+			return nil, fmt.Errorf("parse rsa key: %w", err)
+		}
+		return token.NewWithRSAKey(privateKey)
+	}
 }
 
-func loadPrivateKey(path string) (*rsa.PrivateKey, error) {
-	keyData, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read file: %w", err)
-	}
-
+func parseRSAPrivateKey(keyData []byte) (*rsa.PrivateKey, error) {
 	block, _ := pem.Decode(keyData)
 	if block == nil {
 		return nil, fmt.Errorf("no PEM block found")
@@ -243,6 +340,44 @@ func loadPrivateKey(path string) (*rsa.PrivateKey, error) {
 	}
 
 	return rsaKey, nil
+}
+
+func parseECDSAPrivateKey(keyData []byte) (*ecdsa.PrivateKey, error) {
+	block, _ := pem.Decode(keyData)
+	if block == nil {
+		return nil, fmt.Errorf("no PEM block found")
+	}
+
+	// Try EC private key format first
+	if key, err := x509.ParseECPrivateKey(block.Bytes); err == nil {
+		return key, nil
+	}
+
+	// Try PKCS#8
+	keyInterface, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("parse private key: %w", err)
+	}
+
+	ecKey, ok := keyInterface.(*ecdsa.PrivateKey)
+	if !ok {
+		return nil, fmt.Errorf("key is not ECDSA")
+	}
+
+	return ecKey, nil
+}
+
+func parseSameSite(s string) http.SameSite {
+	switch strings.ToLower(s) {
+	case "strict":
+		return http.SameSiteStrictMode
+	case "lax":
+		return http.SameSiteLaxMode
+	case "none":
+		return http.SameSiteNoneMode
+	default:
+		return http.SameSiteStrictMode
+	}
 }
 
 func setupLogger(config *Config) *slog.Logger {

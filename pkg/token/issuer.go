@@ -1,6 +1,9 @@
 package token
 
 import (
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -16,18 +19,26 @@ import (
 const (
 	AccessTokenTTL  = 15 * time.Minute
 	RefreshTokenTTL = 7 * 24 * time.Hour
-	JWTAlgorithm    = jose.RS256
 	JWTIssuer       = "psina"
 	KeyID           = "psina-key-1"
 	// ClockSkewTolerance allows for clock drift between servers.
 	ClockSkewTolerance = 30 * time.Second
 )
 
+// Algorithm represents supported JWT signing algorithms.
+type Algorithm string
+
+const (
+	RS256 Algorithm = "RS256"
+	ES256 Algorithm = "ES256"
+)
+
 // Issuer handles JWT cryptography operations.
 // Does NOT handle storage - that's the service's responsibility.
 type Issuer struct {
-	privateKey *rsa.PrivateKey
-	publicKey  *rsa.PublicKey
+	algorithm  jose.SignatureAlgorithm
+	privateKey crypto.Signer
+	publicKey  crypto.PublicKey
 	signer     jose.Signer
 	jwks       *jose.JSONWebKeySet
 }
@@ -38,21 +49,52 @@ type customClaims struct {
 	Email string `json:"email"`
 }
 
-// New creates a new Issuer with generated RSA keys (dev only).
+// New creates a new Issuer with generated keys (dev only).
+// Uses RS256 by default.
 func New() (*Issuer, error) {
-	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		return nil, fmt.Errorf("generate RSA key: %w", err)
-	}
-	return NewWithKey(privateKey)
+	return NewWithAlgorithm(RS256)
 }
 
-// NewWithKey creates an Issuer with an existing private key (production).
-func NewWithKey(privateKey *rsa.PrivateKey) (*Issuer, error) {
-	publicKey := &privateKey.PublicKey
+// NewWithAlgorithm creates a new Issuer with generated keys for the specified algorithm.
+func NewWithAlgorithm(alg Algorithm) (*Issuer, error) {
+	switch alg {
+	case ES256:
+		privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			return nil, fmt.Errorf("generate ECDSA key: %w", err)
+		}
+		return NewWithECDSAKey(privateKey)
+	case RS256:
+		fallthrough
+	default:
+		privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			return nil, fmt.Errorf("generate RSA key: %w", err)
+		}
+		return NewWithRSAKey(privateKey)
+	}
+}
 
+// NewWithRSAKey creates an Issuer with an existing RSA private key (RS256).
+func NewWithRSAKey(privateKey *rsa.PrivateKey) (*Issuer, error) {
+	return newIssuer(jose.RS256, privateKey, &privateKey.PublicKey)
+}
+
+// NewWithECDSAKey creates an Issuer with an existing ECDSA private key (ES256).
+func NewWithECDSAKey(privateKey *ecdsa.PrivateKey) (*Issuer, error) {
+	return newIssuer(jose.ES256, privateKey, &privateKey.PublicKey)
+}
+
+// NewWithKey creates an Issuer with an existing RSA private key (production).
+// Deprecated: Use NewWithRSAKey instead.
+func NewWithKey(privateKey *rsa.PrivateKey) (*Issuer, error) {
+	return NewWithRSAKey(privateKey)
+}
+
+// newIssuer creates an Issuer with the given algorithm and keys.
+func newIssuer(alg jose.SignatureAlgorithm, privateKey crypto.Signer, publicKey crypto.PublicKey) (*Issuer, error) {
 	signer, err := jose.NewSigner(
-		jose.SigningKey{Algorithm: JWTAlgorithm, Key: privateKey},
+		jose.SigningKey{Algorithm: alg, Key: privateKey},
 		(&jose.SignerOptions{}).WithType("JWT").WithHeader("kid", KeyID),
 	)
 	if err != nil {
@@ -64,18 +106,24 @@ func NewWithKey(privateKey *rsa.PrivateKey) (*Issuer, error) {
 			{
 				Key:       publicKey,
 				KeyID:     KeyID,
-				Algorithm: string(JWTAlgorithm),
+				Algorithm: string(alg),
 				Use:       "sig",
 			},
 		},
 	}
 
 	return &Issuer{
+		algorithm:  alg,
 		privateKey: privateKey,
 		publicKey:  publicKey,
 		signer:     signer,
 		jwks:       jwks,
 	}, nil
+}
+
+// Algorithm returns the signing algorithm used by this issuer.
+func (i *Issuer) Algorithm() string {
+	return string(i.algorithm)
 }
 
 // GenerateTokens creates access and refresh tokens.
@@ -128,7 +176,7 @@ func (i *Issuer) GenerateTokens(userID, email string) (*entity.TokenPair, string
 
 // ParseToken validates an access token and returns claims.
 func (i *Issuer) ParseToken(accessToken string) (*entity.Claims, error) {
-	tok, err := jwt.ParseSigned(accessToken, []jose.SignatureAlgorithm{JWTAlgorithm})
+	tok, err := jwt.ParseSigned(accessToken, []jose.SignatureAlgorithm{i.algorithm})
 	if err != nil {
 		return nil, fmt.Errorf("parse token: %w", err)
 	}

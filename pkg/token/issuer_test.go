@@ -1,6 +1,8 @@
 package token_test
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"testing"
@@ -69,7 +71,7 @@ func TestIssuer_ParseToken_WrongKey(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestIssuer_JWKS(t *testing.T) {
+func TestIssuer_JWKS_RS256(t *testing.T) {
 	issuer, err := token.New()
 	require.NoError(t, err)
 
@@ -101,7 +103,7 @@ func TestIssuer_ParseToken_Expired(t *testing.T) {
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	require.NoError(t, err)
 
-	issuer, err := token.NewWithKey(privateKey)
+	issuer, err := token.NewWithRSAKey(privateKey)
 	require.NoError(t, err)
 
 	signer, err := jose.NewSigner(
@@ -155,4 +157,132 @@ func TestIssuer_ParseToken_WrongAlgorithm(t *testing.T) {
 	// Should fail - wrong algorithm
 	_, err = issuer.ParseToken(wrongAlgToken)
 	assert.Error(t, err)
+}
+
+// --- ES256 Tests ---
+
+func TestIssuer_ES256_GenerateTokens(t *testing.T) {
+	issuer, err := token.NewWithAlgorithm(token.ES256)
+	require.NoError(t, err)
+
+	assert.Equal(t, "ES256", issuer.Algorithm())
+
+	pair, hash, err := issuer.GenerateTokens("user-123", "test@example.com")
+	require.NoError(t, err)
+
+	assert.NotEmpty(t, pair.AccessToken)
+	assert.NotEmpty(t, pair.RefreshToken)
+	assert.NotEmpty(t, hash)
+	assert.Equal(t, int64(900), pair.ExpiresIn)
+}
+
+func TestIssuer_ES256_ParseToken(t *testing.T) {
+	issuer, err := token.NewWithAlgorithm(token.ES256)
+	require.NoError(t, err)
+
+	pair, _, err := issuer.GenerateTokens("user-123", "test@example.com")
+	require.NoError(t, err)
+
+	claims, err := issuer.ParseToken(pair.AccessToken)
+	require.NoError(t, err)
+
+	assert.Equal(t, "user-123", claims.UserID)
+	assert.Equal(t, "test@example.com", claims.Email)
+	assert.Equal(t, "psina", claims.Issuer)
+}
+
+func TestIssuer_ES256_JWKS(t *testing.T) {
+	issuer, err := token.NewWithAlgorithm(token.ES256)
+	require.NoError(t, err)
+
+	jwks := issuer.JWKS()
+	require.NotNil(t, jwks)
+	assert.Len(t, jwks.Keys, 1)
+	assert.Equal(t, "psina-key-1", jwks.Keys[0].KeyID)
+	assert.Equal(t, "ES256", jwks.Keys[0].Algorithm)
+	assert.Equal(t, "sig", jwks.Keys[0].Use)
+}
+
+func TestIssuer_ES256_WithKey(t *testing.T) {
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+
+	issuer, err := token.NewWithECDSAKey(privateKey)
+	require.NoError(t, err)
+
+	assert.Equal(t, "ES256", issuer.Algorithm())
+
+	pair, _, err := issuer.GenerateTokens("user-456", "ec@example.com")
+	require.NoError(t, err)
+
+	claims, err := issuer.ParseToken(pair.AccessToken)
+	require.NoError(t, err)
+	assert.Equal(t, "user-456", claims.UserID)
+}
+
+func TestIssuer_ES256_WrongKey(t *testing.T) {
+	issuer1, err := token.NewWithAlgorithm(token.ES256)
+	require.NoError(t, err)
+
+	issuer2, err := token.NewWithAlgorithm(token.ES256)
+	require.NoError(t, err)
+
+	// Generate with issuer1
+	pair, _, err := issuer1.GenerateTokens("user-123", "test@example.com")
+	require.NoError(t, err)
+
+	// Verify with issuer2 should fail (different key)
+	_, err = issuer2.ParseToken(pair.AccessToken)
+	assert.Error(t, err)
+}
+
+func TestIssuer_RS256_CannotParseES256(t *testing.T) {
+	rsaIssuer, err := token.NewWithAlgorithm(token.RS256)
+	require.NoError(t, err)
+
+	ecIssuer, err := token.NewWithAlgorithm(token.ES256)
+	require.NoError(t, err)
+
+	// Generate with ES256
+	pair, _, err := ecIssuer.GenerateTokens("user-123", "test@example.com")
+	require.NoError(t, err)
+
+	// RSA issuer should not parse ES256 token
+	_, err = rsaIssuer.ParseToken(pair.AccessToken)
+	assert.Error(t, err)
+}
+
+func TestIssuer_ES256_CannotParseRS256(t *testing.T) {
+	rsaIssuer, err := token.NewWithAlgorithm(token.RS256)
+	require.NoError(t, err)
+
+	ecIssuer, err := token.NewWithAlgorithm(token.ES256)
+	require.NoError(t, err)
+
+	// Generate with RS256
+	pair, _, err := rsaIssuer.GenerateTokens("user-123", "test@example.com")
+	require.NoError(t, err)
+
+	// EC issuer should not parse RS256 token
+	_, err = ecIssuer.ParseToken(pair.AccessToken)
+	assert.Error(t, err)
+}
+
+// Test backward compatibility
+func TestIssuer_NewWithKey_Deprecated(t *testing.T) {
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+
+	// NewWithKey is deprecated but should still work
+	issuer, err := token.NewWithKey(privateKey)
+	require.NoError(t, err)
+
+	assert.Equal(t, "RS256", issuer.Algorithm())
+
+	pair, _, err := issuer.GenerateTokens("user-123", "test@example.com")
+	require.NoError(t, err)
+
+	claims, err := issuer.ParseToken(pair.AccessToken)
+	require.NoError(t, err)
+	assert.Equal(t, "user-123", claims.UserID)
 }

@@ -4,20 +4,58 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
 	"strings"
+	"time"
 
 	"connectrpc.com/connect"
 	authv1 "github.com/foxcool/psina/pkg/api/auth/v1"
+	"github.com/foxcool/psina/pkg/token"
 )
+
+const (
+	// Cookie names
+	AccessTokenCookie  = "psina_access"
+	RefreshTokenCookie = "psina_refresh"
+)
+
+// CookieConfig holds cookie-related settings.
+type CookieConfig struct {
+	Enabled  bool
+	Domain   string
+	Path     string
+	Secure   bool
+	SameSite http.SameSite
+}
 
 // Handler implements Connect RPC AuthServiceHandler.
 type Handler struct {
-	service *Service
+	service      *Service
+	cookieConfig *CookieConfig
+}
+
+// HandlerOption configures the Handler.
+type HandlerOption func(*Handler)
+
+// WithCookieConfig sets cookie configuration.
+func WithCookieConfig(config *CookieConfig) HandlerOption {
+	return func(h *Handler) {
+		h.cookieConfig = config
+	}
 }
 
 // NewHandler creates a new RPC handler.
-func NewHandler(service *Service) *Handler {
-	return &Handler{service: service}
+func NewHandler(service *Service, opts ...HandlerOption) *Handler {
+	h := &Handler{
+		service: service,
+		cookieConfig: &CookieConfig{
+			Enabled: false,
+		},
+	}
+	for _, opt := range opts {
+		opt(h)
+	}
+	return h
 }
 
 // Register creates a new user account.
@@ -36,13 +74,20 @@ func (h *Handler) Register(
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
-	return connect.NewResponse(&authv1.RegisterResponse{
+	resp := connect.NewResponse(&authv1.RegisterResponse{
 		UserId:       result.UserID,
 		Email:        result.Email,
 		AccessToken:  result.TokenPair.AccessToken,
 		RefreshToken: result.TokenPair.RefreshToken,
 		ExpiresIn:    result.TokenPair.ExpiresIn,
-	}), nil
+	})
+
+	// Set cookies if enabled
+	if h.cookieConfig.Enabled {
+		h.setTokenCookies(resp.Header(), result.TokenPair.AccessToken, result.TokenPair.RefreshToken)
+	}
+
+	return resp, nil
 }
 
 // Login authenticates a user.
@@ -58,11 +103,18 @@ func (h *Handler) Login(
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
-	return connect.NewResponse(&authv1.LoginResponse{
+	resp := connect.NewResponse(&authv1.LoginResponse{
 		AccessToken:  result.TokenPair.AccessToken,
 		RefreshToken: result.TokenPair.RefreshToken,
 		ExpiresIn:    result.TokenPair.ExpiresIn,
-	}), nil
+	})
+
+	// Set cookies if enabled
+	if h.cookieConfig.Enabled {
+		h.setTokenCookies(resp.Header(), result.TokenPair.AccessToken, result.TokenPair.RefreshToken)
+	}
+
+	return resp, nil
 }
 
 // Refresh exchanges a refresh token for new tokens.
@@ -70,7 +122,21 @@ func (h *Handler) Refresh(
 	ctx context.Context,
 	req *connect.Request[authv1.RefreshRequest],
 ) (*connect.Response[authv1.RefreshResponse], error) {
-	tokenPair, err := h.service.Refresh(ctx, req.Msg.RefreshToken)
+	// Try to get refresh token from request body first
+	refreshToken := req.Msg.RefreshToken
+
+	// If not in body and cookies enabled, try cookie
+	if refreshToken == "" && h.cookieConfig.Enabled {
+		if cookie := h.getCookieFromHeader(req.Header(), RefreshTokenCookie); cookie != "" {
+			refreshToken = cookie
+		}
+	}
+
+	if refreshToken == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("refresh token required"))
+	}
+
+	tokenPair, err := h.service.Refresh(ctx, refreshToken)
 	if err != nil {
 		var reuseErr *TokenReuseError
 		if errors.As(err, &reuseErr) {
@@ -83,11 +149,18 @@ func (h *Handler) Refresh(
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("invalid refresh token"))
 	}
 
-	return connect.NewResponse(&authv1.RefreshResponse{
+	resp := connect.NewResponse(&authv1.RefreshResponse{
 		AccessToken:  tokenPair.AccessToken,
 		RefreshToken: tokenPair.RefreshToken,
 		ExpiresIn:    tokenPair.ExpiresIn,
-	}), nil
+	})
+
+	// Set new cookies if enabled
+	if h.cookieConfig.Enabled {
+		h.setTokenCookies(resp.Header(), tokenPair.AccessToken, tokenPair.RefreshToken)
+	}
+
+	return resp, nil
 }
 
 // Logout revokes a refresh token.
@@ -95,13 +168,28 @@ func (h *Handler) Logout(
 	ctx context.Context,
 	req *connect.Request[authv1.LogoutRequest],
 ) (*connect.Response[authv1.LogoutResponse], error) {
-	err := h.service.Logout(ctx, req.Msg.RefreshToken)
-	if err != nil {
-		// Don't expose token not found errors
-		return connect.NewResponse(&authv1.LogoutResponse{Success: true}), nil
+	// Try to get refresh token from request body first
+	refreshToken := req.Msg.RefreshToken
+
+	// If not in body and cookies enabled, try cookie
+	if refreshToken == "" && h.cookieConfig.Enabled {
+		if cookie := h.getCookieFromHeader(req.Header(), RefreshTokenCookie); cookie != "" {
+			refreshToken = cookie
+		}
 	}
 
-	return connect.NewResponse(&authv1.LogoutResponse{Success: true}), nil
+	if refreshToken != "" {
+		_ = h.service.Logout(ctx, refreshToken)
+	}
+
+	resp := connect.NewResponse(&authv1.LogoutResponse{Success: true})
+
+	// Clear cookies if enabled
+	if h.cookieConfig.Enabled {
+		h.clearTokenCookies(resp.Header())
+	}
+
+	return resp, nil
 }
 
 // Verify validates an access token (for ForwardAuth).
@@ -111,16 +199,27 @@ func (h *Handler) Verify(
 ) (*connect.Response[authv1.VerifyResponse], error) {
 	// Extract token from Authorization header
 	auth := req.Header().Get("Authorization")
-	if auth == "" {
-		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("missing authorization header"))
+	var accessToken string
+
+	if auth != "" {
+		accessToken = strings.TrimPrefix(auth, "Bearer ")
+		if accessToken == auth {
+			return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("invalid authorization format"))
+		}
 	}
 
-	token := strings.TrimPrefix(auth, "Bearer ")
-	if token == auth {
-		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("invalid authorization format"))
+	// If not in header and cookies enabled, try cookie
+	if accessToken == "" && h.cookieConfig.Enabled {
+		if cookie := h.getCookieFromHeader(req.Header(), AccessTokenCookie); cookie != "" {
+			accessToken = cookie
+		}
 	}
 
-	claims, err := h.service.Verify(ctx, token)
+	if accessToken == "" {
+		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("missing authorization"))
+	}
+
+	claims, err := h.service.Verify(ctx, accessToken)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("invalid token"))
 	}
@@ -134,6 +233,86 @@ func (h *Handler) Verify(
 	resp.Header().Set("X-User-Email", claims.Email)
 
 	return resp, nil
+}
+
+// setTokenCookies sets access and refresh token cookies.
+func (h *Handler) setTokenCookies(header http.Header, accessToken, refreshToken string) {
+	// Access token cookie (shorter lived)
+	accessCookie := &http.Cookie{
+		Name:     AccessTokenCookie,
+		Value:    accessToken,
+		Domain:   h.cookieConfig.Domain,
+		Path:     h.cookieConfig.Path,
+		Expires:  time.Now().Add(token.AccessTokenTTL),
+		MaxAge:   int(token.AccessTokenTTL.Seconds()),
+		Secure:   h.cookieConfig.Secure,
+		HttpOnly: true,
+		SameSite: h.cookieConfig.SameSite,
+	}
+	header.Add("Set-Cookie", accessCookie.String())
+
+	// Refresh token cookie (longer lived)
+	refreshCookie := &http.Cookie{
+		Name:     RefreshTokenCookie,
+		Value:    refreshToken,
+		Domain:   h.cookieConfig.Domain,
+		Path:     h.cookieConfig.Path,
+		Expires:  time.Now().Add(token.RefreshTokenTTL),
+		MaxAge:   int(token.RefreshTokenTTL.Seconds()),
+		Secure:   h.cookieConfig.Secure,
+		HttpOnly: true,
+		SameSite: h.cookieConfig.SameSite,
+	}
+	header.Add("Set-Cookie", refreshCookie.String())
+}
+
+// clearTokenCookies removes token cookies.
+func (h *Handler) clearTokenCookies(header http.Header) {
+	// Clear access token cookie
+	accessCookie := &http.Cookie{
+		Name:     AccessTokenCookie,
+		Value:    "",
+		Domain:   h.cookieConfig.Domain,
+		Path:     h.cookieConfig.Path,
+		Expires:  time.Unix(0, 0),
+		MaxAge:   -1,
+		Secure:   h.cookieConfig.Secure,
+		HttpOnly: true,
+		SameSite: h.cookieConfig.SameSite,
+	}
+	header.Add("Set-Cookie", accessCookie.String())
+
+	// Clear refresh token cookie
+	refreshCookie := &http.Cookie{
+		Name:     RefreshTokenCookie,
+		Value:    "",
+		Domain:   h.cookieConfig.Domain,
+		Path:     h.cookieConfig.Path,
+		Expires:  time.Unix(0, 0),
+		MaxAge:   -1,
+		Secure:   h.cookieConfig.Secure,
+		HttpOnly: true,
+		SameSite: h.cookieConfig.SameSite,
+	}
+	header.Add("Set-Cookie", refreshCookie.String())
+}
+
+// getCookieFromHeader extracts a cookie value from the Cookie header.
+func (h *Handler) getCookieFromHeader(header http.Header, name string) string {
+	cookieHeader := header.Get("Cookie")
+	if cookieHeader == "" {
+		return ""
+	}
+
+	// Parse cookies manually since we only have headers
+	for _, cookie := range strings.Split(cookieHeader, ";") {
+		cookie = strings.TrimSpace(cookie)
+		parts := strings.SplitN(cookie, "=", 2)
+		if len(parts) == 2 && parts[0] == name {
+			return parts[1]
+		}
+	}
+	return ""
 }
 
 // getClientIP extracts client IP from headers.

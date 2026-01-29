@@ -23,12 +23,21 @@ type Config struct {
 		Port int `koanf:"port"`
 	} `koanf:"server"`
 	DB struct {
-		URL string `koanf:"url"`
+		URL         string `koanf:"url"`
+		TablePrefix string `koanf:"tableprefix"` // Table name prefix (default: "psina_")
 	} `koanf:"db"`
 	JWT struct {
-		PrivateKeyPath string `koanf:"privateKeyPath"`
-		// If empty, generates ephemeral key (for dev)
+		PrivateKeyPath string `koanf:"privatekeypath"`
+		PrivateKey     string `koanf:"privatekey"` // PEM-encoded key (alternative to path)
+		Algorithm      string `koanf:"algorithm"`  // "RS256" or "ES256" (default: RS256)
 	} `koanf:"jwt"`
+	Cookie struct {
+		Enabled  bool   `koanf:"enabled"`
+		Domain   string `koanf:"domain"`
+		Secure   bool   `koanf:"secure"`   // HTTPS only
+		SameSite string `koanf:"samesite"` // "strict", "lax", "none"
+		Path     string `koanf:"path"`     // Cookie path (default: "/")
+	} `koanf:"cookie"`
 }
 
 func loadConfig() (*Config, error) {
@@ -36,9 +45,15 @@ func loadConfig() (*Config, error) {
 
 	// Default values
 	defaults := map[string]any{
-		"logger.level":  "info",
-		"logger.format": "json",
-		"server.port":   8080,
+		"logger.level":    "info",
+		"logger.format":   "json",
+		"server.port":     8080,
+		"db.tableprefix":  "",
+		"jwt.algorithm":   "RS256",
+		"cookie.enabled":  false,
+		"cookie.secure":   true,
+		"cookie.samesite": "strict",
+		"cookie.path":     "/",
 	}
 	if err := k.Load(confmap.Provider(defaults, "."), nil); err != nil {
 		return nil, fmt.Errorf("load defaults: %w", err)
@@ -83,5 +98,35 @@ func loadConfig() (*Config, error) {
 		return nil, fmt.Errorf("unmarshal config: %w", err)
 	}
 
+	// Validate
+	if err := validateConfig(&config); err != nil {
+		return nil, fmt.Errorf("validate config: %w", err)
+	}
+
 	return &config, nil
+}
+
+func validateConfig(c *Config) error {
+	// Validate JWT algorithm
+	switch c.JWT.Algorithm {
+	case "RS256", "ES256":
+		// OK
+	default:
+		return fmt.Errorf("unsupported JWT algorithm: %s (supported: RS256, ES256)", c.JWT.Algorithm)
+	}
+
+	// Validate SameSite
+	switch strings.ToLower(c.Cookie.SameSite) {
+	case "strict", "lax", "none", "":
+		// OK
+	default:
+		return fmt.Errorf("invalid cookie.samesite: %s (supported: strict, lax, none)", c.Cookie.SameSite)
+	}
+
+	// Cookie domain required if cookies enabled
+	if c.Cookie.Enabled && c.Cookie.Domain == "" {
+		return fmt.Errorf("cookie.domain is required when cookies are enabled")
+	}
+
+	return nil
 }

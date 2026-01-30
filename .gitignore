@@ -1,0 +1,66 @@
+# Binaries
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+/psina
+
+# Test binary
+*.test
+
+# Output of go coverage
+*.out
+coverage.html
+
+# Go workspace
+go.work
+go.work.sum
+
+# Dependency directories
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+.env.*.local
+deploy/secrets.env
+
+# Secrets
+*.key
+*.pem
+*.pub
+secrets/
+
+# Database
+*.db
+*.sqlite
+
+
+# Logs
+*.log
+logs/
+
+# Build artifacts
+dist/
+
+# Air tmp directory
+tmp/
+
+# Archived docs or LLM notes
+docs/archive/
+docs/ROADMAP.md
+docs/SESSION_LOG.md
+.aider*

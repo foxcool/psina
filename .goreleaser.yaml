@@ -1,0 +1,115 @@
+# .goreleaser.yaml
+# Documentation: https://goreleaser.com
+version: 2
+
+project_name: psina
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: psina
+    main: ./cmd/psina
+    binary: psina
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.ShortCommit}}
+      - -X main.date={{.Date}}
+
+archives:
+  - id: default
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: 'checksums.txt'
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - Merge pull request
+      - Merge branch
+
+dockers:
+  - id: psina-amd64
+    ids:
+      - psina
+    goos: linux
+    goarch: amd64
+    image_templates:
+      - "ghcr.io/foxcool/psina:{{ .Version }}-amd64"
+      - "ghcr.io/foxcool/psina:latest-amd64"
+    dockerfile: build/Dockerfile
+    use: buildx
+    extra_files:
+      - schema.hcl
+    build_flag_templates:
+      - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.title={{ .ProjectName }}"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.source={{ .GitURL }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.created={{ .Date }}"
+
+  - id: psina-arm64
+    ids:
+      - psina
+    goos: linux
+    goarch: arm64
+    image_templates:
+      - "ghcr.io/foxcool/psina:{{ .Version }}-arm64"
+      - "ghcr.io/foxcool/psina:latest-arm64"
+    dockerfile: build/Dockerfile
+    use: buildx
+    extra_files:
+      - schema.hcl
+    build_flag_templates:
+      - "--platform=linux/arm64"
+      - "--label=org.opencontainers.image.title={{ .ProjectName }}"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.source={{ .GitURL }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.created={{ .Date }}"
+
+docker_manifests:
+  - name_template: "ghcr.io/foxcool/psina:{{ .Version }}"
+    image_templates:
+      - "ghcr.io/foxcool/psina:{{ .Version }}-amd64"
+      - "ghcr.io/foxcool/psina:{{ .Version }}-arm64"
+
+  - name_template: "ghcr.io/foxcool/psina:latest"
+    image_templates:
+      - "ghcr.io/foxcool/psina:latest-amd64"
+      - "ghcr.io/foxcool/psina:latest-arm64"
+
+release:
+  github:
+    owner: foxcool
+    name: psina
+  draft: false
+  prerelease: auto
+  name_template: "v{{.Version}}"

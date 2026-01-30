@@ -1,0 +1,91 @@
+# Traefik ForwardAuth integration with psina
+#
+# This example shows how to configure Traefik to use psina
+# for authenticating requests to your backend services.
+#
+# How it works:
+# 1. Client sends request to Traefik with "Authorization: Bearer <token>"
+# 2. Traefik forwards the request to psina's Verify endpoint
+# 3. psina validates the token and returns:
+#    - 200 OK with X-User-Id and X-User-Email headers (valid token)
+#    - 401 Unauthorized (invalid/expired token)
+# 4. Traefik forwards original request to backend with user headers
+#
+# Deploy this alongside your existing Traefik configuration.
+
+# Dynamic configuration (traefik-dynamic.yaml)
+http:
+  # ForwardAuth middleware
+  middlewares:
+    psina-auth:
+      forwardAuth:
+        # psina Verify endpoint
+        address: "http://psina:8080/auth.v1.AuthService/Verify"
+        # Forward the Authorization header to psina
+        authRequestHeaders:
+          - "Authorization"
+        # Copy these headers from psina response to backend request
+        authResponseHeaders:
+          - "X-User-Id"
+          - "X-User-Email"
+
+  # Example: Protected API route
+  routers:
+    api-protected:
+      rule: "PathPrefix(`/api`)"
+      service: "backend-api"
+      middlewares:
+        - "psina-auth"
+      entryPoints:
+        - "web"
+
+  # Example: Public auth routes (no middleware)
+  routers:
+    auth-public:
+      rule: "PathPrefix(`/auth`)"
+      service: "psina"
+      entryPoints:
+        - "web"
+
+  # Services
+  services:
+    psina:
+      loadBalancer:
+        servers:
+          - url: "http://psina:8080"
+
+    backend-api:
+      loadBalancer:
+        servers:
+          - url: "http://your-backend:8080"
+
+---
+# Static configuration (traefik.yaml)
+# entryPoints:
+#   web:
+#     address: ":80"
+#
+# providers:
+#   file:
+#     filename: /etc/traefik/traefik-dynamic.yaml
+
+---
+# Docker Compose example
+#
+# services:
+#   traefik:
+#     image: traefik:v3.0
+#     ports:
+#       - "80:80"
+#     volumes:
+#       - ./traefik.yaml:/etc/traefik/traefik.yaml
+#       - ./traefik-dynamic.yaml:/etc/traefik/traefik-dynamic.yaml
+#
+#   psina:
+#     image: ghcr.io/foxcool/psina:latest
+#     environment:
+#       PSINA_DB_URL: "postgres://psina:password@postgres:5432/psina?sslmode=disable"
+#
+#   your-backend:
+#     image: your-backend:latest
+#     # Your backend can now read X-User-Id and X-User-Email headers

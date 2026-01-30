@@ -1,0 +1,94 @@
+# Complete Docker Compose example with Traefik + psina + backend
+#
+# Usage:
+#   docker compose -f docker-compose-traefik.yaml up -d
+#
+# Test:
+#   # Register
+#   curl -X POST http://localhost/auth.v1.AuthService/Register \
+#     -H "Content-Type: application/json" \
+#     -d '{"email":"user@example.com","password":"securepass123"}'
+#
+#   # Login (save token)
+#   TOKEN=$(curl -s -X POST http://localhost/auth.v1.AuthService/Login \
+#     -H "Content-Type: application/json" \
+#     -d '{"email":"user@example.com","password":"securepass123"}' | jq -r '.accessToken')
+#
+#   # Access protected API
+#   curl http://localhost/api/hello -H "Authorization: Bearer $TOKEN"
+
+volumes:
+  postgres_data:
+
+services:
+  # Traefik reverse proxy
+  traefik:
+    image: traefik:v3.0
+    command:
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+    ports:
+      - "80:80"
+      - "8081:8080"  # Traefik dashboard
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  # psina authentication service
+  psina:
+    image: ghcr.io/foxcool/psina:latest
+    # Or build locally:
+    # build:
+    #   context: ../..
+    #   dockerfile: build/Dockerfile
+    environment:
+      PSINA_DB_URL: "postgres://psina:password@postgres:5432/psina?sslmode=disable"
+      PSINA_SERVER_PORT: "8080"
+      PSINA_LOGGER_LEVEL: "info"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    labels:
+      # Expose auth endpoints without authentication
+      - "traefik.enable=true"
+      - "traefik.http.routers.psina.rule=PathPrefix(`/auth`)"
+      - "traefik.http.routers.psina.entrypoints=web"
+      - "traefik.http.services.psina.loadbalancer.server.port=8080"
+      # JWKS endpoint
+      - "traefik.http.routers.jwks.rule=Path(`/.well-known/jwks.json`)"
+      - "traefik.http.routers.jwks.entrypoints=web"
+      - "traefik.http.routers.jwks.service=psina"
+
+  # PostgreSQL database
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: psina
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: psina
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Run migrations on startup
+      - ../../migrations/001_init.up.sql:/docker-entrypoint-initdb.d/001_init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U psina -d psina"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Example backend service (protected by psina)
+  backend:
+    image: hashicorp/http-echo
+    command: ["-text", "Hello from protected backend!"]
+    labels:
+      - "traefik.enable=true"
+      # Protected route with ForwardAuth
+      - "traefik.http.routers.backend.rule=PathPrefix(`/api`)"
+      - "traefik.http.routers.backend.entrypoints=web"
+      - "traefik.http.routers.backend.middlewares=psina-auth"
+      - "traefik.http.services.backend.loadbalancer.server.port=5678"
+      # ForwardAuth middleware
+      - "traefik.http.middlewares.psina-auth.forwardauth.address=http://psina:8080/auth.v1.AuthService/Verify"
+      - "traefik.http.middlewares.psina-auth.forwardauth.authRequestHeaders=Authorization"
+      - "traefik.http.middlewares.psina-auth.forwardauth.authResponseHeaders=X-User-Id,X-User-Email"

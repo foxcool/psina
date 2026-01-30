@@ -1,0 +1,31 @@
+# .air.toml
+# Config file for Air - https://github.com/air-verse/air
+
+root = "."
+tmp_dir = "tmp" # Directory for temporary files and binary
+
+[build]
+# Command to build the application
+cmd = "go build -o tmp/psina ./cmd/psina"
+# Path to the output binary relative to root
+bin = "tmp/psina"
+# Directories to watch for changes
+include_dir = ["cmd", "internal", "pkg", "api"]
+# Directories to exclude from watching
+exclude_dir = ["tmp", "deploy", "docs", "build", ".git", "gen"]
+# File extensions to watch
+include_ext = ["go", "proto"]
+# Log file for the build process itself
+log = "air_build.log"
+# Delay in milliseconds before triggering a build after detecting changes
+delay = 1000
+# Stop the running application if the build fails
+stop_on_error = true
+
+[log]
+# Enable timestamp in air's runtime log output
+time = true
+
+[misc]
+# Delete the tmp directory on air exit
+clean_on_exit = true

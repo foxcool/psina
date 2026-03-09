@@ -36,6 +36,7 @@ Thumbs.db
 .env
 .env.local
 .env.*.local
+deploy/.env
 deploy/secrets.env
 
 # Secrets
@@ -64,3 +65,6 @@ docs/archive/
 docs/ROADMAP.md
 docs/SESSION_LOG.md
 .aider*
+
+# Dolt database files (added by bd init)
+.dolt/

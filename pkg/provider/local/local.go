@@ -10,6 +10,7 @@ import (
 
 	"github.com/foxcool/psina/pkg/auth"
 	"github.com/foxcool/psina/pkg/entity"
+	"github.com/google/uuid"
 	"golang.org/x/crypto/argon2"
 )
 
@@ -191,10 +192,11 @@ func verifyPassword(password, encodedHash string) bool {
 	return subtle.ConstantTimeCompare(storedHash, computedHash) == 1
 }
 
-// generateUserID creates a simple user ID for MVP.
-// TODO: Use UUID in production.
+// generateUserID creates a UUIDv7 user ID (time-ordered, sortable).
 func generateUserID() string {
-	b := make([]byte, 16)
-	_, _ = rand.Read(b)
-	return base64.RawURLEncoding.EncodeToString(b)
+	id, err := uuid.NewV7()
+	if err != nil {
+		return uuid.New().String() // fallback to v4 on rand failure (extremely rare)
+	}
+	return id.String()
 }

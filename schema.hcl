@@ -7,7 +7,7 @@ table "users" {
   schema = schema.public
 
   column "id" {
-    type = varchar(255)
+    type = uuid
     null = false
   }
 
@@ -42,7 +42,7 @@ table "local_credentials" {
   schema = schema.public
 
   column "user_id" {
-    type = varchar(255)
+    type = uuid
     null = false
   }
 
@@ -83,7 +83,7 @@ table "refresh_tokens" {
   }
 
   column "user_id" {
-    type = varchar(255)
+    type = uuid
     null = false
   }
 

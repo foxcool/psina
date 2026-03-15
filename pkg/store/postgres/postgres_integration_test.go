@@ -12,6 +12,7 @@ import (
 	"github.com/foxcool/psina/pkg/entity"
 	"github.com/foxcool/psina/pkg/store"
 	"github.com/foxcool/psina/pkg/testutil"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -46,7 +47,7 @@ func TestStore_UserCRUD(t *testing.T) {
 
 	// Create user
 	user := &entity.User{
-		ID:    "user-123",
+		ID:    uuid.New().String(),
 		Email: "test@example.com",
 	}
 	err := s.Create(ctx, user)
@@ -65,7 +66,7 @@ func TestStore_UserCRUD(t *testing.T) {
 
 	// Duplicate email should fail
 	duplicate := &entity.User{
-		ID:    "user-456",
+		ID:    uuid.New().String(),
 		Email: "test@example.com",
 	}
 	err = s.Create(ctx, duplicate)
@@ -79,7 +80,7 @@ func TestStore_RefreshTokens(t *testing.T) {
 
 	// Create user first
 	user := &entity.User{
-		ID:    "user-123",
+		ID:    uuid.New().String(),
 		Email: "test@example.com",
 	}
 	require.NoError(t, s.Create(ctx, user))
@@ -115,7 +116,7 @@ func TestStore_Credentials(t *testing.T) {
 
 	// Create user first
 	user := &entity.User{
-		ID:    "user-123",
+		ID:    uuid.New().String(),
 		Email: "test@example.com",
 	}
 	require.NoError(t, s.Create(ctx, user))
@@ -146,7 +147,7 @@ func TestStore_TokenFamilyRevocation(t *testing.T) {
 
 	// Create user first
 	user := &entity.User{
-		ID:    "user-123",
+		ID:    uuid.New().String(),
 		Email: "test@example.com",
 	}
 	require.NoError(t, s.Create(ctx, user))
@@ -195,8 +196,10 @@ func TestStore_NotFound(t *testing.T) {
 	s := getTestStore(t)
 	ctx := context.Background()
 
+	nonexistentID := uuid.New().String()
+
 	// User not found by ID
-	_, err := s.GetByID(ctx, "nonexistent")
+	_, err := s.GetByID(ctx, nonexistentID)
 	assert.Error(t, err)
 	assert.True(t, errors.Is(err, store.ErrUserNotFound), "expected ErrUserNotFound, got: %v", err)
 
@@ -211,7 +214,7 @@ func TestStore_NotFound(t *testing.T) {
 	assert.True(t, errors.Is(err, store.ErrTokenNotFound), "expected ErrTokenNotFound, got: %v", err)
 
 	// Credential not found
-	_, err = s.GetPasswordHash(ctx, "nonexistent-user")
+	_, err = s.GetPasswordHash(ctx, nonexistentID)
 	assert.Error(t, err)
 	assert.True(t, errors.Is(err, store.ErrCredentialNotFound), "expected ErrCredentialNotFound, got: %v", err)
 }

@@ -14,8 +14,6 @@ services:
       args:
         _path: cmd/psina
     container_name: psina-dev
-    ports:
-      - "8080:8080"
     # Development specific configuration working with source code
     volumes:
       # Mount source code for live reload
@@ -29,26 +27,57 @@ services:
       PSINA_LOG_LEVEL: INFO
       PSINA_DB_URL: "postgres://psina:password@postgres:5432/psina?sslmode=disable"
       PSINA_PORT: "8080"
+      PSINA_COOKIE_ENABLED: "true"
+      PSINA_COOKIE_DOMAIN: "${PSINA_COOKIE_DOMAIN:-.localhost}"
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.psina-dev.rule=Host(`${PSINA_DOMAIN}`) && ( PathPrefix(`/auth.v1.`) || PathPrefix(`/.well-known`) )"
+      - "traefik.http.routers.psina-dev.entrypoints=websecure"
+      - "traefik.http.routers.psina-dev.tls.certresolver=myresolver"
+      - "traefik.http.routers.psina-dev.priority=30"
+      - "traefik.http.services.psina-dev.loadbalancer.server.port=8080"
+      - "traefik.http.services.psina-dev.loadbalancer.server.scheme=h2c"
+    networks:
+      - proxy
+      - default
 
   # Database needed by the psina application for storing data
+  # Also hosts atlas_dev database used by Atlas for schema diffing (created via healthcheck)
   postgres:
     image: postgres:17-alpine
     environment:
       POSTGRES_USER: psina
       POSTGRES_PASSWORD: password
       POSTGRES_DB: psina
-    # ports:
-    #   - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U psina -d psina"]
+      test: ["CMD-SHELL", "pg_isready -U psina -d psina && (psql -U psina -d atlas_dev -c 'SELECT 1' > /dev/null 2>&1 || psql -U psina -c 'CREATE DATABASE atlas_dev WITH OWNER psina')"]
       interval: 5s
       timeout: 5s
       retries: 5
+
+  # Applies schema migrations before the app starts
+  migrate:
+    profiles: ["default", "dev", "test"]
+    image: arigaio/atlas:latest
+    volumes:
+      - ../schema.hcl:/schema.hcl:ro
+    command: >
+      schema apply
+      --url "postgres://psina:password@postgres:5432/psina?sslmode=disable"
+      --to "file:///schema.hcl"
+      --dev-url "postgres://psina:password@postgres:5432/atlas_dev?sslmode=disable"
+      --auto-approve
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   # Service for running tests in isolation
   psina-test:
@@ -73,3 +102,9 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+networks:
+  proxy:
+    external: true

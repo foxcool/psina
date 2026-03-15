@@ -1,4 +1,4 @@
-FROM golang:1.24-alpine
+FROM golang:1.25-alpine
 
 ENV PROJECT_PATH=github.com/foxcool/psina
 

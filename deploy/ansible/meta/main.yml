@@ -1,0 +1,19 @@
+---
+galaxy_info:
+  role_name: psina
+  author: foxcool
+  description: Deploy psina authentication service (JWT, ForwardAuth, JWKS)
+  license: MIT
+  min_ansible_version: "2.15"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - jammy
+        - noble
+  galaxy_tags:
+    - authentication
+    - jwt
+    - docker
+    - traefik
+
+dependencies: []

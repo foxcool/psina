@@ -1,0 +1,13 @@
+---
+- name: Deploy psina
+  ansible.builtin.import_tasks: deploy.yml
+  tags: [deploy, psina]
+
+- name: Backup psina database
+  ansible.builtin.import_tasks: backup.yml
+  when: psina_auto_backup | bool
+  tags: [backup, psina]
+
+- name: Destroy psina
+  ansible.builtin.import_tasks: destroy.yml
+  tags: [never, destroy, psina]

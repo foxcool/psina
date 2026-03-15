@@ -49,21 +49,24 @@ test-unit:
 	@echo "Running unit tests..."
 	go test -v -race -coverprofile=coverage-unit.out -covermode=atomic ./...
 
-# Run integration tests (requires Atlas CLI and Docker)
+# Run integration tests (requires Docker)
 test-integration:
 	@echo "Running integration tests..."
-	@which atlas > /dev/null || (echo "Atlas CLI required: curl -sSf https://atlasgo.sh | sh" && exit 1)
 	go test -v -tags=integration -coverprofile=coverage-integration.out ./pkg/...
 
-# Atlas: apply schema declaratively
+# Atlas: apply schema declaratively (runs inside compose network)
 schema-apply:
 	@echo "Applying schema to database..."
-	atlas schema apply --env local --auto-approve
+	$(COMPOSE) -f $(COMPOSE_FILE) --profile default run --rm migrate
 
-# Atlas: show schema diff
+# Atlas: show schema diff (runs inside compose network)
 schema-diff:
 	@echo "Showing schema diff..."
-	atlas schema diff --env local
+	$(COMPOSE) -f $(COMPOSE_FILE) --profile default run --rm migrate \
+		schema diff \
+		--from "postgres://psina:password@postgres:5432/psina?sslmode=disable" \
+		--to "file:///schema.hcl" \
+		--dev-url "postgres://psina:password@postgres:5432/atlas_dev?sslmode=disable"
 
 # Run default/development profile services in detached mode
 up:

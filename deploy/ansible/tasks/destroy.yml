@@ -1,0 +1,11 @@
+---
+- name: Stop and remove containers (including volumes)
+  community.docker.docker_compose_v2:
+    project_src: "{{ psina_app_dir }}"
+    state: absent
+    remove_volumes: true
+
+- name: Remove app directory
+  ansible.builtin.file:
+    path: "{{ psina_app_dir }}"
+    state: absent

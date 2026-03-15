@@ -66,5 +66,8 @@ docs/ROADMAP.md
 docs/SESSION_LOG.md
 .aider*
 
+# Claude
+.claude/
+
 # Dolt database files (added by bd init)
 .dolt/

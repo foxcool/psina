@@ -1,0 +1,27 @@
+---
+- name: Create backup directory
+  ansible.builtin.file:
+    path: "{{ psina_backup_dir }}"
+    state: directory
+    mode: "0750"
+
+- name: Dump database
+  ansible.builtin.shell: |
+    docker exec $(docker compose -f {{ psina_app_dir }}/docker-compose.yml ps -q postgres) \
+      pg_dump -U {{ psina_db_user }} {{ psina_db_name }} \
+      | gzip > {{ psina_backup_dir }}/psina_{{ ansible_date_time.date }}.sql.gz
+  args:
+    executable: /bin/bash
+
+- name: Remove backups older than retention period
+  ansible.builtin.find:
+    paths: "{{ psina_backup_dir }}"
+    patterns: "psina_*.sql.gz"
+    age: "{{ psina_backup_retention_days }}d"
+  register: old_backups
+
+- name: Delete old backup files
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ old_backups.files }}"

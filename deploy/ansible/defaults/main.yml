@@ -1,0 +1,39 @@
+---
+# Image
+psina_version: "latest"
+psina_image: "ghcr.io/foxcool/psina:{{ psina_version }}"
+
+# Directories
+psina_app_dir: "/opt/psina"
+psina_backup_dir: "/opt/backups"
+
+# Server
+psina_http_port: 8080
+
+# Domain (used for Traefik routing)
+psina_platform_domain: "auth.example.com"
+
+# Database
+psina_db_user: "psina"
+psina_db_password: "psina_password"
+psina_db_name: "psina"
+
+# JWT
+psina_jwt_algorithm: "RS256"
+psina_jwt_private_key: ""  # PEM content; empty = ephemeral key (dev only)
+
+# Cookie
+psina_cookie_enabled: true
+psina_cookie_domain: ""       # empty = exact domain (no subdomains)
+psina_cookie_secure: true
+psina_cookie_samesite: "strict"  # "lax" for cross-subdomain SSO
+
+# Traefik
+psina_traefik_middlewares: ""  # e.g. "tailscale-only@file,rate-limit@docker"
+
+# Backup retention
+psina_backup_retention_days: 30
+psina_auto_backup: true
+
+# Logging
+psina_log_level: "INFO"

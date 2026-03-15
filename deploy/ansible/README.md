@@ -102,6 +102,7 @@ ansible-playbook playbook.yml --tags destroy
 ## Traefik Integration
 
 The role configures psina to handle:
+
 - `Host(domain) && PathPrefix(/auth.v1.)` — Connect RPC endpoints
 - `Host(domain) && PathPrefix(/.well-known)` — JWKS public key endpoint
 

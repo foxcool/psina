@@ -2,9 +2,8 @@
 
 ## Prerequisites
 
-- Go 1.24+
+- Go 1.25+
 - Docker & Docker Compose
-- Atlas CLI (for schema management)
 - buf (for protobuf generation)
 - make
 
@@ -26,6 +25,7 @@ make gen
 ```
 
 This will:
+
 - Generate Go code from proto files (Connect RPC)
 - Run `go generate ./...`
 
@@ -36,21 +36,18 @@ make up
 ```
 
 This starts:
-- PostgreSQL database (port 5432)
-- psina-dev with Air live reload (port 8080)
+
+- PostgreSQL database
+- Atlas migration (schema applied automatically)
+- psina-dev with Air live reload
 
 Watch logs:
+
 ```bash
 make logs
 ```
 
-### 4. Apply database schema
-
-```bash
-make schema-apply
-```
-
-### 5. Stop environment
+### 4. Stop environment
 
 ```bash
 make down        # Stop containers
@@ -74,10 +71,11 @@ make test-integration
 ```
 
 Requires:
-- Atlas CLI (`curl -sSf https://atlasgo.sh | sh`)
+
 - Docker (for testcontainers)
 
 Automatically:
+
 - Spins up PostgreSQL via testcontainers
 - Applies schema
 - Runs integration tests
@@ -93,7 +91,7 @@ Runs unit + integration tests.
 
 ## Project Structure
 
-```
+```text
 psina/
 ├── api/auth/v1/            # Proto definitions
 │   └── auth.proto
@@ -157,6 +155,7 @@ make buf-gen
 ```
 
 Generates:
+
 - Go structs from proto (`pkg/api/auth/v1/*.pb.go`)
 - Connect RPC handlers (`pkg/api/auth/v1/authv1connect/`)
 
@@ -176,15 +175,16 @@ Schema defined in `schema.hcl`:
 
 ```hcl
 table "users" {
-  column "id" { type = varchar(255) }
+  column "id" { type = uuid }
   column "email" { type = varchar(255) }
   // ...
 }
 ```
 
-Commands:
+Schema is applied automatically on `make up`. For manual operations:
+
 ```bash
-make schema-apply   # Apply schema to database
+make schema-apply   # Re-apply schema to database
 make schema-diff    # Show pending changes without applying
 ```
 
@@ -193,6 +193,7 @@ make schema-diff    # Show pending changes without applying
 - `default` — development with live reload
 
 Example:
+
 ```bash
 # Start dev environment
 make up
@@ -237,16 +238,19 @@ Image published to: `ghcr.io/foxcool/psina:0.1.0`
 ## Debugging
 
 ### View logs
+
 ```bash
 make logs
 ```
 
 ### Check health
+
 ```bash
 curl http://localhost:8080/health
 ```
 
 ### Test token flow
+
 ```bash
 # Register
 curl -X POST http://localhost:8080/auth.v1.AuthService/Register \
@@ -266,7 +270,3 @@ curl -X POST http://localhost:8080/auth.v1.AuthService/Login \
 - Coverage reports: `coverage-unit.out`, `coverage-integration.out`
 - Build production image: `make build`
 - Database queries have 5s timeout by default (configurable via DSN)
-
-## Next Steps
-
-See [ROADMAP.md](ROADMAP.md) for upcoming features.

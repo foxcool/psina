@@ -33,7 +33,7 @@ make down
 
 ## Project Structure
 
-```
+```text
 pkg/                    # Library code (public API)
 ├── auth/               # Service layer + interfaces (ports.go)
 ├── entity/             # Domain types (User, Token, Claims)
@@ -81,7 +81,6 @@ golangci-lint run
 ### 5. Update documentation
 
 - Update README.md if adding features
-- Update docs/ROADMAP.md if relevant
 - Add godoc comments for exported symbols
 
 ### 6. Submit PR
@@ -151,6 +150,7 @@ Example: see `pkg/store/postgres/` and `pkg/store/memory/` for reference.
 Format: `type: description`
 
 Types:
+
 - `feat`: New feature
 - `fix`: Bug fix
 - `docs`: Documentation only
@@ -159,7 +159,8 @@ Types:
 - `chore`: Maintenance (deps, CI, etc.)
 
 Examples:
-```
+
+```text
 feat: add passkey provider
 fix: handle expired refresh tokens correctly
 docs: update Traefik integration example

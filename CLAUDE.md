@@ -10,11 +10,9 @@ Name origin: "psina" (рус. "псина") = "doggy" — a guard dog that knows
 
 **v0.1 MVP** — Local auth working, critical issues fixed, ready for polish.
 
-See `docs/ROADMAP.md` for detailed task list.
-
 ## Directory Structure
 
-```
+```text
 psina/
 ├── cmd/psina/           # Standalone binary
 │   ├── main.go          # Server entrypoint (koanf + slog + graceful shutdown)
@@ -45,6 +43,7 @@ psina/
 ## Architecture
 
 **Hexagonal (Ports & Adapters)**:
+
 - `pkg/auth/ports.go` — interfaces (Provider, UserStore, TokenStore, CredentialStore, TokenIssuer)
 - `pkg/auth/service.go` — orchestration (implements business flows)
 - `pkg/provider/`, `pkg/store/`, `pkg/token/` — adapters
@@ -147,7 +146,7 @@ Environment: `PSINA_SERVER_PORT`, `PSINA_DB_URL`, `PSINA_JWT_PRIVATEKEYPATH`
 
 ## HTTP Endpoints
 
-```
+```text
 POST /auth.v1.AuthService/Register     - Create account + return tokens
 POST /auth.v1.AuthService/Login        - Authenticate + return tokens
 POST /auth.v1.AuthService/Refresh      - Refresh access token (with rotation)
@@ -193,12 +192,6 @@ if errors.Is(err, store.ErrUserNotFound) {
 
 Available errors: `ErrUserNotFound`, `ErrUserExists`, `ErrTokenNotFound`, `ErrCredentialNotFound`
 
-## Remaining Tasks (v0.1)
-
-Track in ROADMAP.md. Nice to have:
-- [ ] GitHub release workflow (goreleaser)
-- [ ] Unicode password length validation (runes vs bytes)
-
 ## Code Style
 
 - Standard Go conventions
@@ -210,6 +203,7 @@ Track in ROADMAP.md. Nice to have:
 ## Integration Examples
 
 **Embedded in your app:**
+
 ```go
 import (
     "github.com/foxcool/psina/pkg/auth"
@@ -232,6 +226,7 @@ func main() {
 ```
 
 **Traefik ForwardAuth:**
+
 ```yaml
 http:
   middlewares:
@@ -246,6 +241,7 @@ http:
 ```
 
 **KrakenD JWKS:**
+
 ```json
 {
   "extra_config": {

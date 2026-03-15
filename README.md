@@ -239,7 +239,7 @@ make schema-apply
 
 Hexagonal architecture with pluggable providers and stores:
 
-```
+```text
 pkg/
 ├── auth/           # Service layer (orchestration + ports)
 ├── entity/         # Domain types
@@ -261,8 +261,6 @@ See [docs/architecture.md](docs/architecture.md) for details.
 | v0.4 | Web3 wallet auth (SIWE) | 📋 Planned |
 | v0.5 | TOTP 2FA | 📋 Planned |
 | v1.0 | OAuth providers, stable API | 📋 Planned |
-
-See [docs/ROADMAP.md](docs/ROADMAP.md) for detailed plans.
 
 ## License
 

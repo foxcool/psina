@@ -69,5 +69,6 @@ docs/SESSION_LOG.md
 # Claude
 .claude/
 
-# Dolt database files (added by bd init)
-.dolt/
+# Beads backups (contain issue content in various languages)
+.beads/backup/
+

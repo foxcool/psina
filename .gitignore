@@ -69,6 +69,6 @@ docs/SESSION_LOG.md
 # Claude
 .claude/
 
-# Beads backups (contain issue content in various languages)
-.beads/backup/
+# Beads (global tracker at ~/development/fox/beads-personal — never per-project)
+.beads/
 

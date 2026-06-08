@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/foxcool/psina/pkg/entity"
@@ -42,6 +43,7 @@ type Service struct {
 	provider   Provider
 	tokenStore TokenStore
 	userStore  UserStore
+	patStore   PATStore
 	issuer     TokenIssuer
 }
 
@@ -50,12 +52,14 @@ func NewService(
 	provider Provider,
 	tokenStore TokenStore,
 	userStore UserStore,
+	patStore PATStore,
 	issuer TokenIssuer,
 ) *Service {
 	return &Service{
 		provider:   provider,
 		tokenStore: tokenStore,
 		userStore:  userStore,
+		patStore:   patStore,
 		issuer:     issuer,
 	}
 }
@@ -187,9 +191,78 @@ func (s *Service) Logout(ctx context.Context, refreshToken string) error {
 	return s.tokenStore.RevokeTokens(ctx, hash)
 }
 
-// Verify validates an access token and returns claims.
+// Verify validates a credential and returns claims. It accepts both short-lived
+// access JWTs and opaque personal access tokens (distinguished by prefix).
 func (s *Service) Verify(ctx context.Context, accessToken string) (*entity.Claims, error) {
+	if strings.HasPrefix(accessToken, token.PATPrefix) {
+		return s.verifyPAT(ctx, accessToken)
+	}
 	return s.issuer.ParseToken(accessToken)
+}
+
+// verifyPAT validates an opaque personal access token via DB lookup.
+func (s *Service) verifyPAT(ctx context.Context, accessToken string) (*entity.Claims, error) {
+	pat, err := s.patStore.GetPAT(ctx, token.HashToken(accessToken))
+	if err != nil {
+		return nil, ErrInvalidCredentials
+	}
+
+	if pat.ExpiresAt != nil && time.Now().After(*pat.ExpiresAt) {
+		return nil, ErrTokenExpired
+	}
+
+	user, err := s.userStore.GetByID(ctx, pat.UserID)
+	if err != nil {
+		return nil, fmt.Errorf("get user: %w", err)
+	}
+
+	// Best-effort last-used tracking; never fail verification on it.
+	_ = s.patStore.TouchPAT(ctx, pat.Hash, time.Now())
+
+	return &entity.Claims{
+		UserID: user.ID,
+		Email:  user.Email,
+		Issuer: token.JWTIssuer,
+	}, nil
+}
+
+// PATResult is a created personal access token. Plaintext is present only at
+// creation time and is never persisted.
+type PATResult struct {
+	Plaintext string
+	Token     *entity.PersonalAccessToken
+}
+
+// CreatePAT mints a personal access token for a user.
+func (s *Service) CreatePAT(ctx context.Context, userID, name string, scopes []string, expiresAt *time.Time) (*PATResult, error) {
+	plaintext, hash, err := token.GeneratePAT()
+	if err != nil {
+		return nil, fmt.Errorf("generate pat: %w", err)
+	}
+
+	pat := &entity.PersonalAccessToken{
+		Hash:      hash,
+		UserID:    userID,
+		Name:      name,
+		Scopes:    scopes,
+		ExpiresAt: expiresAt,
+		CreatedAt: time.Now(),
+	}
+	if err := s.patStore.SavePAT(ctx, pat); err != nil {
+		return nil, fmt.Errorf("save pat: %w", err)
+	}
+
+	return &PATResult{Plaintext: plaintext, Token: pat}, nil
+}
+
+// ListPATs returns a user's personal access tokens (metadata only, no secrets).
+func (s *Service) ListPATs(ctx context.Context, userID string) ([]*entity.PersonalAccessToken, error) {
+	return s.patStore.ListPATs(ctx, userID)
+}
+
+// RevokePAT deletes a personal access token owned by the user.
+func (s *Service) RevokePAT(ctx context.Context, userID, hash string) error {
+	return s.patStore.DeletePAT(ctx, userID, hash)
 }
 
 // JWKS returns the JSON Web Key Set for public key verification.

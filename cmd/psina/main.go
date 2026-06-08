@@ -71,6 +71,7 @@ func run() error {
 	var userStore auth.UserStore
 	var tokenStore auth.TokenStore
 	var credStore auth.CredentialStore
+	var patStore auth.PATStore
 	var cleanup func()
 	var dbPing func(context.Context) error
 
@@ -90,6 +91,7 @@ func run() error {
 		userStore = pgStore
 		tokenStore = pgStore
 		credStore = pgStore
+		patStore = pgStore
 	} else {
 		// Development: use in-memory store
 		slog.Warn("using in-memory store (data will not persist)")
@@ -101,6 +103,7 @@ func run() error {
 		userStore = memStore
 		tokenStore = memStore
 		credStore = memStore
+		patStore = memStore
 	}
 	defer cleanup()
 
@@ -115,7 +118,7 @@ func run() error {
 	provider := local.New(userStore, credStore)
 
 	// Initialize service
-	service := auth.NewService(provider, tokenStore, userStore, issuer)
+	service := auth.NewService(provider, tokenStore, userStore, patStore, issuer)
 
 	// Initialize handler with cookie config
 	cookieConfig := &auth.CookieConfig{

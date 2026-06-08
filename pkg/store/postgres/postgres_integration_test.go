@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/foxcool/psina/pkg/entity"
 	"github.com/foxcool/psina/pkg/store"
@@ -217,4 +218,56 @@ func TestStore_NotFound(t *testing.T) {
 	_, err = s.GetPasswordHash(ctx, nonexistentID)
 	assert.Error(t, err)
 	assert.True(t, errors.Is(err, store.ErrCredentialNotFound), "expected ErrCredentialNotFound, got: %v", err)
+}
+
+func TestStore_PATCRUD(t *testing.T) {
+	s := getTestStore(t)
+	ctx := context.Background()
+
+	user := &entity.User{ID: uuid.New().String(), Email: "pat@example.com"}
+	require.NoError(t, s.Create(ctx, user))
+
+	exp := timePtr(t)
+	pat := &entity.PersonalAccessToken{
+		Hash:      "pat-hash-1",
+		UserID:    user.ID,
+		Name:      "ci",
+		Scopes:    []string{"eye:read", "eye:write"},
+		ExpiresAt: exp,
+	}
+	require.NoError(t, s.SavePAT(ctx, pat))
+
+	got, err := s.GetPAT(ctx, "pat-hash-1")
+	require.NoError(t, err)
+	assert.Equal(t, user.ID, got.UserID)
+	assert.Equal(t, "ci", got.Name)
+	assert.Equal(t, []string{"eye:read", "eye:write"}, got.Scopes)
+	require.NotNil(t, got.ExpiresAt)
+	assert.Nil(t, got.LastUsedAt)
+
+	// Touch updates last_used_at.
+	require.NoError(t, s.TouchPAT(ctx, "pat-hash-1", exp.Add(time.Minute)))
+	got, err = s.GetPAT(ctx, "pat-hash-1")
+	require.NoError(t, err)
+	require.NotNil(t, got.LastUsedAt)
+
+	// List returns it.
+	pats, err := s.ListPATs(ctx, user.ID)
+	require.NoError(t, err)
+	require.Len(t, pats, 1)
+
+	// Delete scoped to a different owner is a no-op (not found).
+	err = s.DeletePAT(ctx, uuid.New().String(), "pat-hash-1")
+	assert.True(t, errors.Is(err, store.ErrTokenNotFound))
+
+	// Delete by the real owner removes it.
+	require.NoError(t, s.DeletePAT(ctx, user.ID, "pat-hash-1"))
+	_, err = s.GetPAT(ctx, "pat-hash-1")
+	assert.True(t, errors.Is(err, store.ErrTokenNotFound))
+}
+
+func timePtr(t *testing.T) *time.Time {
+	t.Helper()
+	v := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+	return &v
 }

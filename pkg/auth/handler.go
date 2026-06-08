@@ -10,6 +10,7 @@ import (
 
 	"connectrpc.com/connect"
 	authv1 "github.com/foxcool/psina/pkg/api/auth/v1"
+	"github.com/foxcool/psina/pkg/entity"
 	"github.com/foxcool/psina/pkg/token"
 )
 
@@ -233,6 +234,109 @@ func (h *Handler) Verify(
 	resp.Header().Set("X-User-Email", claims.Email)
 
 	return resp, nil
+}
+
+// CreatePersonalAccessToken mints a PAT for the authenticated caller.
+func (h *Handler) CreatePersonalAccessToken(
+	ctx context.Context,
+	req *connect.Request[authv1.CreatePersonalAccessTokenRequest],
+) (*connect.Response[authv1.CreatePersonalAccessTokenResponse], error) {
+	userID, err := h.authenticate(ctx, req.Header())
+	if err != nil {
+		return nil, err
+	}
+
+	var expiresAt *time.Time
+	if req.Msg.ExpiresAt > 0 {
+		t := time.Unix(req.Msg.ExpiresAt, 0).UTC()
+		expiresAt = &t
+	}
+
+	result, err := h.service.CreatePAT(ctx, userID, req.Msg.Name, req.Msg.Scopes, expiresAt)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
+	return connect.NewResponse(&authv1.CreatePersonalAccessTokenResponse{
+		Token: result.Plaintext,
+		Pat:   patToProto(result.Token),
+	}), nil
+}
+
+// ListPersonalAccessTokens lists the caller's PATs (metadata only).
+func (h *Handler) ListPersonalAccessTokens(
+	ctx context.Context,
+	req *connect.Request[authv1.ListPersonalAccessTokensRequest],
+) (*connect.Response[authv1.ListPersonalAccessTokensResponse], error) {
+	userID, err := h.authenticate(ctx, req.Header())
+	if err != nil {
+		return nil, err
+	}
+
+	pats, err := h.service.ListPATs(ctx, userID)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
+	resp := &authv1.ListPersonalAccessTokensResponse{
+		Pats: make([]*authv1.PersonalAccessToken, 0, len(pats)),
+	}
+	for _, pat := range pats {
+		resp.Pats = append(resp.Pats, patToProto(pat))
+	}
+
+	return connect.NewResponse(resp), nil
+}
+
+// RevokePersonalAccessToken deletes a PAT owned by the caller.
+func (h *Handler) RevokePersonalAccessToken(
+	ctx context.Context,
+	req *connect.Request[authv1.RevokePersonalAccessTokenRequest],
+) (*connect.Response[authv1.RevokePersonalAccessTokenResponse], error) {
+	userID, err := h.authenticate(ctx, req.Header())
+	if err != nil {
+		return nil, err
+	}
+
+	if err := h.service.RevokePAT(ctx, userID, req.Msg.Id); err != nil {
+		return nil, connect.NewError(connect.CodeNotFound, errors.New("token not found"))
+	}
+
+	return connect.NewResponse(&authv1.RevokePersonalAccessTokenResponse{Success: true}), nil
+}
+
+// authenticate extracts the Bearer token from the request and resolves the
+// caller's user ID via Verify (accepts access JWT or PAT).
+func (h *Handler) authenticate(ctx context.Context, header http.Header) (string, error) {
+	auth := header.Get("Authorization")
+	accessToken := strings.TrimPrefix(auth, "Bearer ")
+	if auth == "" || accessToken == auth {
+		return "", connect.NewError(connect.CodeUnauthenticated, errors.New("missing or invalid authorization"))
+	}
+
+	claims, err := h.service.Verify(ctx, accessToken)
+	if err != nil {
+		return "", connect.NewError(connect.CodeUnauthenticated, errors.New("invalid token"))
+	}
+
+	return claims.UserID, nil
+}
+
+// patToProto maps a stored PAT to its metadata proto (never includes the secret).
+func patToProto(pat *entity.PersonalAccessToken) *authv1.PersonalAccessToken {
+	out := &authv1.PersonalAccessToken{
+		Id:        pat.Hash,
+		Name:      pat.Name,
+		Scopes:    pat.Scopes,
+		CreatedAt: pat.CreatedAt.Unix(),
+	}
+	if pat.ExpiresAt != nil {
+		out.ExpiresAt = pat.ExpiresAt.Unix()
+	}
+	if pat.LastUsedAt != nil {
+		out.LastUsedAt = pat.LastUsedAt.Unix()
+	}
+	return out
 }
 
 // setTokenCookies sets access and refresh token cookies.

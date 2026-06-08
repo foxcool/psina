@@ -14,10 +14,11 @@ import (
 // Suitable for testing and embedded use cases. NOT for production.
 type Store struct {
 	mu             sync.RWMutex
-	users          map[string]*entity.User         // userID -> User
-	usersByEmail   map[string]*entity.User         // email -> User
-	refreshTokens  map[string]*entity.RefreshToken // hash -> RefreshToken
-	passwordHashes map[string]string               // userID -> passwordHash
+	users          map[string]*entity.User                // userID -> User
+	usersByEmail   map[string]*entity.User                // email -> User
+	refreshTokens  map[string]*entity.RefreshToken        // hash -> RefreshToken
+	pats           map[string]*entity.PersonalAccessToken // hash -> PAT
+	passwordHashes map[string]string                      // userID -> passwordHash
 }
 
 // New creates a new in-memory store.
@@ -26,6 +27,7 @@ func New() *Store {
 		users:          make(map[string]*entity.User),
 		usersByEmail:   make(map[string]*entity.User),
 		refreshTokens:  make(map[string]*entity.RefreshToken),
+		pats:           make(map[string]*entity.PersonalAccessToken),
 		passwordHashes: make(map[string]string),
 	}
 }
@@ -144,6 +146,75 @@ func (s *Store) RevokeTokens(ctx context.Context, hash string) error {
 		if token.Hash == hash || token.Parent == hash {
 			token.Revoked = true
 		}
+	}
+
+	return nil
+}
+
+// --- PATStore implementation ---
+
+// SavePAT persists a personal access token.
+func (s *Store) SavePAT(ctx context.Context, pat *entity.PersonalAccessToken) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if pat.CreatedAt.IsZero() {
+		pat.CreatedAt = time.Now()
+	}
+	s.pats[pat.Hash] = pat
+
+	return nil
+}
+
+// GetPAT retrieves a personal access token by its hash.
+func (s *Store) GetPAT(ctx context.Context, hash string) (*entity.PersonalAccessToken, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	pat, exists := s.pats[hash]
+	if !exists {
+		return nil, store.ErrTokenNotFound
+	}
+
+	return pat, nil
+}
+
+// ListPATs returns all personal access tokens for a user.
+func (s *Store) ListPATs(ctx context.Context, userID string) ([]*entity.PersonalAccessToken, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var out []*entity.PersonalAccessToken
+	for _, pat := range s.pats {
+		if pat.UserID == userID {
+			out = append(out, pat)
+		}
+	}
+
+	return out, nil
+}
+
+// DeletePAT removes a token, scoped to its owner.
+func (s *Store) DeletePAT(ctx context.Context, userID, hash string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	pat, exists := s.pats[hash]
+	if !exists || pat.UserID != userID {
+		return store.ErrTokenNotFound
+	}
+	delete(s.pats, hash)
+
+	return nil
+}
+
+// TouchPAT records last-used time.
+func (s *Store) TouchPAT(ctx context.Context, hash string, t time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if pat, exists := s.pats[hash]; exists {
+		pat.LastUsedAt = &t
 	}
 
 	return nil

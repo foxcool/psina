@@ -26,7 +26,7 @@ func newServiceWithProvider(t *testing.T, provider Provider, store *memory.Store
 	t.Helper()
 	issuer, err := token.New()
 	require.NoError(t, err)
-	return NewService(provider, store, store, issuer)
+	return NewService(provider, store, store, store, issuer)
 }
 
 // registerUser registers a user via the handler and pre-creates the user in the store.

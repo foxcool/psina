@@ -136,6 +136,13 @@ table "refresh_tokens" {
 table "personal_access_tokens" {
   schema = schema.public
 
+  // Public handle for list/revoke; the token hash stays internal.
+  column "id" {
+    type    = uuid
+    null    = false
+    default = sql("gen_random_uuid()")
+  }
+
   column "hash" {
     type = varchar(255)
     null = false
@@ -177,13 +184,18 @@ table "personal_access_tokens" {
   }
 
   primary_key {
-    columns = [column.hash]
+    columns = [column.id]
   }
 
   foreign_key "fk_user" {
     columns     = [column.user_id]
     ref_columns = [table.users.column.id]
     on_delete   = CASCADE
+  }
+
+  index "idx_personal_access_tokens_hash" {
+    columns = [column.hash]
+    unique  = true
   }
 
   index "idx_personal_access_tokens_user_id" {

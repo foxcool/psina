@@ -161,12 +161,14 @@ func (s *Store) SavePAT(ctx context.Context, pat *entity.PersonalAccessToken) er
 	if pat.CreatedAt.IsZero() {
 		pat.CreatedAt = time.Now()
 	}
-	s.pats[pat.Hash] = pat
+	stored := *pat
+	s.pats[pat.Hash] = &stored
 
 	return nil
 }
 
-// GetPAT retrieves a personal access token by its hash.
+// GetPAT retrieves a personal access token by its hash. Returns a copy so
+// callers never share memory with the store (TouchPAT mutates in place).
 func (s *Store) GetPAT(ctx context.Context, hash string) (*entity.PersonalAccessToken, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -176,10 +178,11 @@ func (s *Store) GetPAT(ctx context.Context, hash string) (*entity.PersonalAccess
 		return nil, store.ErrTokenNotFound
 	}
 
-	return pat, nil
+	out := *pat
+	return &out, nil
 }
 
-// ListPATs returns all personal access tokens for a user.
+// ListPATs returns all personal access tokens for a user (as copies).
 func (s *Store) ListPATs(ctx context.Context, userID string) ([]*entity.PersonalAccessToken, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -187,25 +190,27 @@ func (s *Store) ListPATs(ctx context.Context, userID string) ([]*entity.Personal
 	var out []*entity.PersonalAccessToken
 	for _, pat := range s.pats {
 		if pat.UserID == userID {
-			out = append(out, pat)
+			c := *pat
+			out = append(out, &c)
 		}
 	}
 
 	return out, nil
 }
 
-// DeletePAT removes a token, scoped to its owner.
-func (s *Store) DeletePAT(ctx context.Context, userID, hash string) error {
+// DeletePAT removes a token by its UUID, scoped to its owner.
+func (s *Store) DeletePAT(ctx context.Context, userID, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	pat, exists := s.pats[hash]
-	if !exists || pat.UserID != userID {
-		return store.ErrTokenNotFound
+	for hash, pat := range s.pats {
+		if pat.ID == id && pat.UserID == userID {
+			delete(s.pats, hash)
+			return nil
+		}
 	}
-	delete(s.pats, hash)
 
-	return nil
+	return store.ErrTokenNotFound
 }
 
 // TouchPAT records last-used time.

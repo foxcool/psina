@@ -65,6 +65,7 @@ func run() error {
 		"port", config.Server.Port,
 		"jwt_algorithm", config.JWT.Algorithm,
 		"cookies_enabled", config.Cookie.Enabled,
+		"pat_enabled", config.PAT.Enabled,
 	)
 
 	// Initialize stores based on config
@@ -118,7 +119,15 @@ func run() error {
 	provider := local.New(userStore, credStore)
 
 	// Initialize service
-	service := auth.NewService(provider, tokenStore, userStore, patStore, issuer)
+	var serviceOpts []auth.ServiceOption
+	if config.PAT.Enabled {
+		serviceOpts = append(serviceOpts, auth.WithPAT(patStore, auth.PATConfig{
+			MaxPerUser:    config.PAT.MaxPerUser,
+			MaxTTL:        config.PAT.MaxTTL,
+			TouchInterval: config.PAT.TouchInterval,
+		}))
+	}
+	service := auth.NewService(provider, tokenStore, userStore, issuer, serviceOpts...)
 
 	// Initialize handler with cookie config
 	cookieConfig := &auth.CookieConfig{

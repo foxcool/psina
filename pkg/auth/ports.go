@@ -60,8 +60,9 @@ type PATStore interface {
 	// ListPATs returns all personal access tokens for a user.
 	ListPATs(ctx context.Context, userID string) ([]*entity.PersonalAccessToken, error)
 
-	// DeletePAT removes a token, scoped to its owner to prevent cross-user deletion.
-	DeletePAT(ctx context.Context, userID, hash string) error
+	// DeletePAT removes a token by its UUID, scoped to its owner to prevent
+	// cross-user deletion.
+	DeletePAT(ctx context.Context, userID, id string) error
 
 	// TouchPAT records last-used time. Best-effort; callers may ignore the error.
 	TouchPAT(ctx context.Context, hash string, t time.Time) error

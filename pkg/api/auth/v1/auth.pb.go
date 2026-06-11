@@ -550,7 +550,7 @@ type PersonalAccessToken struct {
 	CreatedAt     int64                  `protobuf:"varint,3,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`      // unix seconds
 	ExpiresAt     int64                  `protobuf:"varint,4,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`      // unix seconds; 0 = never expires
 	LastUsedAt    int64                  `protobuf:"varint,5,opt,name=last_used_at,json=lastUsedAt,proto3" json:"last_used_at,omitempty"` // unix seconds; 0 = never used
-	Id            string                 `protobuf:"bytes,6,opt,name=id,proto3" json:"id,omitempty"`                                      // token hash, used as the revoke handle
+	Id            string                 `protobuf:"bytes,6,opt,name=id,proto3" json:"id,omitempty"`                                      // UUID, used as the revoke handle
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -821,7 +821,7 @@ func (x *ListPersonalAccessTokensResponse) GetPats() []*PersonalAccessToken {
 
 type RevokePersonalAccessTokenRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"` // token hash returned by Create/List
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"` // UUID returned by Create/List
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

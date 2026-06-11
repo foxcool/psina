@@ -11,6 +11,7 @@ import (
 	"connectrpc.com/connect"
 	authv1 "github.com/foxcool/psina/pkg/api/auth/v1"
 	"github.com/foxcool/psina/pkg/entity"
+	"github.com/foxcool/psina/pkg/store"
 	"github.com/foxcool/psina/pkg/token"
 )
 
@@ -241,7 +242,7 @@ func (h *Handler) CreatePersonalAccessToken(
 	ctx context.Context,
 	req *connect.Request[authv1.CreatePersonalAccessTokenRequest],
 ) (*connect.Response[authv1.CreatePersonalAccessTokenResponse], error) {
-	userID, err := h.authenticate(ctx, req.Header())
+	userID, err := h.authenticateSession(ctx, req.Header())
 	if err != nil {
 		return nil, err
 	}
@@ -254,7 +255,7 @@ func (h *Handler) CreatePersonalAccessToken(
 
 	result, err := h.service.CreatePAT(ctx, userID, req.Msg.Name, req.Msg.Scopes, expiresAt)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, patErrorToConnect(err)
 	}
 
 	return connect.NewResponse(&authv1.CreatePersonalAccessTokenResponse{
@@ -268,14 +269,14 @@ func (h *Handler) ListPersonalAccessTokens(
 	ctx context.Context,
 	req *connect.Request[authv1.ListPersonalAccessTokensRequest],
 ) (*connect.Response[authv1.ListPersonalAccessTokensResponse], error) {
-	userID, err := h.authenticate(ctx, req.Header())
+	userID, err := h.authenticateSession(ctx, req.Header())
 	if err != nil {
 		return nil, err
 	}
 
 	pats, err := h.service.ListPATs(ctx, userID)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, patErrorToConnect(err)
 	}
 
 	resp := &authv1.ListPersonalAccessTokensResponse{
@@ -293,25 +294,33 @@ func (h *Handler) RevokePersonalAccessToken(
 	ctx context.Context,
 	req *connect.Request[authv1.RevokePersonalAccessTokenRequest],
 ) (*connect.Response[authv1.RevokePersonalAccessTokenResponse], error) {
-	userID, err := h.authenticate(ctx, req.Header())
+	userID, err := h.authenticateSession(ctx, req.Header())
 	if err != nil {
 		return nil, err
 	}
 
 	if err := h.service.RevokePAT(ctx, userID, req.Msg.Id); err != nil {
-		return nil, connect.NewError(connect.CodeNotFound, errors.New("token not found"))
+		if errors.Is(err, store.ErrTokenNotFound) {
+			return nil, connect.NewError(connect.CodeNotFound, errors.New("token not found"))
+		}
+		return nil, patErrorToConnect(err)
 	}
 
 	return connect.NewResponse(&authv1.RevokePersonalAccessTokenResponse{Success: true}), nil
 }
 
-// authenticate extracts the Bearer token from the request and resolves the
-// caller's user ID via Verify (accepts access JWT or PAT).
-func (h *Handler) authenticate(ctx context.Context, header http.Header) (string, error) {
+// authenticateSession extracts the Bearer token from the request and resolves
+// the caller's user ID. Only session (JWT) tokens are accepted: PATs cannot
+// manage PATs, so a leaked PAT cannot mint replacements or revoke siblings.
+func (h *Handler) authenticateSession(ctx context.Context, header http.Header) (string, error) {
 	auth := header.Get("Authorization")
 	accessToken := strings.TrimPrefix(auth, "Bearer ")
 	if auth == "" || accessToken == auth {
 		return "", connect.NewError(connect.CodeUnauthenticated, errors.New("missing or invalid authorization"))
+	}
+
+	if strings.HasPrefix(accessToken, token.PATPrefix) {
+		return "", connect.NewError(connect.CodePermissionDenied, errors.New("personal access tokens cannot manage tokens"))
 	}
 
 	claims, err := h.service.Verify(ctx, accessToken)
@@ -322,10 +331,24 @@ func (h *Handler) authenticate(ctx context.Context, header http.Header) (string,
 	return claims.UserID, nil
 }
 
+// patErrorToConnect maps PAT service errors to connect codes.
+func patErrorToConnect(err error) *connect.Error {
+	switch {
+	case errors.Is(err, ErrPATDisabled):
+		return connect.NewError(connect.CodeUnimplemented, err)
+	case errors.Is(err, ErrPATNameRequired), errors.Is(err, ErrPATNameTooLong), errors.Is(err, ErrPATExpiryInvalid):
+		return connect.NewError(connect.CodeInvalidArgument, err)
+	case errors.Is(err, ErrPATLimitReached):
+		return connect.NewError(connect.CodeResourceExhausted, err)
+	default:
+		return connect.NewError(connect.CodeInternal, err)
+	}
+}
+
 // patToProto maps a stored PAT to its metadata proto (never includes the secret).
 func patToProto(pat *entity.PersonalAccessToken) *authv1.PersonalAccessToken {
 	out := &authv1.PersonalAccessToken{
-		Id:        pat.Hash,
+		Id:        pat.ID,
 		Name:      pat.Name,
 		Scopes:    pat.Scopes,
 		CreatedAt: pat.CreatedAt.Unix(),

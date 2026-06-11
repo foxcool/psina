@@ -12,7 +12,8 @@ service AuthService {
   rpc Verify(VerifyRequest) returns (VerifyResponse);
 
   // Personal access tokens. The caller is identified by the Authorization
-  // header (Bearer access token); requests never carry a user_id.
+  // header; requests never carry a user_id. Only session (JWT) access tokens
+  // are accepted here — a PAT cannot manage PATs.
   rpc CreatePersonalAccessToken(CreatePersonalAccessTokenRequest) returns (CreatePersonalAccessTokenResponse);
   rpc ListPersonalAccessTokens(ListPersonalAccessTokensRequest) returns (ListPersonalAccessTokensResponse);
   rpc RevokePersonalAccessToken(RevokePersonalAccessTokenRequest) returns (RevokePersonalAccessTokenResponse);
@@ -78,7 +79,7 @@ message PersonalAccessToken {
   int64 created_at = 3;            // unix seconds
   int64 expires_at = 4;           // unix seconds; 0 = never expires
   int64 last_used_at = 5;         // unix seconds; 0 = never used
-  string id = 6;                  // token hash, used as the revoke handle
+  string id = 6;                  // UUID, used as the revoke handle
 }
 
 message CreatePersonalAccessTokenRequest {
@@ -99,7 +100,7 @@ message ListPersonalAccessTokensResponse {
 }
 
 message RevokePersonalAccessTokenRequest {
-  string id = 1;                  // token hash returned by Create/List
+  string id = 1;                  // UUID returned by Create/List
 }
 
 message RevokePersonalAccessTokenResponse {

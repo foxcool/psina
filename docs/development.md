@@ -132,7 +132,7 @@ psina/
 
 Hexagonal (Ports & Adapters):
 
-- **Ports** (`pkg/auth/ports.go`): interfaces for Provider, UserStore, TokenStore, CredentialStore, TokenIssuer
+- **Ports** (`pkg/auth/ports.go`): interfaces for Provider, UserStore, TokenStore, CredentialStore, PATStore, TokenIssuer
 - **Adapters**: `pkg/provider/*`, `pkg/store/*`, `pkg/token/`
 - **Core**: `pkg/auth/service.go` orchestrates business logic
 
@@ -261,6 +261,18 @@ curl -X POST http://localhost:8080/auth.v1.AuthService/Register \
 curl -X POST http://localhost:8080/auth.v1.AuthService/Login \
   -H "Content-Type: application/json" \
   -d '{"email":"test@example.com","password":"password123"}'
+
+# Create a personal access token (requires session JWT, not a PAT)
+curl -X POST http://localhost:8080/auth.v1.AuthService/CreatePersonalAccessToken \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <access_token>" \
+  -d '{"name":"ci"}'
+
+# Verify accepts the PAT like an access token
+curl -X POST http://localhost:8080/auth.v1.AuthService/Verify \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer psn_..." \
+  -d '{}'
 ```
 
 ## Tips

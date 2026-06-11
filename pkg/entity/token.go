@@ -32,7 +32,8 @@ type RefreshToken struct {
 // hash of the secret is persisted; the plaintext is shown to the user once at
 // creation. Revocation is a row delete.
 type PersonalAccessToken struct {
-	Hash       string // SHA256 hash of the token
+	ID         string // UUID, public handle for list/revoke
+	Hash       string // SHA256 hash of the token (internal storage detail)
 	UserID     string
 	Name       string   // human-readable label
 	Scopes     []string // stored for forward-compat; not enforced yet

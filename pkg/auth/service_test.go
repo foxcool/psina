@@ -50,7 +50,7 @@ func setupTestService(t *testing.T) (*Service, *memory.Store) {
 	require.NoError(t, err)
 
 	provider := &mockProvider{}
-	service := NewService(provider, memStore, memStore, memStore, issuer)
+	service := NewService(provider, memStore, memStore, issuer, WithPAT(memStore, PATConfig{}))
 	return service, memStore
 }
 
@@ -109,7 +109,7 @@ func TestService_Login_InvalidCredentials(t *testing.T) {
 		},
 	}
 
-	service := NewService(provider, memStore, memStore, memStore, issuer)
+	service := NewService(provider, memStore, memStore, issuer, WithPAT(memStore, PATConfig{}))
 	ctx := context.Background()
 
 	_, err := service.Login(ctx, "test@example.com", "WrongPassword")

@@ -277,12 +277,12 @@ func (s *Store) SavePAT(ctx context.Context, pat *entity.PersonalAccessToken) er
 	}
 
 	query := fmt.Sprintf(`
-		INSERT INTO %s (hash, user_id, name, scopes, expires_at, last_used_at, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO %s (id, hash, user_id, name, scopes, expires_at, last_used_at, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 	`, s.tablePATs)
 
 	_, err := s.pool.Exec(ctx, query,
-		pat.Hash, pat.UserID, pat.Name, pat.Scopes, pat.ExpiresAt, pat.LastUsedAt, pat.CreatedAt)
+		pat.ID, pat.Hash, pat.UserID, pat.Name, pat.Scopes, pat.ExpiresAt, pat.LastUsedAt, pat.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("insert pat: %w", err)
 	}
@@ -293,14 +293,14 @@ func (s *Store) SavePAT(ctx context.Context, pat *entity.PersonalAccessToken) er
 // GetPAT retrieves a personal access token by its hash.
 func (s *Store) GetPAT(ctx context.Context, hash string) (*entity.PersonalAccessToken, error) {
 	query := fmt.Sprintf(`
-		SELECT hash, user_id, name, scopes, expires_at, last_used_at, created_at
+		SELECT id, hash, user_id, name, scopes, expires_at, last_used_at, created_at
 		FROM %s
 		WHERE hash = $1
 	`, s.tablePATs)
 
 	pat := &entity.PersonalAccessToken{}
 	err := s.pool.QueryRow(ctx, query, hash).Scan(
-		&pat.Hash, &pat.UserID, &pat.Name, &pat.Scopes, &pat.ExpiresAt, &pat.LastUsedAt, &pat.CreatedAt)
+		&pat.ID, &pat.Hash, &pat.UserID, &pat.Name, &pat.Scopes, &pat.ExpiresAt, &pat.LastUsedAt, &pat.CreatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, store.ErrTokenNotFound
@@ -314,7 +314,7 @@ func (s *Store) GetPAT(ctx context.Context, hash string) (*entity.PersonalAccess
 // ListPATs returns all personal access tokens for a user.
 func (s *Store) ListPATs(ctx context.Context, userID string) ([]*entity.PersonalAccessToken, error) {
 	query := fmt.Sprintf(`
-		SELECT hash, user_id, name, scopes, expires_at, last_used_at, created_at
+		SELECT id, hash, user_id, name, scopes, expires_at, last_used_at, created_at
 		FROM %s
 		WHERE user_id = $1
 		ORDER BY created_at DESC
@@ -330,7 +330,7 @@ func (s *Store) ListPATs(ctx context.Context, userID string) ([]*entity.Personal
 	for rows.Next() {
 		pat := &entity.PersonalAccessToken{}
 		if err := rows.Scan(
-			&pat.Hash, &pat.UserID, &pat.Name, &pat.Scopes, &pat.ExpiresAt, &pat.LastUsedAt, &pat.CreatedAt); err != nil {
+			&pat.ID, &pat.Hash, &pat.UserID, &pat.Name, &pat.Scopes, &pat.ExpiresAt, &pat.LastUsedAt, &pat.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan pat: %w", err)
 		}
 		out = append(out, pat)
@@ -342,11 +342,11 @@ func (s *Store) ListPATs(ctx context.Context, userID string) ([]*entity.Personal
 	return out, nil
 }
 
-// DeletePAT removes a token, scoped to its owner.
-func (s *Store) DeletePAT(ctx context.Context, userID, hash string) error {
-	query := fmt.Sprintf(`DELETE FROM %s WHERE hash = $1 AND user_id = $2`, s.tablePATs)
+// DeletePAT removes a token by its UUID, scoped to its owner.
+func (s *Store) DeletePAT(ctx context.Context, userID, id string) error {
+	query := fmt.Sprintf(`DELETE FROM %s WHERE id = $1 AND user_id = $2`, s.tablePATs)
 
-	result, err := s.pool.Exec(ctx, query, hash, userID)
+	result, err := s.pool.Exec(ctx, query, id, userID)
 	if err != nil {
 		return fmt.Errorf("delete pat: %w", err)
 	}

@@ -62,7 +62,8 @@ type AuthServiceClient interface {
 	Logout(context.Context, *connect.Request[v1.LogoutRequest]) (*connect.Response[v1.LogoutResponse], error)
 	Verify(context.Context, *connect.Request[v1.VerifyRequest]) (*connect.Response[v1.VerifyResponse], error)
 	// Personal access tokens. The caller is identified by the Authorization
-	// header (Bearer access token); requests never carry a user_id.
+	// header; requests never carry a user_id. Only session (JWT) access tokens
+	// are accepted here — a PAT cannot manage PATs.
 	CreatePersonalAccessToken(context.Context, *connect.Request[v1.CreatePersonalAccessTokenRequest]) (*connect.Response[v1.CreatePersonalAccessTokenResponse], error)
 	ListPersonalAccessTokens(context.Context, *connect.Request[v1.ListPersonalAccessTokensRequest]) (*connect.Response[v1.ListPersonalAccessTokensResponse], error)
 	RevokePersonalAccessToken(context.Context, *connect.Request[v1.RevokePersonalAccessTokenRequest]) (*connect.Response[v1.RevokePersonalAccessTokenResponse], error)
@@ -190,7 +191,8 @@ type AuthServiceHandler interface {
 	Logout(context.Context, *connect.Request[v1.LogoutRequest]) (*connect.Response[v1.LogoutResponse], error)
 	Verify(context.Context, *connect.Request[v1.VerifyRequest]) (*connect.Response[v1.VerifyResponse], error)
 	// Personal access tokens. The caller is identified by the Authorization
-	// header (Bearer access token); requests never carry a user_id.
+	// header; requests never carry a user_id. Only session (JWT) access tokens
+	// are accepted here — a PAT cannot manage PATs.
 	CreatePersonalAccessToken(context.Context, *connect.Request[v1.CreatePersonalAccessTokenRequest]) (*connect.Response[v1.CreatePersonalAccessTokenResponse], error)
 	ListPersonalAccessTokens(context.Context, *connect.Request[v1.ListPersonalAccessTokensRequest]) (*connect.Response[v1.ListPersonalAccessTokensResponse], error)
 	RevokePersonalAccessToken(context.Context, *connect.Request[v1.RevokePersonalAccessTokenRequest]) (*connect.Response[v1.RevokePersonalAccessTokenResponse], error)

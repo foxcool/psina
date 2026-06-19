@@ -313,9 +313,25 @@ func (h *Handler) RevokePersonalAccessToken(
 // the caller's user ID. Only session (JWT) tokens are accepted: PATs cannot
 // manage PATs, so a leaked PAT cannot mint replacements or revoke siblings.
 func (h *Handler) authenticateSession(ctx context.Context, header http.Header) (string, error) {
+	var accessToken string
+
 	auth := header.Get("Authorization")
-	accessToken := strings.TrimPrefix(auth, "Bearer ")
-	if auth == "" || accessToken == auth {
+	if auth != "" {
+		accessToken = strings.TrimPrefix(auth, "Bearer ")
+		if accessToken == auth {
+			return "", connect.NewError(connect.CodeUnauthenticated, errors.New("missing or invalid authorization"))
+		}
+	}
+
+	// Browser clients hold the session in the HttpOnly psina_access cookie and
+	// cannot set the Authorization header, so fall back to it (same as Verify).
+	if accessToken == "" && h.cookieConfig.Enabled {
+		if cookie := h.getCookieFromHeader(header, AccessTokenCookie); cookie != "" {
+			accessToken = cookie
+		}
+	}
+
+	if accessToken == "" {
 		return "", connect.NewError(connect.CodeUnauthenticated, errors.New("missing or invalid authorization"))
 	}
 

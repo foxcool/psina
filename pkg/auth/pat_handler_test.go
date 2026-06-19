@@ -185,6 +185,42 @@ func TestHandler_RevokePersonalAccessToken(t *testing.T) {
 	})
 }
 
+// TestHandler_ManageWithSessionCookie ensures PAT management works when the
+// session JWT arrives in the psina_access cookie (browser clients can't set the
+// Authorization header on the HttpOnly cookie).
+func TestHandler_ManageWithSessionCookie(t *testing.T) {
+	ctx := context.Background()
+
+	// Cookie fallback only applies when cookies are enabled on the handler.
+	setup := func(t *testing.T) (handler *Handler, jwt, pat string) {
+		t.Helper()
+		h, service, store := setupCookieHandler(t)
+		result := registerUser(t, store, "pat-cookie@example.com", "SecurePassword123!", service)
+		res, err := service.CreatePAT(context.Background(), result.UserID, "seed", nil, nil)
+		require.NoError(t, err)
+		return h, result.TokenPair.AccessToken, res.Plaintext
+	}
+
+	t.Run("create with cookie JWT", func(t *testing.T) {
+		handler, jwt, _ := setup(t)
+		req := connect.NewRequest(&authv1.CreatePersonalAccessTokenRequest{Name: "ci"})
+		req.Header().Set("Cookie", AccessTokenCookie+"="+jwt)
+		resp, err := handler.CreatePersonalAccessToken(ctx, req)
+		require.NoError(t, err)
+		assert.Contains(t, resp.Msg.Token, token.PATPrefix)
+	})
+
+	t.Run("PAT in cookie cannot manage", func(t *testing.T) {
+		handler, _, pat := setup(t)
+		req := connect.NewRequest(&authv1.CreatePersonalAccessTokenRequest{Name: "ci"})
+		req.Header().Set("Cookie", AccessTokenCookie+"="+pat)
+		_, err := handler.CreatePersonalAccessToken(ctx, req)
+		var connectErr *connect.Error
+		require.ErrorAs(t, err, &connectErr)
+		assert.Equal(t, connect.CodePermissionDenied, connectErr.Code())
+	})
+}
+
 // TestHandler_VerifyAcceptsPAT ensures the ForwardAuth path still accepts PATs
 // even though management RPCs do not.
 func TestHandler_VerifyAcceptsPAT(t *testing.T) {

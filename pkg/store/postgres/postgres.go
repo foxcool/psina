@@ -276,13 +276,21 @@ func (s *Store) SavePAT(ctx context.Context, pat *entity.PersonalAccessToken) er
 		pat.CreatedAt = time.Now()
 	}
 
+	// pgx encodes a nil slice as SQL NULL, which violates the NOT NULL scopes
+	// column (the '{}' default only applies when the column is omitted). Coalesce
+	// to an empty array so PATs created without scopes persist cleanly.
+	scopes := pat.Scopes
+	if scopes == nil {
+		scopes = []string{}
+	}
+
 	query := fmt.Sprintf(`
 		INSERT INTO %s (id, hash, user_id, name, scopes, expires_at, last_used_at, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 	`, s.tablePATs)
 
 	_, err := s.pool.Exec(ctx, query,
-		pat.ID, pat.Hash, pat.UserID, pat.Name, pat.Scopes, pat.ExpiresAt, pat.LastUsedAt, pat.CreatedAt)
+		pat.ID, pat.Hash, pat.UserID, pat.Name, scopes, pat.ExpiresAt, pat.LastUsedAt, pat.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("insert pat: %w", err)
 	}

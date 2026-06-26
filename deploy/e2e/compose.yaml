@@ -1,0 +1,74 @@
+# E2E gateway stand: psina behind Traefik (ForwardAuth) and KrakenD (JWKS).
+#
+# Shared psina (in-memory store) + two gateway profiles. The Go e2e driver
+# (test/e2e, build tag e2e) hits the gateway URLs and asserts the auth contract.
+#
+# Usage:
+#   docker compose -f deploy/e2e/compose.yaml --profile traefik --profile krakend up --build -d --wait
+#   make test-e2e   # full run + teardown
+
+services:
+  # psina auth service, in-memory store (no DB needed for the stand).
+  psina:
+    build:
+      context: ../..
+      dockerfile: build/e2e.Dockerfile
+    environment:
+      PSINA_DB_URL: "" # empty -> in-memory store
+      PSINA_SERVER_PORT: "8080"
+      PSINA_LOGGER_LEVEL: "info"
+    ports:
+      - "8088:8080" # direct access for the KrakenD scenario (token minting)
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/readyz"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  # --- Traefik ForwardAuth profile ---
+  traefik:
+    profiles: ["traefik"]
+    image: traefik:v3.0
+    command:
+      - "--ping=true"
+      - "--providers.file.directory=/etc/traefik/dynamic"
+      - "--providers.file.watch=true"
+      - "--entrypoints.web.address=:80"
+    ports:
+      - "8085:80"
+    volumes:
+      - ./traefik.yml:/etc/traefik/dynamic/traefik.yml:ro
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    depends_on:
+      psina:
+        condition: service_healthy
+
+  whoami-traefik:
+    profiles: ["traefik"]
+    image: traefik/whoami
+
+  # --- KrakenD JWKS profile ---
+  krakend:
+    profiles: ["krakend"]
+    image: devopsfaith/krakend:2
+    command: ["run", "-c", "/etc/krakend/krakend.json"]
+    volumes:
+      - ./krakend.json:/etc/krakend/krakend.json:ro
+    ports:
+      - "8090:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/__health"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    depends_on:
+      psina:
+        condition: service_healthy
+
+  whoami-krakend:
+    profiles: ["krakend"]
+    image: traefik/whoami

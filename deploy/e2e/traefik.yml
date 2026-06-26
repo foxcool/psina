@@ -1,0 +1,37 @@
+# Traefik dynamic config for the e2e stand (file provider).
+#
+# File provider is used instead of the Docker provider so the stand needs no
+# docker socket mount and avoids Docker API negotiation issues — more portable
+# and safer for CI. Services are reached by compose DNS names.
+http:
+  routers:
+    # Auth + JWKS pass straight through to psina (no ForwardAuth) so the driver
+    # can register/login via the gateway URL.
+    psina:
+      rule: "PathPrefix(`/auth`) || PathPrefix(`/.well-known`)"
+      service: psina
+      entryPoints: [web]
+    # Protected backend guarded by ForwardAuth -> psina /verify.
+    backend:
+      rule: "PathPrefix(`/api`)"
+      service: backend
+      middlewares: [psina-auth]
+      entryPoints: [web]
+
+  services:
+    psina:
+      loadBalancer:
+        servers:
+          - url: "http://psina:8080"
+    backend:
+      loadBalancer:
+        servers:
+          - url: "http://whoami-traefik:80"
+
+  middlewares:
+    psina-auth:
+      forwardAuth:
+        address: "http://psina:8080/verify"
+        authResponseHeaders:
+          - "X-User-Id"
+          - "X-User-Email"

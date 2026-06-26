@@ -208,13 +208,21 @@ http:
     "auth/validator": {
       "alg": "RS256",
       "jwk_url": "http://psina:8080/.well-known/jwks.json",
-      "cache": true
+      "issuer": "psina",
+      "cache": true,
+      "disable_jwk_security": true
     }
   }
 }
 ```
 
-See [deploy/examples/](deploy/examples/) for complete configurations.
+`disable_jwk_security: true` is required when KrakenD fetches the JWKS over
+plain HTTP (in-cluster service-to-service). Drop it when the JWKS is served over
+HTTPS.
+
+See [deploy/examples/](deploy/examples/) for complete configurations, and
+[deploy/e2e/](deploy/e2e/) for a runnable Traefik + KrakenD test stand
+(`make test-e2e`).
 
 ## Development
 
@@ -227,6 +235,7 @@ make up
 # Run tests
 make test-unit           # unit tests
 make test-integration    # requires Docker (testcontainers)
+make test-e2e            # gateway e2e stand (Traefik + KrakenD), requires Docker
 
 # Generate protobuf
 make gen

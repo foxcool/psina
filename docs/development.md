@@ -89,6 +89,31 @@ make test
 
 Runs unit + integration tests.
 
+### E2E gateway tests
+
+```bash
+make test-e2e
+```
+
+Requires:
+
+- Docker (gateway stand via Docker Compose)
+
+Verifies psina behind both supported gateway integrations end to end:
+
+- **Traefik ForwardAuth** — gateway calls `/verify`; psina injects
+  `X-User-Id`/`X-User-Email` into the backend request.
+- **KrakenD JWKS** — gateway validates the RS256 token against
+  `/.well-known/jwks.json` (psina not called per request).
+
+Automatically:
+
+- Builds psina and brings up the stand (`deploy/e2e/compose.yaml`,
+  profiles `traefik` + `krakend`, fronting a `traefik/whoami` backend)
+- Runs the Go driver (`test/e2e`, build tag `e2e`): no token → 401,
+  bad token → 401, valid token → 200, identity propagated
+- Tears the stand down (even on failure)
+
 ## Project Structure
 
 ```text

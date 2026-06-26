@@ -132,3 +132,73 @@ table "refresh_tokens" {
     columns = [column.parent]
   }
 }
+
+table "personal_access_tokens" {
+  schema = schema.public
+
+  // Public handle for list/revoke; the token hash stays internal.
+  column "id" {
+    type    = uuid
+    null    = false
+    default = sql("gen_random_uuid()")
+  }
+
+  column "hash" {
+    type = varchar(255)
+    null = false
+  }
+
+  column "user_id" {
+    type = uuid
+    null = false
+  }
+
+  column "name" {
+    type    = text
+    null    = false
+    default = ""
+  }
+
+  // scopes are stored for forward-compat; enforcement is not yet implemented.
+  column "scopes" {
+    type    = sql("text[]")
+    null    = false
+    default = sql("'{}'")
+  }
+
+  // null = token never expires.
+  column "expires_at" {
+    type = timestamptz
+    null = true
+  }
+
+  column "last_used_at" {
+    type = timestamptz
+    null = true
+  }
+
+  column "created_at" {
+    type    = timestamptz
+    null    = false
+    default = sql("now()")
+  }
+
+  primary_key {
+    columns = [column.id]
+  }
+
+  foreign_key "fk_user" {
+    columns     = [column.user_id]
+    ref_columns = [table.users.column.id]
+    on_delete   = CASCADE
+  }
+
+  index "idx_personal_access_tokens_hash" {
+    columns = [column.hash]
+    unique  = true
+  }
+
+  index "idx_personal_access_tokens_user_id" {
+    columns = [column.user_id]
+  }
+}

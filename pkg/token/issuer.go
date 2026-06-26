@@ -212,3 +212,18 @@ func HashToken(token string) string {
 	hash := sha256.Sum256([]byte(token))
 	return base64.RawURLEncoding.EncodeToString(hash[:])
 }
+
+// PATPrefix identifies a personal access token. It lets Verify distinguish a PAT
+// from a JWT cheaply by prefix.
+const PATPrefix = "psn_"
+
+// GeneratePAT mints a personal access token. It returns the plaintext (to be
+// shown to the user once) and its SHA256 hash (to be persisted).
+func GeneratePAT() (plaintext, hash string, err error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", "", fmt.Errorf("generate pat: %w", err)
+	}
+	plaintext = PATPrefix + base64.RawURLEncoding.EncodeToString(b)
+	return plaintext, HashToken(plaintext), nil
+}

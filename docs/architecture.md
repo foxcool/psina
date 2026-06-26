@@ -25,6 +25,7 @@ Based on arc42 template + C4 model.
 
 - User registration and login (username/password)
 - JWT token issuance with refresh token flow
+- Personal access tokens for machine clients
 - JWKS endpoint for gateway validation
 - WebAuthn/Passkeys support (v0.2)
 - Ethereum wallet signature auth (v0.3)
@@ -211,5 +212,30 @@ Benefits:
 - curl-friendly: `curl -d '{...}' http://psina/auth.v1.AuthService/Login`
 - Standard net/http middleware works
 - OpenAPI 3.1 (grpc-gateway only has 2.0)
+
+### 4.4 Personal Access Tokens
+
+Opaque, long-lived credentials for machine clients (CI, MCP servers,
+scripts), as an alternative to short-lived JWTs:
+
+- **Format**: `psn_` prefix + 32 random bytes (base64url). The prefix lets
+  `Verify` route cheaply: PATs go to a store lookup, everything else stays on
+  the stateless JWT path. ForwardAuth therefore accepts both.
+- **Storage**: only the SHA256 hash is persisted; the plaintext is returned
+  exactly once at creation. The public handle (`id`) is a separate UUID, so
+  the hash algorithm is not frozen into the API.
+- **Revocation**: a row delete — no revocation list, no token state machine.
+- **Management requires a session**: create/list/revoke RPCs reject PATs and
+  accept only access JWTs. A leaked PAT cannot mint replacements or revoke
+  siblings.
+- **Limits**: per-user count cap and optional max TTL, enforced in the
+  service layer (`auth.PATConfig`). Last-used tracking is throttled
+  (`TouchInterval`) to avoid a DB write per verification on the hot
+  ForwardAuth path.
+- **Scopes**: stored for forward compatibility, not yet enforced.
+
+PAT support is optional: the feature is off unless `auth.WithPAT(store, cfg)`
+is passed to `auth.NewService` (the standalone server wires this from the
+`pat.*` config keys, enabled by default).
 
 ---

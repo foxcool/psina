@@ -99,7 +99,7 @@ func (db *TestDB) Close(ctx context.Context) {
 // Truncate clears all tables for test isolation.
 func (db *TestDB) Truncate(ctx context.Context) error {
 	_, err := db.Pool.Exec(ctx, `
-		TRUNCATE TABLE refresh_tokens, local_credentials, users CASCADE
+		TRUNCATE TABLE personal_access_tokens, refresh_tokens, local_credentials, users CASCADE
 	`)
 	return err
 }

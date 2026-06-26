@@ -14,6 +14,7 @@ Lightweight, embeddable authentication service for Go microservices.
 - **Connect RPC** — gRPC + HTTP/JSON on same port, curl-friendly
 - **Stateless JWT** — RS256 with JWKS endpoint for gateway validation
 - **Refresh token rotation** — automatic token family revocation on reuse detection
+- **Personal access tokens** — opaque, revocable `psn_` tokens for machine clients
 - **Gateway-ready** — Traefik ForwardAuth, KrakenD JWKS, any OIDC-compatible gateway
 
 ## Quick Start
@@ -61,7 +62,9 @@ func main() {
     store, _ := postgres.NewWithDSN(ctx, dbURL)
     issuer, _ := token.NewWithKey(privateKey)
     provider := local.New(store, store)
-    service := auth.NewService(provider, store, store, issuer)
+    service := auth.NewService(provider, store, store, issuer,
+        auth.WithPAT(store, auth.PATConfig{}), // optional: personal access tokens
+    )
     handler := auth.NewHandler(service)
     
     // Mount on your HTTP mux
@@ -106,7 +109,10 @@ curl http://localhost:8080/.well-known/jwks.json
 | `POST /auth.v1.AuthService/Login` | Authenticate, returns tokens |
 | `POST /auth.v1.AuthService/Refresh` | Refresh access token (with rotation) |
 | `POST /auth.v1.AuthService/Logout` | Revoke refresh token family |
-| `POST /auth.v1.AuthService/Verify` | Validate token (ForwardAuth) |
+| `POST /auth.v1.AuthService/Verify` | Validate token — access JWT or PAT (ForwardAuth) |
+| `POST /auth.v1.AuthService/CreatePersonalAccessToken` | Mint a PAT (session JWT required) |
+| `POST /auth.v1.AuthService/ListPersonalAccessTokens` | List caller's PATs (session JWT required) |
+| `POST /auth.v1.AuthService/RevokePersonalAccessToken` | Revoke a PAT by id (session JWT required) |
 | `GET /.well-known/jwks.json` | Public keys for JWT validation |
 | `GET /verify` | HTTP ForwardAuth endpoint (Traefik) |
 | `GET /healthz` | Liveness probe |
@@ -130,6 +136,10 @@ Environment variables (prefix `PSINA_`):
 | `PSINA_COOKIE_SECURE` | `true` | HTTPS-only cookies |
 | `PSINA_COOKIE_SAMESITE` | `strict` | Cookie SameSite: strict, lax, none |
 | `PSINA_COOKIE_PATH` | `/` | Cookie path |
+| `PSINA_PAT_ENABLED` | `true` | Enable personal access tokens |
+| `PSINA_PAT_MAXPERUSER` | `50` | Max PATs per user; `-1` = unlimited |
+| `PSINA_PAT_MAXTTL` | `0s` | Max PAT lifetime; `0s` = unlimited |
+| `PSINA_PAT_TOUCHINTERVAL` | `1m` | Min interval between last-used updates; `-1ns` = every verify |
 | `PSINA_LOGGER_LEVEL` | `info` | Log level: debug, info, warn, error |
 | `PSINA_LOGGER_FORMAT` | `json` | Log format: json, text |
 
@@ -149,6 +159,11 @@ cookie:
   domain: "example.com"
   secure: true
   sameSite: strict
+pat:
+  enabled: true
+  maxPerUser: 50
+  maxTTL: 0s        # 0s = unlimited
+  touchInterval: 1m
 logger:
   level: info
   format: json
@@ -164,6 +179,17 @@ logger:
 | Refresh Token TTL | 7 days | Stored hashed (SHA256) |
 | JWT Algorithm | RS256/ES256 | Configurable, ES256 = smaller tokens |
 | Password Hash | Argon2id | OWASP recommended: 64MB memory, 3 iterations |
+| Personal Access Tokens | opaque `psn_` | Stored hashed (SHA256), revocable, optional expiry |
+
+### Personal Access Tokens
+
+Long-lived opaque tokens for machine clients (CI, MCP servers, scripts). The
+plaintext is shown exactly once at creation; only its SHA256 hash is stored.
+`Verify` accepts PATs alongside access JWTs, so ForwardAuth works for both.
+
+Management RPCs (create/list/revoke) require a session JWT — a PAT cannot
+mint, list, or revoke PATs, so a leaked token cannot escalate. Scopes are
+stored for forward compatibility but not enforced yet.
 
 ### Refresh Token Rotation
 

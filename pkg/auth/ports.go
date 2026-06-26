@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"time"
 
 	"github.com/foxcool/psina/pkg/entity"
 	"github.com/go-jose/go-jose/v4"
@@ -46,6 +47,25 @@ type TokenStore interface {
 	// Works for both single token revocation and family revocation.
 	// Query: WHERE hash = $1 OR parent = $1
 	RevokeTokens(ctx context.Context, hash string) error
+}
+
+// PATStore handles personal access token persistence.
+type PATStore interface {
+	// SavePAT persists a personal access token.
+	SavePAT(ctx context.Context, pat *entity.PersonalAccessToken) error
+
+	// GetPAT retrieves a personal access token by its hash.
+	GetPAT(ctx context.Context, hash string) (*entity.PersonalAccessToken, error)
+
+	// ListPATs returns all personal access tokens for a user.
+	ListPATs(ctx context.Context, userID string) ([]*entity.PersonalAccessToken, error)
+
+	// DeletePAT removes a token by its UUID, scoped to its owner to prevent
+	// cross-user deletion.
+	DeletePAT(ctx context.Context, userID, id string) error
+
+	// TouchPAT records last-used time. Best-effort; callers may ignore the error.
+	TouchPAT(ctx context.Context, hash string, t time.Time) error
 }
 
 // CredentialStore handles password hash persistence for local auth.

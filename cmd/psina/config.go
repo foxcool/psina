@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
+	"github.com/foxcool/psina/pkg/auth"
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/confmap"
 	"github.com/knadh/koanf/providers/env"
@@ -38,6 +40,12 @@ type Config struct {
 		SameSite string `koanf:"samesite"` // "strict", "lax", "none"
 		Path     string `koanf:"path"`     // Cookie path (default: "/")
 	} `koanf:"cookie"`
+	PAT struct {
+		Enabled       bool          `koanf:"enabled"`       // Personal access tokens (default: true)
+		MaxPerUser    int           `koanf:"maxperuser"`    // Max tokens per user; -1 = unlimited (default: 50)
+		MaxTTL        time.Duration `koanf:"maxttl"`        // Max token lifetime; 0 = unlimited
+		TouchInterval time.Duration `koanf:"touchinterval"` // Min interval between last-used updates; -1 = every verify (default: 1m)
+	} `koanf:"pat"`
 }
 
 func loadConfig() (*Config, error) {
@@ -45,15 +53,19 @@ func loadConfig() (*Config, error) {
 
 	// Default values
 	defaults := map[string]any{
-		"logger.level":    "info",
-		"logger.format":   "json",
-		"server.port":     8080,
-		"db.tableprefix":  "",
-		"jwt.algorithm":   "RS256",
-		"cookie.enabled":  false,
-		"cookie.secure":   true,
-		"cookie.samesite": "strict",
-		"cookie.path":     "/",
+		"logger.level":      "info",
+		"logger.format":     "json",
+		"server.port":       8080,
+		"db.tableprefix":    "",
+		"jwt.algorithm":     "RS256",
+		"cookie.enabled":    false,
+		"cookie.secure":     true,
+		"cookie.samesite":   "strict",
+		"cookie.path":       "/",
+		"pat.enabled":       true,
+		"pat.maxperuser":    auth.DefaultPATMaxPerUser,
+		"pat.maxttl":        "0s",
+		"pat.touchinterval": auth.DefaultPATTouchInterval.String(),
 	}
 	if err := k.Load(confmap.Provider(defaults, "."), nil); err != nil {
 		return nil, fmt.Errorf("load defaults: %w", err)

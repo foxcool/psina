@@ -39,6 +39,7 @@ type Store struct {
 	tableUsers            string
 	tableLocalCredentials string
 	tableRefreshTokens    string
+	tablePATs             string
 }
 
 // Option configures the Store.
@@ -109,6 +110,7 @@ func (s *Store) initTableNames() {
 	s.tableUsers = s.tablePrefix + "users"
 	s.tableLocalCredentials = s.tablePrefix + "local_credentials"
 	s.tableRefreshTokens = s.tablePrefix + "refresh_tokens"
+	s.tablePATs = s.tablePrefix + "personal_access_tokens"
 }
 
 // TablePrefix returns the current table prefix.
@@ -261,6 +263,115 @@ func (s *Store) RevokeTokens(ctx context.Context, hash string) error {
 	_, err := s.pool.Exec(ctx, query, hash)
 	if err != nil {
 		return fmt.Errorf("revoke tokens: %w", err)
+	}
+
+	return nil
+}
+
+// --- PATStore implementation ---
+
+// SavePAT persists a personal access token.
+func (s *Store) SavePAT(ctx context.Context, pat *entity.PersonalAccessToken) error {
+	if pat.CreatedAt.IsZero() {
+		pat.CreatedAt = time.Now()
+	}
+
+	// pgx encodes a nil slice as SQL NULL, which violates the NOT NULL scopes
+	// column (the '{}' default only applies when the column is omitted). Coalesce
+	// to an empty array so PATs created without scopes persist cleanly.
+	scopes := pat.Scopes
+	if scopes == nil {
+		scopes = []string{}
+	}
+
+	query := fmt.Sprintf(`
+		INSERT INTO %s (id, hash, user_id, name, scopes, expires_at, last_used_at, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	`, s.tablePATs)
+
+	_, err := s.pool.Exec(ctx, query,
+		pat.ID, pat.Hash, pat.UserID, pat.Name, scopes, pat.ExpiresAt, pat.LastUsedAt, pat.CreatedAt)
+	if err != nil {
+		return fmt.Errorf("insert pat: %w", err)
+	}
+
+	return nil
+}
+
+// GetPAT retrieves a personal access token by its hash.
+func (s *Store) GetPAT(ctx context.Context, hash string) (*entity.PersonalAccessToken, error) {
+	query := fmt.Sprintf(`
+		SELECT id, hash, user_id, name, scopes, expires_at, last_used_at, created_at
+		FROM %s
+		WHERE hash = $1
+	`, s.tablePATs)
+
+	pat := &entity.PersonalAccessToken{}
+	err := s.pool.QueryRow(ctx, query, hash).Scan(
+		&pat.ID, &pat.Hash, &pat.UserID, &pat.Name, &pat.Scopes, &pat.ExpiresAt, &pat.LastUsedAt, &pat.CreatedAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, store.ErrTokenNotFound
+		}
+		return nil, fmt.Errorf("query pat: %w", err)
+	}
+
+	return pat, nil
+}
+
+// ListPATs returns all personal access tokens for a user.
+func (s *Store) ListPATs(ctx context.Context, userID string) ([]*entity.PersonalAccessToken, error) {
+	query := fmt.Sprintf(`
+		SELECT id, hash, user_id, name, scopes, expires_at, last_used_at, created_at
+		FROM %s
+		WHERE user_id = $1
+		ORDER BY created_at DESC
+	`, s.tablePATs)
+
+	rows, err := s.pool.Query(ctx, query, userID)
+	if err != nil {
+		return nil, fmt.Errorf("query pats: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*entity.PersonalAccessToken
+	for rows.Next() {
+		pat := &entity.PersonalAccessToken{}
+		if err := rows.Scan(
+			&pat.ID, &pat.Hash, &pat.UserID, &pat.Name, &pat.Scopes, &pat.ExpiresAt, &pat.LastUsedAt, &pat.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan pat: %w", err)
+		}
+		out = append(out, pat)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate pats: %w", err)
+	}
+
+	return out, nil
+}
+
+// DeletePAT removes a token by its UUID, scoped to its owner.
+func (s *Store) DeletePAT(ctx context.Context, userID, id string) error {
+	query := fmt.Sprintf(`DELETE FROM %s WHERE id = $1 AND user_id = $2`, s.tablePATs)
+
+	result, err := s.pool.Exec(ctx, query, id, userID)
+	if err != nil {
+		return fmt.Errorf("delete pat: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return store.ErrTokenNotFound
+	}
+
+	return nil
+}
+
+// TouchPAT records last-used time.
+func (s *Store) TouchPAT(ctx context.Context, hash string, t time.Time) error {
+	query := fmt.Sprintf(`UPDATE %s SET last_used_at = $2 WHERE hash = $1`, s.tablePATs)
+
+	_, err := s.pool.Exec(ctx, query, hash, t)
+	if err != nil {
+		return fmt.Errorf("touch pat: %w", err)
 	}
 
 	return nil

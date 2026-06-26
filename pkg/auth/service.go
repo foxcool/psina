@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/foxcool/psina/pkg/entity"
+	"github.com/foxcool/psina/pkg/store"
 	"github.com/foxcool/psina/pkg/token"
 	"github.com/go-jose/go-jose/v4"
+	"github.com/google/uuid"
 )
 
 // Ensure token.Issuer implements TokenIssuer interface.
@@ -22,7 +25,30 @@ var (
 	ErrTokenRevoked       = errors.New("refresh token revoked")
 	ErrTokenExpired       = errors.New("refresh token expired")
 	ErrTokenReuse         = errors.New("refresh token reuse detected")
+	ErrPATDisabled        = errors.New("personal access tokens are disabled")
+	ErrPATLimitReached    = errors.New("personal access token limit reached")
+	ErrPATNameRequired    = errors.New("personal access token name is required")
+	ErrPATNameTooLong     = errors.New("personal access token name is too long")
+	ErrPATExpiryInvalid   = errors.New("personal access token expiry is invalid")
 )
+
+// PAT defaults (applied by WithPAT for zero-value PATConfig fields).
+const (
+	DefaultPATMaxPerUser    = 50
+	DefaultPATTouchInterval = time.Minute
+	maxPATNameLength        = 100
+)
+
+// PATConfig tunes personal access token behavior.
+type PATConfig struct {
+	// MaxPerUser limits how many PATs a user may hold. 0 = default, -1 = unlimited.
+	MaxPerUser int
+	// MaxTTL caps the lifetime of a new PAT. 0 = unlimited.
+	MaxTTL time.Duration
+	// TouchInterval throttles last-used updates on Verify.
+	// 0 = default, -1 = update on every verification.
+	TouchInterval time.Duration
+}
 
 // TokenReuseError contains user context for security logging.
 type TokenReuseError struct {
@@ -43,6 +69,28 @@ type Service struct {
 	tokenStore TokenStore
 	userStore  UserStore
 	issuer     TokenIssuer
+
+	// PAT support is optional; nil patStore means the feature is disabled.
+	patStore  PATStore
+	patConfig PATConfig
+}
+
+// ServiceOption configures the Service.
+type ServiceOption func(*Service)
+
+// WithPAT enables personal access tokens. Zero-value config fields fall back
+// to defaults (DefaultPATMaxPerUser, DefaultPATTouchInterval, unlimited TTL).
+func WithPAT(store PATStore, cfg PATConfig) ServiceOption {
+	if cfg.MaxPerUser == 0 {
+		cfg.MaxPerUser = DefaultPATMaxPerUser
+	}
+	if cfg.TouchInterval == 0 {
+		cfg.TouchInterval = DefaultPATTouchInterval
+	}
+	return func(s *Service) {
+		s.patStore = store
+		s.patConfig = cfg
+	}
 }
 
 // NewService creates a new authentication service.
@@ -51,13 +99,18 @@ func NewService(
 	tokenStore TokenStore,
 	userStore UserStore,
 	issuer TokenIssuer,
+	opts ...ServiceOption,
 ) *Service {
-	return &Service{
+	s := &Service{
 		provider:   provider,
 		tokenStore: tokenStore,
 		userStore:  userStore,
 		issuer:     issuer,
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // RegisterResult contains registration result.
@@ -187,9 +240,130 @@ func (s *Service) Logout(ctx context.Context, refreshToken string) error {
 	return s.tokenStore.RevokeTokens(ctx, hash)
 }
 
-// Verify validates an access token and returns claims.
+// Verify validates a credential and returns claims. It accepts both short-lived
+// access JWTs and opaque personal access tokens (distinguished by prefix).
 func (s *Service) Verify(ctx context.Context, accessToken string) (*entity.Claims, error) {
+	if strings.HasPrefix(accessToken, token.PATPrefix) {
+		return s.verifyPAT(ctx, accessToken)
+	}
 	return s.issuer.ParseToken(accessToken)
+}
+
+// verifyPAT validates an opaque personal access token via DB lookup.
+func (s *Service) verifyPAT(ctx context.Context, accessToken string) (*entity.Claims, error) {
+	if s.patStore == nil {
+		return nil, ErrInvalidCredentials
+	}
+
+	pat, err := s.patStore.GetPAT(ctx, token.HashToken(accessToken))
+	if err != nil {
+		return nil, ErrInvalidCredentials
+	}
+
+	if pat.ExpiresAt != nil && time.Now().After(*pat.ExpiresAt) {
+		return nil, ErrTokenExpired
+	}
+
+	user, err := s.userStore.GetByID(ctx, pat.UserID)
+	if err != nil {
+		if errors.Is(err, store.ErrUserNotFound) {
+			return nil, ErrInvalidCredentials
+		}
+		return nil, fmt.Errorf("get user: %w", err)
+	}
+
+	// Best-effort, throttled last-used tracking; never fail verification on it.
+	if s.patConfig.TouchInterval < 0 ||
+		pat.LastUsedAt == nil ||
+		time.Since(*pat.LastUsedAt) >= s.patConfig.TouchInterval {
+		_ = s.patStore.TouchPAT(ctx, pat.Hash, time.Now())
+	}
+
+	return &entity.Claims{
+		UserID: user.ID,
+		Email:  user.Email,
+		Issuer: token.JWTIssuer,
+	}, nil
+}
+
+// PATResult is a created personal access token. Plaintext is present only at
+// creation time and is never persisted.
+type PATResult struct {
+	Plaintext string
+	Token     *entity.PersonalAccessToken
+}
+
+// CreatePAT mints a personal access token for a user.
+func (s *Service) CreatePAT(ctx context.Context, userID, name string, scopes []string, expiresAt *time.Time) (*PATResult, error) {
+	if s.patStore == nil {
+		return nil, ErrPATDisabled
+	}
+
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, ErrPATNameRequired
+	}
+	if len(name) > maxPATNameLength {
+		return nil, ErrPATNameTooLong
+	}
+
+	now := time.Now()
+	if expiresAt != nil {
+		if !expiresAt.After(now) {
+			return nil, fmt.Errorf("%w: expiry is in the past", ErrPATExpiryInvalid)
+		}
+		if s.patConfig.MaxTTL > 0 && expiresAt.Sub(now) > s.patConfig.MaxTTL {
+			return nil, fmt.Errorf("%w: expiry exceeds max ttl %s", ErrPATExpiryInvalid, s.patConfig.MaxTTL)
+		}
+	} else if s.patConfig.MaxTTL > 0 {
+		return nil, fmt.Errorf("%w: expiry is required (max ttl %s)", ErrPATExpiryInvalid, s.patConfig.MaxTTL)
+	}
+
+	if s.patConfig.MaxPerUser > 0 {
+		existing, err := s.patStore.ListPATs(ctx, userID)
+		if err != nil {
+			return nil, fmt.Errorf("list pats: %w", err)
+		}
+		if len(existing) >= s.patConfig.MaxPerUser {
+			return nil, ErrPATLimitReached
+		}
+	}
+
+	plaintext, hash, err := token.GeneratePAT()
+	if err != nil {
+		return nil, fmt.Errorf("generate pat: %w", err)
+	}
+
+	pat := &entity.PersonalAccessToken{
+		ID:        uuid.NewString(),
+		Hash:      hash,
+		UserID:    userID,
+		Name:      name,
+		Scopes:    scopes,
+		ExpiresAt: expiresAt,
+		CreatedAt: now,
+	}
+	if err := s.patStore.SavePAT(ctx, pat); err != nil {
+		return nil, fmt.Errorf("save pat: %w", err)
+	}
+
+	return &PATResult{Plaintext: plaintext, Token: pat}, nil
+}
+
+// ListPATs returns a user's personal access tokens (metadata only, no secrets).
+func (s *Service) ListPATs(ctx context.Context, userID string) ([]*entity.PersonalAccessToken, error) {
+	if s.patStore == nil {
+		return nil, ErrPATDisabled
+	}
+	return s.patStore.ListPATs(ctx, userID)
+}
+
+// RevokePAT deletes a personal access token (by its UUID) owned by the user.
+func (s *Service) RevokePAT(ctx context.Context, userID, id string) error {
+	if s.patStore == nil {
+		return ErrPATDisabled
+	}
+	return s.patStore.DeletePAT(ctx, userID, id)
 }
 
 // JWKS returns the JSON Web Key Set for public key verification.

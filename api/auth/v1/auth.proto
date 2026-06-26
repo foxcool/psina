@@ -10,6 +10,13 @@ service AuthService {
   rpc Refresh(RefreshRequest) returns (RefreshResponse);
   rpc Logout(LogoutRequest) returns (LogoutResponse);
   rpc Verify(VerifyRequest) returns (VerifyResponse);
+
+  // Personal access tokens. The caller is identified by the Authorization
+  // header; requests never carry a user_id. Only session (JWT) access tokens
+  // are accepted here — a PAT cannot manage PATs.
+  rpc CreatePersonalAccessToken(CreatePersonalAccessTokenRequest) returns (CreatePersonalAccessTokenResponse);
+  rpc ListPersonalAccessTokens(ListPersonalAccessTokensRequest) returns (ListPersonalAccessTokensResponse);
+  rpc RevokePersonalAccessToken(RevokePersonalAccessTokenRequest) returns (RevokePersonalAccessTokenResponse);
 }
 
 message RegisterRequest {
@@ -62,4 +69,40 @@ message VerifyResponse {
   string user_id = 1;
   string email = 2;
   // Headers for gateway: X-User-Id, X-User-Email
+}
+
+// PersonalAccessToken is the metadata view of a PAT. The secret is never
+// returned here — only at creation time in CreatePersonalAccessTokenResponse.
+message PersonalAccessToken {
+  string name = 1;
+  repeated string scopes = 2;
+  int64 created_at = 3;            // unix seconds
+  int64 expires_at = 4;           // unix seconds; 0 = never expires
+  int64 last_used_at = 5;         // unix seconds; 0 = never used
+  string id = 6;                  // UUID, used as the revoke handle
+}
+
+message CreatePersonalAccessTokenRequest {
+  string name = 1;
+  repeated string scopes = 2;
+  int64 expires_at = 3;           // unix seconds; 0 = never expires
+}
+
+message CreatePersonalAccessTokenResponse {
+  string token = 1;               // plaintext secret, shown exactly once
+  PersonalAccessToken pat = 2;
+}
+
+message ListPersonalAccessTokensRequest {}
+
+message ListPersonalAccessTokensResponse {
+  repeated PersonalAccessToken pats = 1;
+}
+
+message RevokePersonalAccessTokenRequest {
+  string id = 1;                  // UUID returned by Create/List
+}
+
+message RevokePersonalAccessTokenResponse {
+  bool success = 1;
 }

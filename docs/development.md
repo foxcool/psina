@@ -111,8 +111,14 @@ Automatically:
 - Builds psina and brings up the stand (`deploy/e2e/compose.yaml`,
   profiles `traefik` + `krakend`, fronting a `traefik/whoami` backend)
 - Runs the Go driver (`test/e2e`, build tag `e2e`): no token → 401,
-  bad token → 401, valid token → 200, identity propagated
+  bad token → 401, expired (valid-signature) token → 401, valid token →
+  200 with identity/claims propagated to the backend, plus cookie-based
+  auth through Traefik ForwardAuth
 - Tears the stand down (even on failure)
+
+The stand mounts a fixed RSA signing key (generated on first run,
+gitignored) so the driver can forge an expired-but-valid token and so
+KrakenD's JWKS cache stays stable.
 
 ## Project Structure
 

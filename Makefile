@@ -61,13 +61,17 @@ test-integration:
 # Uses a dedicated project name so it never clobbers the dev stack (make up).
 # Brings the stand up, runs the Go driver, then always tears it down.
 E2E_PROJECT=docker compose -p psina-e2e -f $(E2E_COMPOSE) --profile traefik --profile krakend
+E2E_JWT_KEY=deploy/e2e/jwt-test-key.pem
 test-e2e:
+	@test -f $(E2E_JWT_KEY) || (echo "Generating e2e JWT signing key..."; \
+		openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out $(E2E_JWT_KEY))
 	@echo "Starting e2e gateway stand..."
 	$(E2E_PROJECT) up --build -d --wait
 	@echo "Running e2e tests..."
 	E2E_TRAEFIK_URL=http://localhost:8085 \
 	E2E_KRAKEND_URL=http://localhost:8090 \
 	E2E_PSINA_URL=http://localhost:8088 \
+	E2E_JWT_KEY_PATH=$(CURDIR)/$(E2E_JWT_KEY) \
 	go test -v -tags=e2e -count=1 ./test/e2e/... ; \
 	status=$$? ; \
 	echo "Tearing down e2e stand..." ; \

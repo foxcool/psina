@@ -381,6 +381,7 @@ func patToProto(pat *entity.PersonalAccessToken) *authv1.PersonalAccessToken {
 // setTokenCookies sets access and refresh token cookies.
 func (h *Handler) setTokenCookies(header http.Header, accessToken, refreshToken string) {
 	// Access token cookie (shorter lived)
+	// #nosec G124 -- Secure is driven by cookieConfig; deployments set it true behind TLS, dev needs http
 	accessCookie := &http.Cookie{
 		Name:     AccessTokenCookie,
 		Value:    accessToken,
@@ -395,6 +396,7 @@ func (h *Handler) setTokenCookies(header http.Header, accessToken, refreshToken 
 	header.Add("Set-Cookie", accessCookie.String())
 
 	// Refresh token cookie (longer lived)
+	// #nosec G124 -- Secure is driven by cookieConfig; deployments set it true behind TLS, dev needs http
 	refreshCookie := &http.Cookie{
 		Name:     RefreshTokenCookie,
 		Value:    refreshToken,
@@ -412,6 +414,7 @@ func (h *Handler) setTokenCookies(header http.Header, accessToken, refreshToken 
 // clearTokenCookies removes token cookies.
 func (h *Handler) clearTokenCookies(header http.Header) {
 	// Clear access token cookie
+	// #nosec G124 -- empty-value cookie clear; Secure mirrors cookieConfig used when set
 	accessCookie := &http.Cookie{
 		Name:     AccessTokenCookie,
 		Value:    "",
@@ -426,6 +429,7 @@ func (h *Handler) clearTokenCookies(header http.Header) {
 	header.Add("Set-Cookie", accessCookie.String())
 
 	// Clear refresh token cookie
+	// #nosec G124 -- empty-value cookie clear; Secure mirrors cookieConfig used when set
 	refreshCookie := &http.Cookie{
 		Name:     RefreshTokenCookie,
 		Value:    "",

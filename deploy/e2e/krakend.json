@@ -1,0 +1,35 @@
+{
+  "$schema": "https://www.krakend.io/schema/krakend.json",
+  "version": 3,
+  "name": "psina-e2e-krakend",
+  "port": 8080,
+  "timeout": "10s",
+  "endpoints": [
+    {
+      "endpoint": "/api/whoami",
+      "method": "GET",
+      "output_encoding": "no-op",
+      "input_headers": ["X-User-Id", "X-User-Email"],
+      "extra_config": {
+        "auth/validator": {
+          "alg": "RS256",
+          "jwk_url": "http://psina:8080/.well-known/jwks.json",
+          "issuer": "psina",
+          "cache": true,
+          "disable_jwk_security": true,
+          "propagate_claims": [
+            ["sub", "X-User-Id"],
+            ["email", "X-User-Email"]
+          ]
+        }
+      },
+      "backend": [
+        {
+          "url_pattern": "/",
+          "encoding": "no-op",
+          "host": ["http://whoami-krakend:80"]
+        }
+      ]
+    }
+  ]
+}

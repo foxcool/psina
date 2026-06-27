@@ -93,6 +93,7 @@ make help              # list all targets
 
 make test-unit         # unit tests, no Docker needed
 make test-integration  # integration tests, requires Docker
+make test-e2e          # gateway e2e stand (Traefik + KrakenD), requires Docker
 
 make gen               # buf generate + go generate
 make schema-apply      # Atlas declarative apply (via Docker Compose)

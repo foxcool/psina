@@ -4,8 +4,10 @@ BUF=$(shell which buf)
 COMPOSE=docker compose -p psina
 # Path to the compose file
 COMPOSE_FILE=deploy/compose.yaml
+# Path to the e2e gateway stand compose file
+E2E_COMPOSE=deploy/e2e/compose.yaml
 
-.PHONY: gen buf-gen go-gen test test-unit test-integration up down clean logs help schema-apply schema-diff
+.PHONY: gen buf-gen go-gen test test-unit test-integration test-e2e up down clean logs help schema-apply schema-diff
 
 # Default target
 help:
@@ -16,6 +18,7 @@ help:
 	@echo "  test              - Run all tests"
 	@echo "  test-unit         - Run unit tests only"
 	@echo "  test-integration  - Run integration tests (requires Atlas CLI)"
+	@echo "  test-e2e          - Run e2e gateway tests (Traefik + KrakenD stand)"
 	@echo "  schema-apply      - Apply schema to database (declarative)"
 	@echo "  schema-diff       - Show schema diff without applying"
 	@echo "  up                - Start development environment"
@@ -53,6 +56,27 @@ test-unit:
 test-integration:
 	@echo "Running integration tests..."
 	go test -v -tags=integration -coverprofile=coverage-integration.out ./pkg/...
+
+# Run e2e gateway tests against a docker compose stand (Traefik + KrakenD).
+# Uses a dedicated project name so it never clobbers the dev stack (make up).
+# Brings the stand up, runs the Go driver, then always tears it down.
+E2E_PROJECT=docker compose -p psina-e2e -f $(E2E_COMPOSE) --profile traefik --profile krakend
+E2E_JWT_KEY=deploy/e2e/jwt-test-key.pem
+test-e2e:
+	@test -f $(E2E_JWT_KEY) || (echo "Generating e2e JWT signing key..."; \
+		openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out $(E2E_JWT_KEY))
+	@echo "Starting e2e gateway stand..."
+	$(E2E_PROJECT) up --build -d --wait
+	@echo "Running e2e tests..."
+	E2E_TRAEFIK_URL=http://localhost:8085 \
+	E2E_KRAKEND_URL=http://localhost:8090 \
+	E2E_PSINA_URL=http://localhost:8088 \
+	E2E_JWT_KEY_PATH=$(CURDIR)/$(E2E_JWT_KEY) \
+	go test -v -tags=e2e -count=1 ./test/e2e/... ; \
+	status=$$? ; \
+	echo "Tearing down e2e stand..." ; \
+	$(E2E_PROJECT) down -v --remove-orphans ; \
+	exit $$status
 
 # Atlas: apply schema declaratively (runs inside compose network)
 schema-apply:

@@ -16,6 +16,14 @@ table "users" {
     null = false
   }
 
+  // Opaque role strings emitted in JWT claims and Verify responses.
+  // psina stores them without interpretation; authorization stays in the application.
+  column "roles" {
+    type    = sql("text[]")
+    null    = false
+    default = sql("'{}'")
+  }
+
   column "created_at" {
     type    = timestamptz
     null    = false

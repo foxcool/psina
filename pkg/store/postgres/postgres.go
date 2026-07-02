@@ -140,12 +140,19 @@ func (s *Store) Create(ctx context.Context, user *entity.User) error {
 		user.UpdatedAt = now
 	}
 
+	// pgx encodes a nil slice as SQL NULL, which violates the NOT NULL roles
+	// column (the '{}' default only applies when the column is omitted).
+	roles := user.Roles
+	if roles == nil {
+		roles = []string{}
+	}
+
 	query := fmt.Sprintf(`
-		INSERT INTO %s (id, email, created_at, updated_at)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO %s (id, email, roles, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5)
 	`, s.tableUsers)
 
-	_, err := s.pool.Exec(ctx, query, user.ID, user.Email, user.CreatedAt, user.UpdatedAt)
+	_, err := s.pool.Exec(ctx, query, user.ID, user.Email, roles, user.CreatedAt, user.UpdatedAt)
 	if err != nil {
 		if isDuplicateKeyError(err) {
 			return fmt.Errorf("%w: %s", store.ErrUserExists, user.Email)
@@ -159,13 +166,13 @@ func (s *Store) Create(ctx context.Context, user *entity.User) error {
 // GetByID retrieves a user by ID.
 func (s *Store) GetByID(ctx context.Context, id string) (*entity.User, error) {
 	query := fmt.Sprintf(`
-		SELECT id, email, created_at, updated_at
+		SELECT id, email, roles, created_at, updated_at
 		FROM %s
 		WHERE id = $1
 	`, s.tableUsers)
 
 	user := &entity.User{}
-	err := s.pool.QueryRow(ctx, query, id).Scan(&user.ID, &user.Email, &user.CreatedAt, &user.UpdatedAt)
+	err := s.pool.QueryRow(ctx, query, id).Scan(&user.ID, &user.Email, &user.Roles, &user.CreatedAt, &user.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, fmt.Errorf("%w: %s", store.ErrUserNotFound, id)
@@ -179,13 +186,13 @@ func (s *Store) GetByID(ctx context.Context, id string) (*entity.User, error) {
 // GetByEmail retrieves a user by email address.
 func (s *Store) GetByEmail(ctx context.Context, email string) (*entity.User, error) {
 	query := fmt.Sprintf(`
-		SELECT id, email, created_at, updated_at
+		SELECT id, email, roles, created_at, updated_at
 		FROM %s
 		WHERE email = $1
 	`, s.tableUsers)
 
 	user := &entity.User{}
-	err := s.pool.QueryRow(ctx, query, email).Scan(&user.ID, &user.Email, &user.CreatedAt, &user.UpdatedAt)
+	err := s.pool.QueryRow(ctx, query, email).Scan(&user.ID, &user.Email, &user.Roles, &user.CreatedAt, &user.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, fmt.Errorf("%w: %s", store.ErrUserNotFound, email)

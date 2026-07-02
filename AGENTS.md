@@ -76,7 +76,7 @@ type CredentialStore interface {
 
 // TokenIssuer handles JWT operations (extracted for testability)
 type TokenIssuer interface {
-    GenerateTokens(userID, email string) (*entity.TokenPair, string, error)
+    GenerateTokens(userID, email string, roles []string) (*entity.TokenPair, string, error)
     ParseToken(accessToken string) (*entity.Claims, error)
     JWKS() *jose.JSONWebKeySet
 }

@@ -68,7 +68,9 @@ message VerifyRequest {
 message VerifyResponse {
   string user_id = 1;
   string email = 2;
-  // Headers for gateway: X-User-Id, X-User-Email
+  // Opaque role strings from the user; psina never interprets them.
+  repeated string roles = 3;
+  // Headers for gateway: X-User-Id, X-User-Email, X-User-Roles
 }
 
 // PersonalAccessToken is the metadata view of a PAT. The secret is never

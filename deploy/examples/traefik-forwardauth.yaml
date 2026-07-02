@@ -7,7 +7,7 @@
 # 1. Client sends request to Traefik with "Authorization: Bearer <token>"
 # 2. Traefik forwards the request to psina's Verify endpoint
 # 3. psina validates the token and returns:
-#    - 200 OK with X-User-Id and X-User-Email headers (valid token)
+#    - 200 OK with X-User-Id, X-User-Email and X-User-Roles headers (valid token)
 #    - 401 Unauthorized (invalid/expired token)
 # 4. Traefik forwards original request to backend with user headers
 #
@@ -28,6 +28,7 @@ http:
         authResponseHeaders:
           - "X-User-Id"
           - "X-User-Email"
+          - "X-User-Roles"
 
   # Example: Protected API route
   routers:
@@ -88,4 +89,4 @@ http:
 #
 #   your-backend:
 #     image: your-backend:latest
-#     # Your backend can now read X-User-Id and X-User-Email headers
+#     # Your backend can now read X-User-Id, X-User-Email and X-User-Roles headers

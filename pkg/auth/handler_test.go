@@ -414,6 +414,28 @@ func TestHandler_Verify(t *testing.T) {
 		assert.Equal(t, "verify@example.com", resp.Msg.Email)
 		assert.Equal(t, resp.Msg.UserId, resp.Header().Get("X-User-Id"))
 		assert.Equal(t, resp.Msg.Email, resp.Header().Get("X-User-Email"))
+		// No roles — no header
+		assert.Empty(t, resp.Msg.Roles)
+		assert.Empty(t, resp.Header().Values("X-User-Roles"))
+	})
+
+	t.Run("roles in response and header", func(t *testing.T) {
+		handler, service, store := setupTestHandler(t)
+		ctx := context.Background()
+
+		user := &entity.User{ID: "user-123", Email: "roles@example.com", Roles: []string{"admin", "support"}}
+		require.NoError(t, store.Create(ctx, user))
+
+		result, err := service.Login(ctx, "roles@example.com", "SecurePassword123!")
+		require.NoError(t, err)
+
+		req := connect.NewRequest(&authv1.VerifyRequest{})
+		req.Header().Set("Authorization", "Bearer "+result.TokenPair.AccessToken)
+
+		resp, err := handler.Verify(ctx, req)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"admin", "support"}, resp.Msg.Roles)
+		assert.Equal(t, "admin,support", resp.Header().Get("X-User-Roles"))
 	})
 
 	t.Run("token from cookie when enabled", func(t *testing.T) {

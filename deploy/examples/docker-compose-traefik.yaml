@@ -91,4 +91,4 @@ services:
       # ForwardAuth middleware
       - "traefik.http.middlewares.psina-auth.forwardauth.address=http://psina:8080/auth.v1.AuthService/Verify"
       - "traefik.http.middlewares.psina-auth.forwardauth.authRequestHeaders=Authorization"
-      - "traefik.http.middlewares.psina-auth.forwardauth.authResponseHeaders=X-User-Id,X-User-Email"
+      - "traefik.http.middlewares.psina-auth.forwardauth.authResponseHeaders=X-User-Id,X-User-Email,X-User-Roles"

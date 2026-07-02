@@ -290,11 +290,11 @@ See [docs/architecture.md](docs/architecture.md) for details.
 | Version | Features | Status |
 |---------|----------|--------|
 | v0.1 | Local auth, JWT, PostgreSQL | ✅ Released |
-| v0.1.1 | Standalone: cookies, ES256, health probes, table prefix | ✅ Ready |
-| v0.2 | Rate limiting, Prometheus metrics, audit logging | 🚧 Next |
-| v0.3 | Passkeys (WebAuthn) | 📋 Planned |
-| v0.4 | Web3 wallet auth (SIWE) | 📋 Planned |
-| v0.5 | TOTP 2FA | 📋 Planned |
+| v0.2 | Personal access tokens, standalone (cookies, ES256, health probes, table prefix), gateway e2e, security CI | ✅ Released |
+| v0.3 | Rate limiting, Prometheus metrics, audit logging | 🚧 Next |
+| v0.4 | Passkeys (WebAuthn) | 📋 Planned |
+| v0.5 | Web3 wallet auth (SIWE) | 📋 Planned |
+| v0.6 | TOTP 2FA | 📋 Planned |
 | v1.0 | OAuth providers, stable API | 📋 Planned |
 
 ## License

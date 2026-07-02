@@ -11,7 +11,7 @@ Name origin: "psina" (рус. "псина") = "doggy" — a guard dog that knows
 
 ## Current Status
 
-**v0.1 MVP** — Local auth + personal access tokens working, ready for polish.
+**v0.2.0** — Local auth, personal access tokens, standalone deploy (cookies, ES256, health probes, table prefix), gateway e2e tests, security CI. Next: rate limiting, metrics, audit logging.
 
 ## Directory Map
 

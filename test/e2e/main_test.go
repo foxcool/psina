@@ -60,16 +60,9 @@ type registerResult struct {
 // /auth.v1.AuthService/* to psina.
 func registerRaw(t *testing.T, baseURL string) registerResult {
 	t.Helper()
-	return registerRawEmail(t, baseURL, uniqueEmail())
-}
-
-// registerRawEmail is registerRaw with a caller-chosen email (e.g. one matching
-// the stand's PSINA_ADMIN_EMAILS domain).
-func registerRawEmail(t *testing.T, baseURL, email string) registerResult {
-	t.Helper()
 
 	body, err := json.Marshal(map[string]string{
-		"email":    email,
+		"email":    uniqueEmail(),
 		"password": "securepass123",
 	})
 	if err != nil {

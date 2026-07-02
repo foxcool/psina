@@ -129,9 +129,6 @@ db:
 jwt:
   privateKeyPath: "" # empty = ephemeral key (dev only!)
   algorithm: RS256   # RS256 or ES256
-admin:
-  emails: ""         # comma-separated; "@domain" entry matches whole domain;
-                     # matched users get "admin" role in issued claims
 pat:
   enabled: true
   maxPerUser: 50     # -1 = unlimited
@@ -186,6 +183,11 @@ DefaultQueryTimeout = 5000  // milliseconds
 - **Store errors** → return typed errors from `pkg/store/errors.go`; handler maps them to Connect codes via `errors.Is()`
 - **Schema changes** → edit `schema.hcl`, then `make schema-apply` — never write raw SQL migrations
 - **Proto changes** → edit `api/auth/v1/auth.proto`, then `make gen` — never edit `pkg/api/auth/v1/` directly
+- **Roles** → opaque strings on `users.roles`, emitted in the JWT `roles` claim and
+  `VerifyResponse`/`X-User-Roles`; psina never interprets them (authorization is the
+  app's job). psina has no role-management API and does not derive roles from email —
+  assign them directly in the DB (`UPDATE users SET roles = '{admin}' WHERE email = ...`).
+  Bootstrap the first admin this way.
 
 ## Error Handling
 

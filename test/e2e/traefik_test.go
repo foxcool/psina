@@ -3,11 +3,9 @@
 package e2e_test
 
 import (
-	"fmt"
 	"net/http"
 	"strings"
 	"testing"
-	"time"
 )
 
 // TestTraefikForwardAuth verifies the ForwardAuth contract: Traefik calls
@@ -52,22 +50,6 @@ func TestTraefikForwardAuth(t *testing.T) {
 		// whoami echoes inbound headers; ForwardAuth must have injected the user id.
 		if !strings.Contains(body, reg.userID) {
 			t.Fatalf("user id %q not propagated to backend, body:\n%s", reg.userID, body)
-		}
-	})
-
-	t.Run("admin roles are propagated", func(t *testing.T) {
-		// The stand sets PSINA_ADMIN_EMAILS="@admin.e2e"; registering on that
-		// domain must yield a token whose Verify emits X-User-Roles: admin.
-		email := fmt.Sprintf("e2e-admin-%d@admin.e2e", time.Now().UnixNano())
-		reg := registerRawEmail(t, base, email)
-
-		status, body := get(t, protected, reg.accessToken)
-		if status != http.StatusOK {
-			t.Fatalf("want 200, got %d, body %s", status, body)
-		}
-		// whoami /api echoes headers as JSON.
-		if !strings.Contains(body, `"X-User-Roles":["admin"]`) {
-			t.Fatalf("X-User-Roles not propagated to backend, body:\n%s", body)
 		}
 	})
 

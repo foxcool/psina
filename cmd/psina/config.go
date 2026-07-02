@@ -40,6 +40,11 @@ type Config struct {
 		SameSite string `koanf:"samesite"` // "strict", "lax", "none"
 		Path     string `koanf:"path"`     // Cookie path (default: "/")
 	} `koanf:"cookie"`
+	Admin struct {
+		// Emails is a comma-separated list of admin emails. An entry starting
+		// with "@" matches every email on that domain.
+		Emails string `koanf:"emails"`
+	} `koanf:"admin"`
 	PAT struct {
 		Enabled       bool          `koanf:"enabled"`       // Personal access tokens (default: true)
 		MaxPerUser    int           `koanf:"maxperuser"`    // Max tokens per user; -1 = unlimited (default: 50)

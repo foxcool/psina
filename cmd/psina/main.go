@@ -120,6 +120,11 @@ func run() error {
 
 	// Initialize service
 	var serviceOpts []auth.ServiceOption
+	if config.Admin.Emails != "" {
+		entries := strings.Split(config.Admin.Emails, ",")
+		serviceOpts = append(serviceOpts, auth.WithAdminEmails(entries))
+		slog.Info("admin emails configured", "entries", len(entries))
+	}
 	if config.PAT.Enabled {
 		serviceOpts = append(serviceOpts, auth.WithPAT(patStore, auth.PATConfig{
 			MaxPerUser:    config.PAT.MaxPerUser,
@@ -246,6 +251,9 @@ func run() error {
 		// Set response headers for the gateway
 		w.Header().Set("X-User-Id", claims.UserID)
 		w.Header().Set("X-User-Email", claims.Email)
+		if len(claims.Roles) > 0 {
+			w.Header().Set("X-User-Roles", strings.Join(claims.Roles, ","))
+		}
 		w.WriteHeader(http.StatusOK)
 	})
 

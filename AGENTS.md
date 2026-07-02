@@ -129,6 +129,9 @@ db:
 jwt:
   privateKeyPath: "" # empty = ephemeral key (dev only!)
   algorithm: RS256   # RS256 or ES256
+admin:
+  emails: ""         # comma-separated; "@domain" entry matches whole domain;
+                     # matched users get "admin" role in issued claims
 pat:
   enabled: true
   maxPerUser: 50     # -1 = unlimited

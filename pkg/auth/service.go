@@ -63,12 +63,20 @@ func (e *TokenReuseError) Is(target error) bool {
 	return target == ErrTokenReuse
 }
 
+// AdminRole is merged into issued claims for users matching the configured
+// admin emails. Like all roles it is opaque to psina itself.
+const AdminRole = "admin"
+
 // Service orchestrates authentication operations.
 type Service struct {
 	provider   Provider
 	tokenStore TokenStore
 	userStore  UserStore
 	issuer     TokenIssuer
+
+	// adminEmails entries are lowercase; "@domain" entries match any email on
+	// that domain, everything else matches exactly.
+	adminEmails []string
 
 	// PAT support is optional; nil patStore means the feature is disabled.
 	patStore  PATStore
@@ -90,6 +98,24 @@ func WithPAT(store PATStore, cfg PATConfig) ServiceOption {
 	return func(s *Service) {
 		s.patStore = store
 		s.patConfig = cfg
+	}
+}
+
+// WithAdminEmails grants the admin role at token issuance and verification to
+// users whose email matches one of the entries. An entry starting with "@"
+// (e.g. "@example.com") matches every email on that domain; any other entry
+// matches exactly. Matching is case-insensitive. The role is merged into
+// issued claims only — it is never persisted on the user.
+func WithAdminEmails(entries []string) ServiceOption {
+	normalized := make([]string, 0, len(entries))
+	for _, e := range entries {
+		e = strings.ToLower(strings.TrimSpace(e))
+		if e != "" {
+			normalized = append(normalized, e)
+		}
+	}
+	return func(s *Service) {
+		s.adminEmails = normalized
 	}
 }
 
@@ -288,7 +314,7 @@ func (s *Service) verifyPAT(ctx context.Context, accessToken string) (*entity.Cl
 	return &entity.Claims{
 		UserID: user.ID,
 		Email:  user.Email,
-		Roles:  user.Roles,
+		Roles:  s.effectiveRoles(user.Email, user.Roles),
 		Issuer: token.JWTIssuer,
 	}, nil
 }
@@ -378,10 +404,41 @@ func (s *Service) JWKS() *jose.JSONWebKeySet {
 	return s.issuer.JWKS()
 }
 
+// isAdminEmail reports whether email matches a configured admin entry.
+func (s *Service) isAdminEmail(email string) bool {
+	email = strings.ToLower(email)
+	for _, entry := range s.adminEmails {
+		if strings.HasPrefix(entry, "@") {
+			if strings.HasSuffix(email, entry) {
+				return true
+			}
+		} else if email == entry {
+			return true
+		}
+	}
+	return false
+}
+
+// effectiveRoles returns the user's roles with the admin role merged in when
+// the email matches the configured admin entries. Never mutates the input.
+func (s *Service) effectiveRoles(email string, roles []string) []string {
+	if !s.isAdminEmail(email) {
+		return roles
+	}
+	for _, r := range roles {
+		if r == AdminRole {
+			return roles
+		}
+	}
+	out := make([]string, 0, len(roles)+1)
+	out = append(out, roles...)
+	return append(out, AdminRole)
+}
+
 // issueTokens generates tokens and saves refresh token to store.
 // parent is empty for new sessions, or contains the family root hash for refreshed tokens.
 func (s *Service) issueTokens(ctx context.Context, userID, email string, roles []string, parent string) (*entity.TokenPair, error) {
-	tokenPair, refreshHash, err := s.issuer.GenerateTokens(userID, email, roles)
+	tokenPair, refreshHash, err := s.issuer.GenerateTokens(userID, email, s.effectiveRoles(email, roles))
 	if err != nil {
 		return nil, fmt.Errorf("generate tokens: %w", err)
 	}

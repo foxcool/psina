@@ -151,6 +151,94 @@ func TestService_Login_InvalidCredentials(t *testing.T) {
 	assert.True(t, errors.Is(err, ErrInvalidCredentials))
 }
 
+func TestService_AdminEmails(t *testing.T) {
+	newAdminService := func(t *testing.T, entries []string) (*Service, *memory.Store) {
+		t.Helper()
+		memStore := memory.New()
+		issuer, err := token.New()
+		require.NoError(t, err)
+		service := NewService(&mockProvider{}, memStore, memStore, issuer,
+			WithPAT(memStore, PATConfig{}), WithAdminEmails(entries))
+		return service, memStore
+	}
+
+	login := func(t *testing.T, service *Service, memStore *memory.Store, email string, roles []string) *entity.Claims {
+		t.Helper()
+		ctx := context.Background()
+		user := &entity.User{ID: "user-123", Email: email, Roles: roles}
+		require.NoError(t, memStore.Create(ctx, user))
+		result, err := service.Login(ctx, email, "SecurePassword123!")
+		require.NoError(t, err)
+		claims, err := service.Verify(ctx, result.TokenPair.AccessToken)
+		require.NoError(t, err)
+		return claims
+	}
+
+	t.Run("exact email match", func(t *testing.T) {
+		service, memStore := newAdminService(t, []string{"boss@example.com"})
+		claims := login(t, service, memStore, "boss@example.com", nil)
+		assert.Equal(t, []string{AdminRole}, claims.Roles)
+	})
+
+	t.Run("domain match", func(t *testing.T) {
+		service, memStore := newAdminService(t, []string{"@example.com"})
+		claims := login(t, service, memStore, "anyone@example.com", []string{"support"})
+		assert.Equal(t, []string{"support", AdminRole}, claims.Roles)
+	})
+
+	t.Run("domain match is anchored at @", func(t *testing.T) {
+		service, memStore := newAdminService(t, []string{"@example.com"})
+		claims := login(t, service, memStore, "user@sub.example.com", nil)
+		assert.Empty(t, claims.Roles)
+	})
+
+	t.Run("case-insensitive", func(t *testing.T) {
+		service, memStore := newAdminService(t, []string{"Boss@Example.COM"})
+		claims := login(t, service, memStore, "boss@example.com", nil)
+		assert.Equal(t, []string{AdminRole}, claims.Roles)
+	})
+
+	t.Run("no duplicate when role already present", func(t *testing.T) {
+		service, memStore := newAdminService(t, []string{"boss@example.com"})
+		claims := login(t, service, memStore, "boss@example.com", []string{AdminRole})
+		assert.Equal(t, []string{AdminRole}, claims.Roles)
+	})
+
+	t.Run("non-matching email gets nothing", func(t *testing.T) {
+		service, memStore := newAdminService(t, []string{"boss@example.com", "@corp.example"})
+		claims := login(t, service, memStore, "user@example.com", nil)
+		assert.Empty(t, claims.Roles)
+	})
+
+	t.Run("PAT verification merges admin", func(t *testing.T) {
+		service, memStore := newAdminService(t, []string{"@example.com"})
+		ctx := context.Background()
+		user := &entity.User{ID: "user-123", Email: "boss@example.com"}
+		require.NoError(t, memStore.Create(ctx, user))
+
+		pat, err := service.CreatePAT(ctx, user.ID, "ci", nil, nil)
+		require.NoError(t, err)
+		claims, err := service.Verify(ctx, pat.Plaintext)
+		require.NoError(t, err)
+		assert.Equal(t, []string{AdminRole}, claims.Roles)
+	})
+
+	t.Run("refresh keeps admin role", func(t *testing.T) {
+		service, memStore := newAdminService(t, []string{"boss@example.com"})
+		ctx := context.Background()
+		user := &entity.User{ID: "user-123", Email: "boss@example.com"}
+		require.NoError(t, memStore.Create(ctx, user))
+		result, err := service.Login(ctx, "boss@example.com", "SecurePassword123!")
+		require.NoError(t, err)
+
+		refreshed, err := service.Refresh(ctx, result.TokenPair.RefreshToken)
+		require.NoError(t, err)
+		claims, err := service.Verify(ctx, refreshed.AccessToken)
+		require.NoError(t, err)
+		assert.Equal(t, []string{AdminRole}, claims.Roles)
+	})
+}
+
 func TestService_Refresh(t *testing.T) {
 	service, memStore := setupTestService(t)
 	ctx := context.Background()

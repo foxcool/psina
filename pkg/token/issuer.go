@@ -46,7 +46,8 @@ type Issuer struct {
 // customClaims extends jwt.Claims with custom fields.
 type customClaims struct {
 	jwt.Claims
-	Email string `json:"email"`
+	Email string   `json:"email"`
+	Roles []string `json:"roles,omitempty"`
 }
 
 // New creates a new Issuer with generated keys (dev only).
@@ -128,7 +129,7 @@ func (i *Issuer) Algorithm() string {
 
 // GenerateTokens creates access and refresh tokens.
 // Returns: TokenPair, refresh token hash (for storage), error.
-func (i *Issuer) GenerateTokens(userID, email string) (*entity.TokenPair, string, error) {
+func (i *Issuer) GenerateTokens(userID, email string, roles []string) (*entity.TokenPair, string, error) {
 	now := time.Now()
 
 	// Generate unique JWT ID
@@ -149,6 +150,7 @@ func (i *Issuer) GenerateTokens(userID, email string) (*entity.TokenPair, string
 			NotBefore: jwt.NewNumericDate(now.Add(-ClockSkewTolerance)),
 		},
 		Email: email,
+		Roles: roles,
 	}
 
 	// Sign access token
@@ -196,6 +198,7 @@ func (i *Issuer) ParseToken(accessToken string) (*entity.Claims, error) {
 	return &entity.Claims{
 		UserID: claims.Subject,
 		Email:  claims.Email,
+		Roles:  claims.Roles,
 		Issuer: claims.Issuer,
 		Exp:    claims.Expiry.Time().Unix(),
 		Iat:    claims.IssuedAt.Time().Unix(),

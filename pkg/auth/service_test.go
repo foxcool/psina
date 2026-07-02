@@ -87,8 +87,12 @@ func TestService_Register_ShortPassword(t *testing.T) {
 }
 
 func TestService_Login(t *testing.T) {
-	service, _ := setupTestService(t)
+	service, memStore := setupTestService(t)
 	ctx := context.Background()
+
+	// Mock provider authenticates as user-123; Login loads the user for roles
+	user := &entity.User{ID: "user-123", Email: "test@example.com"}
+	require.NoError(t, memStore.Create(ctx, user))
 
 	result, err := service.Login(ctx, "test@example.com", "SecurePassword123!")
 	require.NoError(t, err)
@@ -97,6 +101,36 @@ func TestService_Login(t *testing.T) {
 	assert.Equal(t, "test@example.com", result.Email)
 	assert.NotEmpty(t, result.TokenPair.AccessToken)
 	assert.NotEmpty(t, result.TokenPair.RefreshToken)
+}
+
+func TestService_RolesInTokens(t *testing.T) {
+	service, memStore := setupTestService(t)
+	ctx := context.Background()
+
+	user := &entity.User{ID: "user-123", Email: "test@example.com", Roles: []string{"admin"}}
+	require.NoError(t, memStore.Create(ctx, user))
+
+	// Login embeds user roles into the access JWT
+	result, err := service.Login(ctx, "test@example.com", "SecurePassword123!")
+	require.NoError(t, err)
+
+	claims, err := service.Verify(ctx, result.TokenPair.AccessToken)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"admin"}, claims.Roles)
+
+	// Refresh preserves roles in the new access token
+	refreshed, err := service.Refresh(ctx, result.TokenPair.RefreshToken)
+	require.NoError(t, err)
+	claims, err = service.Verify(ctx, refreshed.AccessToken)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"admin"}, claims.Roles)
+
+	// PAT verification returns the user's current roles
+	pat, err := service.CreatePAT(ctx, user.ID, "ci", nil, nil)
+	require.NoError(t, err)
+	claims, err = service.Verify(ctx, pat.Plaintext)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"admin"}, claims.Roles)
 }
 
 func TestService_Login_InvalidCredentials(t *testing.T) {

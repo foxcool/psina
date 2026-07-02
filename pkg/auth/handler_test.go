@@ -208,11 +208,10 @@ func TestHandler_Register(t *testing.T) {
 // TestHandler_Login tests the Login RPC handler.
 func TestHandler_Login(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
-		handler, service, _ := setupTestHandler(t)
+		handler, service, store := setupTestHandler(t)
 		ctx := context.Background()
 
-		_, err := service.Register(ctx, "login@example.com", "SecurePassword123!")
-		require.NoError(t, err)
+		registerUser(t, store, "login@example.com", "SecurePassword123!", service)
 
 		req := connect.NewRequest(&authv1.LoginRequest{
 			Email:    "login@example.com",
@@ -226,11 +225,10 @@ func TestHandler_Login(t *testing.T) {
 	})
 
 	t.Run("success with cookie", func(t *testing.T) {
-		handler, service, _ := setupCookieHandler(t)
+		handler, service, store := setupCookieHandler(t)
 		ctx := context.Background()
 
-		_, err := service.Register(ctx, "cookielogin@example.com", "SecurePassword123!")
-		require.NoError(t, err)
+		registerUser(t, store, "cookielogin@example.com", "SecurePassword123!", service)
 
 		req := connect.NewRequest(&authv1.LoginRequest{
 			Email:    "cookielogin@example.com",

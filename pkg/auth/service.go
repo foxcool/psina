@@ -143,8 +143,8 @@ func (s *Service) Register(ctx context.Context, email, password string) (*Regist
 		return nil, fmt.Errorf("register: %w", err)
 	}
 
-	// Issue tokens (new session, no parent)
-	tokenPair, err := s.issueTokens(ctx, identity.UserID, identity.Email, "")
+	// Issue tokens (new session, no parent; fresh users have no roles)
+	tokenPair, err := s.issueTokens(ctx, identity.UserID, identity.Email, nil, "")
 	if err != nil {
 		return nil, fmt.Errorf("issue tokens: %w", err)
 	}
@@ -181,8 +181,14 @@ func (s *Service) Login(ctx context.Context, email, password string) (*LoginResu
 		return nil, ErrInvalidCredentials
 	}
 
+	// Load the user to pick up roles for the JWT
+	user, err := s.userStore.GetByID(ctx, identity.UserID)
+	if err != nil {
+		return nil, fmt.Errorf("get user: %w", err)
+	}
+
 	// Issue tokens (new session, no parent)
-	tokenPair, err := s.issueTokens(ctx, identity.UserID, identity.Email, "")
+	tokenPair, err := s.issueTokens(ctx, identity.UserID, identity.Email, user.Roles, "")
 	if err != nil {
 		return nil, fmt.Errorf("issue tokens: %w", err)
 	}
@@ -231,7 +237,7 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*entity.Tok
 		parent = rt.Hash
 	}
 
-	return s.issueTokens(ctx, user.ID, user.Email, parent)
+	return s.issueTokens(ctx, user.ID, user.Email, user.Roles, parent)
 }
 
 // Logout revokes a refresh token and its family.
@@ -282,6 +288,7 @@ func (s *Service) verifyPAT(ctx context.Context, accessToken string) (*entity.Cl
 	return &entity.Claims{
 		UserID: user.ID,
 		Email:  user.Email,
+		Roles:  user.Roles,
 		Issuer: token.JWTIssuer,
 	}, nil
 }
@@ -373,8 +380,8 @@ func (s *Service) JWKS() *jose.JSONWebKeySet {
 
 // issueTokens generates tokens and saves refresh token to store.
 // parent is empty for new sessions, or contains the family root hash for refreshed tokens.
-func (s *Service) issueTokens(ctx context.Context, userID, email, parent string) (*entity.TokenPair, error) {
-	tokenPair, refreshHash, err := s.issuer.GenerateTokens(userID, email)
+func (s *Service) issueTokens(ctx context.Context, userID, email string, roles []string, parent string) (*entity.TokenPair, error) {
+	tokenPair, refreshHash, err := s.issuer.GenerateTokens(userID, email, roles)
 	if err != nil {
 		return nil, fmt.Errorf("generate tokens: %w", err)
 	}

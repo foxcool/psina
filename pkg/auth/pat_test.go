@@ -248,7 +248,7 @@ func TestService_Verify_JWTPathUnchanged(t *testing.T) {
 	ctx := context.Background()
 	user := seedUser(t, store)
 
-	pair, _, err := service.issuer.GenerateTokens(user.ID, user.Email)
+	pair, _, err := service.issuer.GenerateTokens(user.ID, user.Email, nil)
 	require.NoError(t, err)
 
 	claims, err := service.Verify(ctx, pair.AccessToken)

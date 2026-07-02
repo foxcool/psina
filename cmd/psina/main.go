@@ -127,7 +127,7 @@ func run() error {
 			TouchInterval: config.PAT.TouchInterval,
 		}))
 	}
-	service := auth.NewService(provider, tokenStore, userStore, issuer, serviceOpts...)
+	service := auth.NewService(tokenStore, userStore, issuer, []auth.Provider{provider}, serviceOpts...)
 
 	// Initialize handler with cookie config
 	cookieConfig := &auth.CookieConfig{

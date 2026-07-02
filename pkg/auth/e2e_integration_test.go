@@ -44,7 +44,7 @@ func getTestService(t *testing.T) *auth.Service {
 	issuer, err := token.New()
 	require.NoError(t, err)
 
-	return auth.NewService(provider, store, store, issuer, auth.WithPAT(store, auth.PATConfig{}))
+	return auth.NewService(store, store, issuer, []auth.Provider{provider}, auth.WithPAT(store, auth.PATConfig{}))
 }
 
 func TestE2E_FullAuthFlow(t *testing.T) {

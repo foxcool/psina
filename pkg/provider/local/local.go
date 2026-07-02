@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	ProviderType = "local"
+	ProviderType = entity.ProviderTypeLocal
 )
 
 // Argon2 parameters following OWASP recommendations

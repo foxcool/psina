@@ -227,7 +227,8 @@ func main() {
     store, _ := postgres.NewWithDSN(ctx, dbURL)
     issuer, _ := token.NewWithKey(privateKey)
     provider := local.New(store, store)
-    service := auth.NewService(provider, store, store, issuer,
+    service := auth.NewService(store, store, issuer,
+        []auth.Provider{provider}, // registry, keyed by Type()
         auth.WithPAT(store, auth.PATConfig{}), // optional
     )
     handler := auth.NewHandler(service)

@@ -68,6 +68,50 @@ type PATStore interface {
 	TouchPAT(ctx context.Context, hash string, t time.Time) error
 }
 
+// OAuthIdentityStore persists links between users and external OAuth accounts.
+// Optional: wired only when an OAuth provider is enabled.
+type OAuthIdentityStore interface {
+	// SaveOAuthIdentity persists a new OAuth identity.
+	SaveOAuthIdentity(ctx context.Context, identity *entity.OAuthIdentity) error
+
+	// GetOAuthIdentity retrieves an identity by provider and external account id.
+	// Returns store.ErrOAuthIdentityNotFound if none matches.
+	GetOAuthIdentity(ctx context.Context, provider, externalID string) (*entity.OAuthIdentity, error)
+
+	// ListOAuthIdentities returns all OAuth identities linked to a user.
+	ListOAuthIdentities(ctx context.Context, userID string) ([]*entity.OAuthIdentity, error)
+}
+
+// WalletIdentityStore persists links between users and blockchain wallets.
+// Optional: wired only when the wallet provider is enabled.
+type WalletIdentityStore interface {
+	// SaveWalletIdentity persists a new wallet identity.
+	SaveWalletIdentity(ctx context.Context, identity *entity.WalletIdentity) error
+
+	// GetWalletIdentity retrieves an identity by chain and normalized address.
+	// Returns store.ErrWalletIdentityNotFound if none matches.
+	GetWalletIdentity(ctx context.Context, chain, address string) (*entity.WalletIdentity, error)
+
+	// ListWalletIdentities returns all wallet identities linked to a user.
+	ListWalletIdentities(ctx context.Context, userID string) ([]*entity.WalletIdentity, error)
+}
+
+// ChallengeStore persists single-use, expiring challenges for wallet sign-in
+// and OAuth CSRF state. Optional: wired only when wallet/OAuth is enabled.
+type ChallengeStore interface {
+	// SaveChallenge persists a challenge keyed by its nonce.
+	SaveChallenge(ctx context.Context, challenge *entity.Challenge) error
+
+	// GetChallenge retrieves a challenge by nonce. Returns
+	// store.ErrChallengeNotFound if absent; expiry is enforced by the caller
+	// (or the store, via store.ErrChallengeExpired).
+	GetChallenge(ctx context.Context, nonce string) (*entity.Challenge, error)
+
+	// DeleteChallenge removes a challenge by nonce. Used to enforce single-use
+	// (delete before issuing tokens).
+	DeleteChallenge(ctx context.Context, nonce string) error
+}
+
 // CredentialStore handles password hash persistence for local auth.
 // This is separated from UserStore to maintain clean architecture.
 type CredentialStore interface {

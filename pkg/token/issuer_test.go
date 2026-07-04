@@ -19,7 +19,7 @@ func TestIssuer_GenerateTokens(t *testing.T) {
 	issuer, err := token.New()
 	require.NoError(t, err)
 
-	pair, hash, err := issuer.GenerateTokens("user-123", "test@example.com")
+	pair, hash, err := issuer.GenerateTokens("user-123", "test@example.com", nil)
 	require.NoError(t, err)
 
 	assert.NotEmpty(t, pair.AccessToken)
@@ -35,7 +35,7 @@ func TestIssuer_ParseToken(t *testing.T) {
 	issuer, err := token.New()
 	require.NoError(t, err)
 
-	pair, _, err := issuer.GenerateTokens("user-123", "test@example.com")
+	pair, _, err := issuer.GenerateTokens("user-123", "test@example.com", nil)
 	require.NoError(t, err)
 
 	claims, err := issuer.ParseToken(pair.AccessToken)
@@ -43,8 +43,21 @@ func TestIssuer_ParseToken(t *testing.T) {
 
 	assert.Equal(t, "user-123", claims.UserID)
 	assert.Equal(t, "test@example.com", claims.Email)
+	assert.Empty(t, claims.Roles)
 	assert.Equal(t, "psina", claims.Issuer)
 	assert.Greater(t, claims.Exp, claims.Iat)
+}
+
+func TestIssuer_ParseToken_Roles(t *testing.T) {
+	issuer, err := token.New()
+	require.NoError(t, err)
+
+	pair, _, err := issuer.GenerateTokens("user-123", "test@example.com", []string{"admin", "support"})
+	require.NoError(t, err)
+
+	claims, err := issuer.ParseToken(pair.AccessToken)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"admin", "support"}, claims.Roles)
 }
 
 func TestIssuer_ParseToken_Invalid(t *testing.T) {
@@ -63,7 +76,7 @@ func TestIssuer_ParseToken_WrongKey(t *testing.T) {
 	require.NoError(t, err)
 
 	// Generate with issuer1
-	pair, _, err := issuer1.GenerateTokens("user-123", "test@example.com")
+	pair, _, err := issuer1.GenerateTokens("user-123", "test@example.com", nil)
 	require.NoError(t, err)
 
 	// Verify with issuer2 should fail
@@ -167,7 +180,7 @@ func TestIssuer_ES256_GenerateTokens(t *testing.T) {
 
 	assert.Equal(t, "ES256", issuer.Algorithm())
 
-	pair, hash, err := issuer.GenerateTokens("user-123", "test@example.com")
+	pair, hash, err := issuer.GenerateTokens("user-123", "test@example.com", nil)
 	require.NoError(t, err)
 
 	assert.NotEmpty(t, pair.AccessToken)
@@ -180,7 +193,7 @@ func TestIssuer_ES256_ParseToken(t *testing.T) {
 	issuer, err := token.NewWithAlgorithm(token.ES256)
 	require.NoError(t, err)
 
-	pair, _, err := issuer.GenerateTokens("user-123", "test@example.com")
+	pair, _, err := issuer.GenerateTokens("user-123", "test@example.com", nil)
 	require.NoError(t, err)
 
 	claims, err := issuer.ParseToken(pair.AccessToken)
@@ -212,7 +225,7 @@ func TestIssuer_ES256_WithKey(t *testing.T) {
 
 	assert.Equal(t, "ES256", issuer.Algorithm())
 
-	pair, _, err := issuer.GenerateTokens("user-456", "ec@example.com")
+	pair, _, err := issuer.GenerateTokens("user-456", "ec@example.com", nil)
 	require.NoError(t, err)
 
 	claims, err := issuer.ParseToken(pair.AccessToken)
@@ -228,7 +241,7 @@ func TestIssuer_ES256_WrongKey(t *testing.T) {
 	require.NoError(t, err)
 
 	// Generate with issuer1
-	pair, _, err := issuer1.GenerateTokens("user-123", "test@example.com")
+	pair, _, err := issuer1.GenerateTokens("user-123", "test@example.com", nil)
 	require.NoError(t, err)
 
 	// Verify with issuer2 should fail (different key)
@@ -244,7 +257,7 @@ func TestIssuer_RS256_CannotParseES256(t *testing.T) {
 	require.NoError(t, err)
 
 	// Generate with ES256
-	pair, _, err := ecIssuer.GenerateTokens("user-123", "test@example.com")
+	pair, _, err := ecIssuer.GenerateTokens("user-123", "test@example.com", nil)
 	require.NoError(t, err)
 
 	// RSA issuer should not parse ES256 token
@@ -260,7 +273,7 @@ func TestIssuer_ES256_CannotParseRS256(t *testing.T) {
 	require.NoError(t, err)
 
 	// Generate with RS256
-	pair, _, err := rsaIssuer.GenerateTokens("user-123", "test@example.com")
+	pair, _, err := rsaIssuer.GenerateTokens("user-123", "test@example.com", nil)
 	require.NoError(t, err)
 
 	// EC issuer should not parse RS256 token
@@ -279,7 +292,7 @@ func TestIssuer_NewWithKey_Deprecated(t *testing.T) {
 
 	assert.Equal(t, "RS256", issuer.Algorithm())
 
-	pair, _, err := issuer.GenerateTokens("user-123", "test@example.com")
+	pair, _, err := issuer.GenerateTokens("user-123", "test@example.com", nil)
 	require.NoError(t, err)
 
 	claims, err := issuer.ParseToken(pair.AccessToken)

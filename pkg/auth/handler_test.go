@@ -26,7 +26,7 @@ func newServiceWithProvider(t *testing.T, provider Provider, store *memory.Store
 	t.Helper()
 	issuer, err := token.New()
 	require.NoError(t, err)
-	return NewService(provider, store, store, issuer, WithPAT(store, PATConfig{}))
+	return NewService(store, store, issuer, []Provider{provider}, WithPAT(store, PATConfig{}))
 }
 
 // registerUser registers a user via the handler and pre-creates the user in the store.
@@ -208,11 +208,10 @@ func TestHandler_Register(t *testing.T) {
 // TestHandler_Login tests the Login RPC handler.
 func TestHandler_Login(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
-		handler, service, _ := setupTestHandler(t)
+		handler, service, store := setupTestHandler(t)
 		ctx := context.Background()
 
-		_, err := service.Register(ctx, "login@example.com", "SecurePassword123!")
-		require.NoError(t, err)
+		registerUser(t, store, "login@example.com", "SecurePassword123!", service)
 
 		req := connect.NewRequest(&authv1.LoginRequest{
 			Email:    "login@example.com",
@@ -226,11 +225,10 @@ func TestHandler_Login(t *testing.T) {
 	})
 
 	t.Run("success with cookie", func(t *testing.T) {
-		handler, service, _ := setupCookieHandler(t)
+		handler, service, store := setupCookieHandler(t)
 		ctx := context.Background()
 
-		_, err := service.Register(ctx, "cookielogin@example.com", "SecurePassword123!")
-		require.NoError(t, err)
+		registerUser(t, store, "cookielogin@example.com", "SecurePassword123!", service)
 
 		req := connect.NewRequest(&authv1.LoginRequest{
 			Email:    "cookielogin@example.com",
@@ -416,6 +414,28 @@ func TestHandler_Verify(t *testing.T) {
 		assert.Equal(t, "verify@example.com", resp.Msg.Email)
 		assert.Equal(t, resp.Msg.UserId, resp.Header().Get("X-User-Id"))
 		assert.Equal(t, resp.Msg.Email, resp.Header().Get("X-User-Email"))
+		// No roles — no header
+		assert.Empty(t, resp.Msg.Roles)
+		assert.Empty(t, resp.Header().Values("X-User-Roles"))
+	})
+
+	t.Run("roles in response and header", func(t *testing.T) {
+		handler, service, store := setupTestHandler(t)
+		ctx := context.Background()
+
+		user := &entity.User{ID: "user-123", Email: "roles@example.com", Roles: []string{"admin", "support"}}
+		require.NoError(t, store.Create(ctx, user))
+
+		result, err := service.Login(ctx, "roles@example.com", "SecurePassword123!")
+		require.NoError(t, err)
+
+		req := connect.NewRequest(&authv1.VerifyRequest{})
+		req.Header().Set("Authorization", "Bearer "+result.TokenPair.AccessToken)
+
+		resp, err := handler.Verify(ctx, req)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"admin", "support"}, resp.Msg.Roles)
+		assert.Equal(t, "admin,support", resp.Header().Get("X-User-Roles"))
 	})
 
 	t.Run("token from cookie when enabled", func(t *testing.T) {

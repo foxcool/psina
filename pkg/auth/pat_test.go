@@ -29,7 +29,7 @@ func setupPATService(t *testing.T, cfg PATConfig) (*Service, *memory.Store) {
 	memStore := newMemStore(t)
 	issuer, err := token.New()
 	require.NoError(t, err)
-	service := NewService(&mockProvider{}, memStore, memStore, issuer, WithPAT(memStore, cfg))
+	service := NewService(memStore, memStore, issuer, []Provider{&mockProvider{}}, WithPAT(memStore, cfg))
 	return service, memStore
 }
 
@@ -111,7 +111,7 @@ func TestService_PATDisabled(t *testing.T) {
 	memStore := newMemStore(t)
 	issuer, err := token.New()
 	require.NoError(t, err)
-	service := NewService(&mockProvider{}, memStore, memStore, issuer) // no WithPAT
+	service := NewService(memStore, memStore, issuer, []Provider{&mockProvider{}}) // no WithPAT
 	ctx := context.Background()
 
 	_, err = service.CreatePAT(ctx, "u1", "ci", nil, nil)
@@ -248,7 +248,7 @@ func TestService_Verify_JWTPathUnchanged(t *testing.T) {
 	ctx := context.Background()
 	user := seedUser(t, store)
 
-	pair, _, err := service.issuer.GenerateTokens(user.ID, user.Email)
+	pair, _, err := service.issuer.GenerateTokens(user.ID, user.Email, nil)
 	require.NoError(t, err)
 
 	claims, err := service.Verify(ctx, pair.AccessToken)

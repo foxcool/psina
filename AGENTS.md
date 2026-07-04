@@ -76,7 +76,7 @@ type CredentialStore interface {
 
 // TokenIssuer handles JWT operations (extracted for testability)
 type TokenIssuer interface {
-    GenerateTokens(userID, email string) (*entity.TokenPair, string, error)
+    GenerateTokens(userID, email string, roles []string) (*entity.TokenPair, string, error)
     ParseToken(accessToken string) (*entity.Claims, error)
     JWKS() *jose.JSONWebKeySet
 }
@@ -183,6 +183,11 @@ DefaultQueryTimeout = 5000  // milliseconds
 - **Store errors** → return typed errors from `pkg/store/errors.go`; handler maps them to Connect codes via `errors.Is()`
 - **Schema changes** → edit `schema.hcl`, then `make schema-apply` — never write raw SQL migrations
 - **Proto changes** → edit `api/auth/v1/auth.proto`, then `make gen` — never edit `pkg/api/auth/v1/` directly
+- **Roles** → opaque strings on `users.roles`, emitted in the JWT `roles` claim and
+  `VerifyResponse`/`X-User-Roles`; psina never interprets them (authorization is the
+  app's job). psina has no role-management API and does not derive roles from email —
+  assign them directly in the DB (`UPDATE users SET roles = '{admin}' WHERE email = ...`).
+  Bootstrap the first admin this way.
 
 ## Error Handling
 
@@ -222,7 +227,8 @@ func main() {
     store, _ := postgres.NewWithDSN(ctx, dbURL)
     issuer, _ := token.NewWithKey(privateKey)
     provider := local.New(store, store)
-    service := auth.NewService(provider, store, store, issuer,
+    service := auth.NewService(store, store, issuer,
+        []auth.Provider{provider}, // registry, keyed by Type()
         auth.WithPAT(store, auth.PATConfig{}), // optional
     )
     handler := auth.NewHandler(service)

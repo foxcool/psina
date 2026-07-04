@@ -19,17 +19,18 @@ var _ TokenIssuer = (*token.Issuer)(nil)
 
 // Service errors.
 var (
-	ErrUserNotFound       = errors.New("user not found")
-	ErrInvalidCredentials = errors.New("invalid credentials")
-	ErrUserExists         = errors.New("user already exists")
-	ErrTokenRevoked       = errors.New("refresh token revoked")
-	ErrTokenExpired       = errors.New("refresh token expired")
-	ErrTokenReuse         = errors.New("refresh token reuse detected")
-	ErrPATDisabled        = errors.New("personal access tokens are disabled")
-	ErrPATLimitReached    = errors.New("personal access token limit reached")
-	ErrPATNameRequired    = errors.New("personal access token name is required")
-	ErrPATNameTooLong     = errors.New("personal access token name is too long")
-	ErrPATExpiryInvalid   = errors.New("personal access token expiry is invalid")
+	ErrUserNotFound          = errors.New("user not found")
+	ErrInvalidCredentials    = errors.New("invalid credentials")
+	ErrUserExists            = errors.New("user already exists")
+	ErrTokenRevoked          = errors.New("refresh token revoked")
+	ErrTokenExpired          = errors.New("refresh token expired")
+	ErrTokenReuse            = errors.New("refresh token reuse detected")
+	ErrPATDisabled           = errors.New("personal access tokens are disabled")
+	ErrPATLimitReached       = errors.New("personal access token limit reached")
+	ErrPATNameRequired       = errors.New("personal access token name is required")
+	ErrPATNameTooLong        = errors.New("personal access token name is too long")
+	ErrPATExpiryInvalid      = errors.New("personal access token expiry is invalid")
+	ErrProviderNotConfigured = errors.New("no provider configured for request")
 )
 
 // PAT defaults (applied by WithPAT for zero-value PATConfig fields).
@@ -65,7 +66,11 @@ func (e *TokenReuseError) Is(target error) bool {
 
 // Service orchestrates authentication operations.
 type Service struct {
-	provider   Provider
+	// providers is keyed by Provider.Type(); wallet/oauth RPCs dispatch through it.
+	providers map[string]Provider
+	// localProvider handles the password Register/Login path; nil if not registered.
+	localProvider Provider
+
 	tokenStore TokenStore
 	userStore  UserStore
 	issuer     TokenIssuer
@@ -93,24 +98,42 @@ func WithPAT(store PATStore, cfg PATConfig) ServiceOption {
 	}
 }
 
-// NewService creates a new authentication service.
+// NewService creates a new authentication service. providers must contain at
+// least one Provider; they are indexed by Type() into the registry. A duplicate
+// Type() is a wiring bug and panics. The local provider, if present, serves the
+// password Register/Login path.
 func NewService(
-	provider Provider,
 	tokenStore TokenStore,
 	userStore UserStore,
 	issuer TokenIssuer,
+	providers []Provider,
 	opts ...ServiceOption,
 ) *Service {
+	registry := make(map[string]Provider, len(providers))
+	for _, p := range providers {
+		if _, dup := registry[p.Type()]; dup {
+			panic(fmt.Sprintf("auth: duplicate provider type %q", p.Type()))
+		}
+		registry[p.Type()] = p
+	}
+
 	s := &Service{
-		provider:   provider,
-		tokenStore: tokenStore,
-		userStore:  userStore,
-		issuer:     issuer,
+		providers:     registry,
+		localProvider: registry[entity.ProviderTypeLocal],
+		tokenStore:    tokenStore,
+		userStore:     userStore,
+		issuer:        issuer,
 	}
 	for _, opt := range opts {
 		opt(s)
 	}
 	return s
+}
+
+// provider returns the registered provider for a type.
+func (s *Service) provider(t string) (Provider, bool) {
+	p, ok := s.providers[t]
+	return p, ok
 }
 
 // RegisterResult contains registration result.
@@ -133,18 +156,22 @@ func (s *Service) Register(ctx context.Context, email, password string) (*Regist
 		return nil, fmt.Errorf("validate password: %w", err)
 	}
 
+	if s.localProvider == nil {
+		return nil, ErrProviderNotConfigured
+	}
+
 	// Register with provider (creates user and stores credentials)
 	req := &entity.RegisterRequest{
 		Email:    email,
 		Password: password,
 	}
-	identity, err := s.provider.Register(ctx, req)
+	identity, err := s.localProvider.Register(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("register: %w", err)
 	}
 
-	// Issue tokens (new session, no parent)
-	tokenPair, err := s.issueTokens(ctx, identity.UserID, identity.Email, "")
+	// Issue tokens (new session, no parent; fresh users have no roles)
+	tokenPair, err := s.issueTokens(ctx, identity.UserID, identity.Email, nil, "")
 	if err != nil {
 		return nil, fmt.Errorf("issue tokens: %w", err)
 	}
@@ -165,6 +192,10 @@ type LoginResult struct {
 
 // Login authenticates a user and returns tokens.
 func (s *Service) Login(ctx context.Context, email, password string) (*LoginResult, error) {
+	if s.localProvider == nil {
+		return nil, ErrProviderNotConfigured
+	}
+
 	// Normalize email (don't expose validation errors for security)
 	email, err := NormalizeEmail(email)
 	if err != nil {
@@ -176,13 +207,19 @@ func (s *Service) Login(ctx context.Context, email, password string) (*LoginResu
 		Email:    email,
 		Password: password,
 	}
-	identity, err := s.provider.Authenticate(ctx, req)
+	identity, err := s.localProvider.Authenticate(ctx, req)
 	if err != nil {
 		return nil, ErrInvalidCredentials
 	}
 
+	// Load the user to pick up roles for the JWT
+	user, err := s.userStore.GetByID(ctx, identity.UserID)
+	if err != nil {
+		return nil, fmt.Errorf("get user: %w", err)
+	}
+
 	// Issue tokens (new session, no parent)
-	tokenPair, err := s.issueTokens(ctx, identity.UserID, identity.Email, "")
+	tokenPair, err := s.issueTokens(ctx, identity.UserID, identity.Email, user.Roles, "")
 	if err != nil {
 		return nil, fmt.Errorf("issue tokens: %w", err)
 	}
@@ -231,7 +268,7 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*entity.Tok
 		parent = rt.Hash
 	}
 
-	return s.issueTokens(ctx, user.ID, user.Email, parent)
+	return s.issueTokens(ctx, user.ID, user.Email, user.Roles, parent)
 }
 
 // Logout revokes a refresh token and its family.
@@ -282,6 +319,7 @@ func (s *Service) verifyPAT(ctx context.Context, accessToken string) (*entity.Cl
 	return &entity.Claims{
 		UserID: user.ID,
 		Email:  user.Email,
+		Roles:  user.Roles,
 		Issuer: token.JWTIssuer,
 	}, nil
 }
@@ -373,8 +411,8 @@ func (s *Service) JWKS() *jose.JSONWebKeySet {
 
 // issueTokens generates tokens and saves refresh token to store.
 // parent is empty for new sessions, or contains the family root hash for refreshed tokens.
-func (s *Service) issueTokens(ctx context.Context, userID, email, parent string) (*entity.TokenPair, error) {
-	tokenPair, refreshHash, err := s.issuer.GenerateTokens(userID, email)
+func (s *Service) issueTokens(ctx context.Context, userID, email string, roles []string, parent string) (*entity.TokenPair, error) {
+	tokenPair, refreshHash, err := s.issuer.GenerateTokens(userID, email, roles)
 	if err != nil {
 		return nil, fmt.Errorf("generate tokens: %w", err)
 	}

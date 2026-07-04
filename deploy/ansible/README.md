@@ -122,6 +122,7 @@ http:
         authResponseHeaders:
           - "X-User-Id"
           - "X-User-Email"
+          - "X-User-Roles"
 ```
 
 ### KrakenD JWKS validation

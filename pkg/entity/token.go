@@ -13,6 +13,8 @@ type TokenPair struct {
 type Claims struct {
 	UserID string
 	Email  string
+	// Roles are opaque strings copied from the user; psina never interprets them.
+	Roles  []string
 	Issuer string
 	Exp    int64 // Expiration timestamp
 	Iat    int64 // Issued at timestamp

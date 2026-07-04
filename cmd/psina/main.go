@@ -127,7 +127,7 @@ func run() error {
 			TouchInterval: config.PAT.TouchInterval,
 		}))
 	}
-	service := auth.NewService(provider, tokenStore, userStore, issuer, serviceOpts...)
+	service := auth.NewService(tokenStore, userStore, issuer, []auth.Provider{provider}, serviceOpts...)
 
 	// Initialize handler with cookie config
 	cookieConfig := &auth.CookieConfig{
@@ -246,6 +246,9 @@ func run() error {
 		// Set response headers for the gateway
 		w.Header().Set("X-User-Id", claims.UserID)
 		w.Header().Set("X-User-Email", claims.Email)
+		if len(claims.Roles) > 0 {
+			w.Header().Set("X-User-Roles", strings.Join(claims.Roles, ","))
+		}
 		w.WriteHeader(http.StatusOK)
 	})
 

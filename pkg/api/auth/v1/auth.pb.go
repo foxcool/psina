@@ -490,9 +490,11 @@ func (*VerifyRequest) Descriptor() ([]byte, []int) {
 }
 
 type VerifyResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	UserId        string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	Email         string                 `protobuf:"bytes,2,opt,name=email,proto3" json:"email,omitempty"` // Headers for gateway: X-User-Id, X-User-Email
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	UserId string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	Email  string                 `protobuf:"bytes,2,opt,name=email,proto3" json:"email,omitempty"`
+	// Opaque role strings from the user; psina never interprets them.
+	Roles         []string `protobuf:"bytes,3,rep,name=roles,proto3" json:"roles,omitempty"` // Headers for gateway: X-User-Id, X-User-Email, X-User-Roles
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -539,6 +541,13 @@ func (x *VerifyResponse) GetEmail() string {
 		return x.Email
 	}
 	return ""
+}
+
+func (x *VerifyResponse) GetRoles() []string {
+	if x != nil {
+		return x.Roles
+	}
+	return nil
 }
 
 // PersonalAccessToken is the metadata view of a PAT. The secret is never
@@ -941,10 +950,11 @@ const file_auth_v1_auth_proto_rawDesc = "" +
 	"\rrefresh_token\x18\x01 \x01(\tR\frefreshToken\"*\n" +
 	"\x0eLogoutResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\"\x0f\n" +
-	"\rVerifyRequest\"?\n" +
+	"\rVerifyRequest\"U\n" +
 	"\x0eVerifyResponse\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\x14\n" +
-	"\x05email\x18\x02 \x01(\tR\x05email\"\xb1\x01\n" +
+	"\x05email\x18\x02 \x01(\tR\x05email\x12\x14\n" +
+	"\x05roles\x18\x03 \x03(\tR\x05roles\"\xb1\x01\n" +
 	"\x13PersonalAccessToken\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
 	"\x06scopes\x18\x02 \x03(\tR\x06scopes\x12\x1d\n" +

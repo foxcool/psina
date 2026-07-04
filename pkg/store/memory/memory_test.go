@@ -19,6 +19,7 @@ func TestStore_UserCRUD(t *testing.T) {
 	user := &entity.User{
 		ID:    "user-123",
 		Email: "test@example.com",
+		Roles: []string{"admin", "support"},
 	}
 	err := s.Create(ctx, user)
 	require.NoError(t, err)
@@ -28,11 +29,24 @@ func TestStore_UserCRUD(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, user.ID, found.ID)
 	assert.Equal(t, user.Email, found.Email)
+	assert.Equal(t, []string{"admin", "support"}, found.Roles)
 
 	// Get by email
 	found, err = s.GetByEmail(ctx, user.Email)
 	require.NoError(t, err)
 	assert.Equal(t, user.ID, found.ID)
+	assert.Equal(t, []string{"admin", "support"}, found.Roles)
+
+	// User without roles round-trips empty
+	noRoles := &entity.User{
+		ID:    "user-789",
+		Email: "noroles@example.com",
+	}
+	err = s.Create(ctx, noRoles)
+	require.NoError(t, err)
+	found, err = s.GetByID(ctx, noRoles.ID)
+	require.NoError(t, err)
+	assert.Empty(t, found.Roles)
 
 	// Duplicate email should fail
 	duplicate := &entity.User{

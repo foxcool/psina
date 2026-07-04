@@ -102,7 +102,7 @@ func TestHandler_CreatePersonalAccessToken(t *testing.T) {
 		memStore := newMemStore(t)
 		issuer, err := token.New()
 		require.NoError(t, err)
-		service := NewService(&mockProvider{}, memStore, memStore, issuer) // no WithPAT
+		service := NewService(memStore, memStore, issuer, []Provider{&mockProvider{}}) // no WithPAT
 		handler := NewHandler(service)
 		result := registerUser(t, memStore, "disabled@example.com", "SecurePassword123!", service)
 

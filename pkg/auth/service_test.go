@@ -19,7 +19,7 @@ type mockProvider struct {
 	authenticateFn func(ctx context.Context, req *entity.AuthRequest) (*entity.Identity, error)
 }
 
-func (m *mockProvider) Type() string { return "mock" }
+func (m *mockProvider) Type() string { return entity.ProviderTypeLocal }
 
 func (m *mockProvider) Register(ctx context.Context, req *entity.RegisterRequest) (*entity.Identity, error) {
 	if m.registerFn != nil {
@@ -50,7 +50,7 @@ func setupTestService(t *testing.T) (*Service, *memory.Store) {
 	require.NoError(t, err)
 
 	provider := &mockProvider{}
-	service := NewService(provider, memStore, memStore, issuer, WithPAT(memStore, PATConfig{}))
+	service := NewService(memStore, memStore, issuer, []Provider{provider}, WithPAT(memStore, PATConfig{}))
 	return service, memStore
 }
 
@@ -87,8 +87,12 @@ func TestService_Register_ShortPassword(t *testing.T) {
 }
 
 func TestService_Login(t *testing.T) {
-	service, _ := setupTestService(t)
+	service, memStore := setupTestService(t)
 	ctx := context.Background()
+
+	// Mock provider authenticates as user-123; Login loads the user for roles
+	user := &entity.User{ID: "user-123", Email: "test@example.com"}
+	require.NoError(t, memStore.Create(ctx, user))
 
 	result, err := service.Login(ctx, "test@example.com", "SecurePassword123!")
 	require.NoError(t, err)
@@ -97,6 +101,88 @@ func TestService_Login(t *testing.T) {
 	assert.Equal(t, "test@example.com", result.Email)
 	assert.NotEmpty(t, result.TokenPair.AccessToken)
 	assert.NotEmpty(t, result.TokenPair.RefreshToken)
+}
+
+// secondProvider is a distinct Provider type for registry tests.
+type secondProvider struct{ mockProvider }
+
+func (secondProvider) Type() string { return entity.ProviderTypeWallet }
+
+func TestService_ProviderRegistry(t *testing.T) {
+	memStore := memory.New()
+	issuer, err := token.New()
+	require.NoError(t, err)
+
+	local := &mockProvider{}
+	wallet := &secondProvider{}
+	service := NewService(memStore, memStore, issuer, []Provider{local, wallet})
+
+	got, ok := service.provider(entity.ProviderTypeLocal)
+	require.True(t, ok)
+	assert.Same(t, local, got)
+
+	got, ok = service.provider(entity.ProviderTypeWallet)
+	require.True(t, ok)
+	assert.Same(t, wallet, got)
+
+	_, ok = service.provider(entity.ProviderTypeGoogle)
+	assert.False(t, ok)
+}
+
+func TestService_DuplicateProviderPanics(t *testing.T) {
+	memStore := memory.New()
+	issuer, err := token.New()
+	require.NoError(t, err)
+
+	assert.Panics(t, func() {
+		NewService(memStore, memStore, issuer, []Provider{&mockProvider{}, &mockProvider{}})
+	})
+}
+
+func TestService_NoLocalProvider(t *testing.T) {
+	memStore := memory.New()
+	issuer, err := token.New()
+	require.NoError(t, err)
+
+	// Only a wallet provider registered — password paths are unconfigured.
+	service := NewService(memStore, memStore, issuer, []Provider{&secondProvider{}})
+	ctx := context.Background()
+
+	_, err = service.Register(ctx, "test@example.com", "SecurePassword123!")
+	assert.ErrorIs(t, err, ErrProviderNotConfigured)
+
+	_, err = service.Login(ctx, "test@example.com", "SecurePassword123!")
+	assert.ErrorIs(t, err, ErrProviderNotConfigured)
+}
+
+func TestService_RolesInTokens(t *testing.T) {
+	service, memStore := setupTestService(t)
+	ctx := context.Background()
+
+	user := &entity.User{ID: "user-123", Email: "test@example.com", Roles: []string{"admin"}}
+	require.NoError(t, memStore.Create(ctx, user))
+
+	// Login embeds user roles into the access JWT
+	result, err := service.Login(ctx, "test@example.com", "SecurePassword123!")
+	require.NoError(t, err)
+
+	claims, err := service.Verify(ctx, result.TokenPair.AccessToken)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"admin"}, claims.Roles)
+
+	// Refresh preserves roles in the new access token
+	refreshed, err := service.Refresh(ctx, result.TokenPair.RefreshToken)
+	require.NoError(t, err)
+	claims, err = service.Verify(ctx, refreshed.AccessToken)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"admin"}, claims.Roles)
+
+	// PAT verification returns the user's current roles
+	pat, err := service.CreatePAT(ctx, user.ID, "ci", nil, nil)
+	require.NoError(t, err)
+	claims, err = service.Verify(ctx, pat.Plaintext)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"admin"}, claims.Roles)
 }
 
 func TestService_Login_InvalidCredentials(t *testing.T) {
@@ -109,7 +195,7 @@ func TestService_Login_InvalidCredentials(t *testing.T) {
 		},
 	}
 
-	service := NewService(provider, memStore, memStore, issuer, WithPAT(memStore, PATConfig{}))
+	service := NewService(memStore, memStore, issuer, []Provider{provider}, WithPAT(memStore, PATConfig{}))
 	ctx := context.Background()
 
 	_, err := service.Login(ctx, "test@example.com", "WrongPassword")

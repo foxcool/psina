@@ -80,9 +80,10 @@ type CredentialStore interface {
 
 // TokenIssuer handles JWT token operations.
 type TokenIssuer interface {
-	// GenerateTokens creates access and refresh tokens.
+	// GenerateTokens creates access and refresh tokens. Roles are embedded in
+	// the access JWT as an opaque claim.
 	// Returns: TokenPair, refresh token hash (for storage), error.
-	GenerateTokens(userID, email string) (*entity.TokenPair, string, error)
+	GenerateTokens(userID, email string, roles []string) (*entity.TokenPair, string, error)
 
 	// ParseToken validates an access token and returns claims.
 	ParseToken(accessToken string) (*entity.Claims, error)

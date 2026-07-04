@@ -102,7 +102,7 @@ Requires:
 Verifies psina behind both supported gateway integrations end to end:
 
 - **Traefik ForwardAuth** — gateway calls `/verify`; psina injects
-  `X-User-Id`/`X-User-Email` into the backend request.
+  `X-User-Id`/`X-User-Email`/`X-User-Roles` into the backend request.
 - **KrakenD JWKS** — gateway validates the RS256 token against
   `/.well-known/jwks.json` (psina not called per request).
 

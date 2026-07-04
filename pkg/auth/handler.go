@@ -230,9 +230,13 @@ func (h *Handler) Verify(
 	resp := connect.NewResponse(&authv1.VerifyResponse{
 		UserId: claims.UserID,
 		Email:  claims.Email,
+		Roles:  claims.Roles,
 	})
 	resp.Header().Set("X-User-Id", claims.UserID)
 	resp.Header().Set("X-User-Email", claims.Email)
+	if len(claims.Roles) > 0 {
+		resp.Header().Set("X-User-Roles", strings.Join(claims.Roles, ","))
+	}
 
 	return resp, nil
 }

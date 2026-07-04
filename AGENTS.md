@@ -23,6 +23,7 @@ pkg/
   entity/            # domain types (User, Identity, TokenPair, PersonalAccessToken, etc.)
   token/             # JWT issuer + PAT generation — pure crypto, no storage
   provider/local/    # username/password provider (Argon2id)
+  provider/wallet/   # chain-agnostic WalletProvider iface + Dispatcher (per-chain impls pending)
   store/
     errors.go        # typed store errors: ErrUserNotFound, ErrTokenNotFound, etc.
     postgres/        # production store
@@ -179,6 +180,7 @@ DefaultQueryTimeout = 5000  // milliseconds
 ## Architecture Rules
 
 - **New auth method** → implement `Provider` interface from `pkg/auth/ports.go`, place in `pkg/provider/<name>/`
+- **New wallet chain** → implement `wallet.WalletProvider` (`pkg/provider/wallet/provider.go`), register it with a `wallet.Dispatcher`, place in `pkg/provider/wallet/<chain>/`
 - **New storage backend** → implement `UserStore`/`TokenStore`/`CredentialStore`/`PATStore`, place in `pkg/store/<name>/`. Optional stores for the wallet/OAuth track (interfaces declared, backends pending): `OAuthIdentityStore`, `WalletIdentityStore`, `ChallengeStore`.
 - **Store errors** → return typed errors from `pkg/store/errors.go`; handler maps them to Connect codes via `errors.Is()`
 - **Schema changes** → edit `schema.hcl`, then `make schema-apply` — never write raw SQL migrations

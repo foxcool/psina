@@ -179,7 +179,7 @@ DefaultQueryTimeout = 5000  // milliseconds
 ## Architecture Rules
 
 - **New auth method** → implement `Provider` interface from `pkg/auth/ports.go`, place in `pkg/provider/<name>/`
-- **New storage backend** → implement `UserStore`/`TokenStore`/`CredentialStore`/`PATStore`, place in `pkg/store/<name>/`
+- **New storage backend** → implement `UserStore`/`TokenStore`/`CredentialStore`/`PATStore`, place in `pkg/store/<name>/`. Optional stores for the wallet/OAuth track (interfaces declared, backends pending): `OAuthIdentityStore`, `WalletIdentityStore`, `ChallengeStore`.
 - **Store errors** → return typed errors from `pkg/store/errors.go`; handler maps them to Connect codes via `errors.Is()`
 - **Schema changes** → edit `schema.hcl`, then `make schema-apply` — never write raw SQL migrations
 - **Proto changes** → edit `api/auth/v1/auth.proto`, then `make gen` — never edit `pkg/api/auth/v1/` directly

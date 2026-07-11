@@ -11,6 +11,13 @@ service AuthService {
   rpc Logout(LogoutRequest) returns (LogoutResponse);
   rpc Verify(VerifyRequest) returns (VerifyResponse);
 
+  // OAuth 2.0 / OpenID Connect sign-in. GetOAuthURL starts the flow: it
+  // returns the provider's authorization URL plus a single-use CSRF state.
+  // OAuthCallback completes it by exchanging the authorization code for
+  // psina tokens, creating the user on first sign-in.
+  rpc GetOAuthURL(GetOAuthURLRequest) returns (GetOAuthURLResponse);
+  rpc OAuthCallback(OAuthCallbackRequest) returns (OAuthCallbackResponse);
+
   // Personal access tokens. The caller is identified by the Authorization
   // header; requests never carry a user_id. Only session (JWT) access tokens
   // are accepted here — a PAT cannot manage PATs.
@@ -71,6 +78,36 @@ message VerifyResponse {
   // Opaque role strings from the user; psina never interprets them.
   repeated string roles = 3;
   // Headers for gateway: X-User-Id, X-User-Email, X-User-Roles
+}
+
+message GetOAuthURLRequest {
+  string provider = 1;      // provider type, e.g. "google", "github"
+  // Where the provider should send the user back to. Must be on the
+  // provider's configured whitelist; the same value must be passed to
+  // OAuthCallback.
+  string redirect_uri = 2;
+}
+
+message GetOAuthURLResponse {
+  string url = 1;           // provider authorization URL to redirect the user to
+  // Single-use CSRF state embedded in the URL; expires server-side.
+  string state = 2;
+}
+
+message OAuthCallbackRequest {
+  string provider = 1;      // must match the GetOAuthURL provider
+  string code = 2;          // authorization code from the provider redirect
+  string state = 3;         // state from the provider redirect
+  string redirect_uri = 4;  // same value that was passed to GetOAuthURL
+}
+
+message OAuthCallbackResponse {
+  string user_id = 1;
+  string email = 2;
+  string access_token = 3;
+  string refresh_token = 4;
+  int64 expires_in = 5;     // seconds
+  bool is_new_user = 6;     // true when this sign-in created the account
 }
 
 // PersonalAccessToken is the metadata view of a PAT. The secret is never

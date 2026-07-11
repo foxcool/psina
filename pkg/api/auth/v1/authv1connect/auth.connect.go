@@ -43,6 +43,11 @@ const (
 	AuthServiceLogoutProcedure = "/auth.v1.AuthService/Logout"
 	// AuthServiceVerifyProcedure is the fully-qualified name of the AuthService's Verify RPC.
 	AuthServiceVerifyProcedure = "/auth.v1.AuthService/Verify"
+	// AuthServiceGetOAuthURLProcedure is the fully-qualified name of the AuthService's GetOAuthURL RPC.
+	AuthServiceGetOAuthURLProcedure = "/auth.v1.AuthService/GetOAuthURL"
+	// AuthServiceOAuthCallbackProcedure is the fully-qualified name of the AuthService's OAuthCallback
+	// RPC.
+	AuthServiceOAuthCallbackProcedure = "/auth.v1.AuthService/OAuthCallback"
 	// AuthServiceCreatePersonalAccessTokenProcedure is the fully-qualified name of the AuthService's
 	// CreatePersonalAccessToken RPC.
 	AuthServiceCreatePersonalAccessTokenProcedure = "/auth.v1.AuthService/CreatePersonalAccessToken"
@@ -61,6 +66,12 @@ type AuthServiceClient interface {
 	Refresh(context.Context, *connect.Request[v1.RefreshRequest]) (*connect.Response[v1.RefreshResponse], error)
 	Logout(context.Context, *connect.Request[v1.LogoutRequest]) (*connect.Response[v1.LogoutResponse], error)
 	Verify(context.Context, *connect.Request[v1.VerifyRequest]) (*connect.Response[v1.VerifyResponse], error)
+	// OAuth 2.0 / OpenID Connect sign-in. GetOAuthURL starts the flow: it
+	// returns the provider's authorization URL plus a single-use CSRF state.
+	// OAuthCallback completes it by exchanging the authorization code for
+	// psina tokens, creating the user on first sign-in.
+	GetOAuthURL(context.Context, *connect.Request[v1.GetOAuthURLRequest]) (*connect.Response[v1.GetOAuthURLResponse], error)
+	OAuthCallback(context.Context, *connect.Request[v1.OAuthCallbackRequest]) (*connect.Response[v1.OAuthCallbackResponse], error)
 	// Personal access tokens. The caller is identified by the Authorization
 	// header; requests never carry a user_id. Only session (JWT) access tokens
 	// are accepted here — a PAT cannot manage PATs.
@@ -110,6 +121,18 @@ func NewAuthServiceClient(httpClient connect.HTTPClient, baseURL string, opts ..
 			connect.WithSchema(authServiceMethods.ByName("Verify")),
 			connect.WithClientOptions(opts...),
 		),
+		getOAuthURL: connect.NewClient[v1.GetOAuthURLRequest, v1.GetOAuthURLResponse](
+			httpClient,
+			baseURL+AuthServiceGetOAuthURLProcedure,
+			connect.WithSchema(authServiceMethods.ByName("GetOAuthURL")),
+			connect.WithClientOptions(opts...),
+		),
+		oAuthCallback: connect.NewClient[v1.OAuthCallbackRequest, v1.OAuthCallbackResponse](
+			httpClient,
+			baseURL+AuthServiceOAuthCallbackProcedure,
+			connect.WithSchema(authServiceMethods.ByName("OAuthCallback")),
+			connect.WithClientOptions(opts...),
+		),
 		createPersonalAccessToken: connect.NewClient[v1.CreatePersonalAccessTokenRequest, v1.CreatePersonalAccessTokenResponse](
 			httpClient,
 			baseURL+AuthServiceCreatePersonalAccessTokenProcedure,
@@ -138,6 +161,8 @@ type authServiceClient struct {
 	refresh                   *connect.Client[v1.RefreshRequest, v1.RefreshResponse]
 	logout                    *connect.Client[v1.LogoutRequest, v1.LogoutResponse]
 	verify                    *connect.Client[v1.VerifyRequest, v1.VerifyResponse]
+	getOAuthURL               *connect.Client[v1.GetOAuthURLRequest, v1.GetOAuthURLResponse]
+	oAuthCallback             *connect.Client[v1.OAuthCallbackRequest, v1.OAuthCallbackResponse]
 	createPersonalAccessToken *connect.Client[v1.CreatePersonalAccessTokenRequest, v1.CreatePersonalAccessTokenResponse]
 	listPersonalAccessTokens  *connect.Client[v1.ListPersonalAccessTokensRequest, v1.ListPersonalAccessTokensResponse]
 	revokePersonalAccessToken *connect.Client[v1.RevokePersonalAccessTokenRequest, v1.RevokePersonalAccessTokenResponse]
@@ -168,6 +193,16 @@ func (c *authServiceClient) Verify(ctx context.Context, req *connect.Request[v1.
 	return c.verify.CallUnary(ctx, req)
 }
 
+// GetOAuthURL calls auth.v1.AuthService.GetOAuthURL.
+func (c *authServiceClient) GetOAuthURL(ctx context.Context, req *connect.Request[v1.GetOAuthURLRequest]) (*connect.Response[v1.GetOAuthURLResponse], error) {
+	return c.getOAuthURL.CallUnary(ctx, req)
+}
+
+// OAuthCallback calls auth.v1.AuthService.OAuthCallback.
+func (c *authServiceClient) OAuthCallback(ctx context.Context, req *connect.Request[v1.OAuthCallbackRequest]) (*connect.Response[v1.OAuthCallbackResponse], error) {
+	return c.oAuthCallback.CallUnary(ctx, req)
+}
+
 // CreatePersonalAccessToken calls auth.v1.AuthService.CreatePersonalAccessToken.
 func (c *authServiceClient) CreatePersonalAccessToken(ctx context.Context, req *connect.Request[v1.CreatePersonalAccessTokenRequest]) (*connect.Response[v1.CreatePersonalAccessTokenResponse], error) {
 	return c.createPersonalAccessToken.CallUnary(ctx, req)
@@ -190,6 +225,12 @@ type AuthServiceHandler interface {
 	Refresh(context.Context, *connect.Request[v1.RefreshRequest]) (*connect.Response[v1.RefreshResponse], error)
 	Logout(context.Context, *connect.Request[v1.LogoutRequest]) (*connect.Response[v1.LogoutResponse], error)
 	Verify(context.Context, *connect.Request[v1.VerifyRequest]) (*connect.Response[v1.VerifyResponse], error)
+	// OAuth 2.0 / OpenID Connect sign-in. GetOAuthURL starts the flow: it
+	// returns the provider's authorization URL plus a single-use CSRF state.
+	// OAuthCallback completes it by exchanging the authorization code for
+	// psina tokens, creating the user on first sign-in.
+	GetOAuthURL(context.Context, *connect.Request[v1.GetOAuthURLRequest]) (*connect.Response[v1.GetOAuthURLResponse], error)
+	OAuthCallback(context.Context, *connect.Request[v1.OAuthCallbackRequest]) (*connect.Response[v1.OAuthCallbackResponse], error)
 	// Personal access tokens. The caller is identified by the Authorization
 	// header; requests never carry a user_id. Only session (JWT) access tokens
 	// are accepted here — a PAT cannot manage PATs.
@@ -235,6 +276,18 @@ func NewAuthServiceHandler(svc AuthServiceHandler, opts ...connect.HandlerOption
 		connect.WithSchema(authServiceMethods.ByName("Verify")),
 		connect.WithHandlerOptions(opts...),
 	)
+	authServiceGetOAuthURLHandler := connect.NewUnaryHandler(
+		AuthServiceGetOAuthURLProcedure,
+		svc.GetOAuthURL,
+		connect.WithSchema(authServiceMethods.ByName("GetOAuthURL")),
+		connect.WithHandlerOptions(opts...),
+	)
+	authServiceOAuthCallbackHandler := connect.NewUnaryHandler(
+		AuthServiceOAuthCallbackProcedure,
+		svc.OAuthCallback,
+		connect.WithSchema(authServiceMethods.ByName("OAuthCallback")),
+		connect.WithHandlerOptions(opts...),
+	)
 	authServiceCreatePersonalAccessTokenHandler := connect.NewUnaryHandler(
 		AuthServiceCreatePersonalAccessTokenProcedure,
 		svc.CreatePersonalAccessToken,
@@ -265,6 +318,10 @@ func NewAuthServiceHandler(svc AuthServiceHandler, opts ...connect.HandlerOption
 			authServiceLogoutHandler.ServeHTTP(w, r)
 		case AuthServiceVerifyProcedure:
 			authServiceVerifyHandler.ServeHTTP(w, r)
+		case AuthServiceGetOAuthURLProcedure:
+			authServiceGetOAuthURLHandler.ServeHTTP(w, r)
+		case AuthServiceOAuthCallbackProcedure:
+			authServiceOAuthCallbackHandler.ServeHTTP(w, r)
 		case AuthServiceCreatePersonalAccessTokenProcedure:
 			authServiceCreatePersonalAccessTokenHandler.ServeHTTP(w, r)
 		case AuthServiceListPersonalAccessTokensProcedure:
@@ -298,6 +355,14 @@ func (UnimplementedAuthServiceHandler) Logout(context.Context, *connect.Request[
 
 func (UnimplementedAuthServiceHandler) Verify(context.Context, *connect.Request[v1.VerifyRequest]) (*connect.Response[v1.VerifyResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.AuthService.Verify is not implemented"))
+}
+
+func (UnimplementedAuthServiceHandler) GetOAuthURL(context.Context, *connect.Request[v1.GetOAuthURLRequest]) (*connect.Response[v1.GetOAuthURLResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.AuthService.GetOAuthURL is not implemented"))
+}
+
+func (UnimplementedAuthServiceHandler) OAuthCallback(context.Context, *connect.Request[v1.OAuthCallbackRequest]) (*connect.Response[v1.OAuthCallbackResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.AuthService.OAuthCallback is not implemented"))
 }
 
 func (UnimplementedAuthServiceHandler) CreatePersonalAccessToken(context.Context, *connect.Request[v1.CreatePersonalAccessTokenRequest]) (*connect.Response[v1.CreatePersonalAccessTokenResponse], error) {

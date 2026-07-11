@@ -241,6 +241,24 @@ func (h *Handler) Verify(
 	return resp, nil
 }
 
+// GetOAuthURL starts an OAuth sign-in flow. Not implemented yet: the service
+// layer lands with the OAuth track (PS-7he); until then the RPC exists only so
+// the API contract is published ahead of the implementation.
+func (h *Handler) GetOAuthURL(
+	ctx context.Context,
+	req *connect.Request[authv1.GetOAuthURLRequest],
+) (*connect.Response[authv1.GetOAuthURLResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("OAuth sign-in is not implemented yet"))
+}
+
+// OAuthCallback completes an OAuth sign-in flow. See GetOAuthURL.
+func (h *Handler) OAuthCallback(
+	ctx context.Context,
+	req *connect.Request[authv1.OAuthCallbackRequest],
+) (*connect.Response[authv1.OAuthCallbackResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("OAuth sign-in is not implemented yet"))
+}
+
 // CreatePersonalAccessToken mints a PAT for the authenticated caller.
 func (h *Handler) CreatePersonalAccessToken(
 	ctx context.Context,

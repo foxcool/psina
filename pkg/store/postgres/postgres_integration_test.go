@@ -287,3 +287,108 @@ func timePtr(t *testing.T) *time.Time {
 	v := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
 	return &v
 }
+
+func TestStore_OAuthIdentities(t *testing.T) {
+	s := getTestStore(t)
+	ctx := context.Background()
+
+	user := &entity.User{ID: uuid.New().String(), Email: "oauth@example.com"}
+	require.NoError(t, s.Create(ctx, user))
+
+	identity := &entity.OAuthIdentity{
+		ID:         uuid.New().String(),
+		UserID:     user.ID,
+		Provider:   entity.ProviderTypeGoogle,
+		ExternalID: "sub-42",
+		Email:      "oauth@gmail.com",
+	}
+	require.NoError(t, s.SaveOAuthIdentity(ctx, identity))
+
+	found, err := s.GetOAuthIdentity(ctx, entity.ProviderTypeGoogle, "sub-42")
+	require.NoError(t, err)
+	assert.Equal(t, identity.ID, found.ID)
+	assert.Equal(t, user.ID, found.UserID)
+	assert.Equal(t, "oauth@gmail.com", found.Email)
+	assert.False(t, found.CreatedAt.IsZero())
+
+	// Same user, second provider
+	require.NoError(t, s.SaveOAuthIdentity(ctx, &entity.OAuthIdentity{
+		ID:         uuid.New().String(),
+		UserID:     user.ID,
+		Provider:   entity.ProviderTypeGitHub,
+		ExternalID: "99",
+	}))
+	list, err := s.ListOAuthIdentities(ctx, user.ID)
+	require.NoError(t, err)
+	assert.Len(t, list, 2)
+
+	// Duplicate (provider, external_id) violates the unique index
+	err = s.SaveOAuthIdentity(ctx, &entity.OAuthIdentity{
+		ID:         uuid.New().String(),
+		UserID:     user.ID,
+		Provider:   entity.ProviderTypeGoogle,
+		ExternalID: "sub-42",
+	})
+	assert.Error(t, err)
+
+	// Unknown lookup
+	_, err = s.GetOAuthIdentity(ctx, entity.ProviderTypeGoogle, "unknown")
+	assert.True(t, errors.Is(err, store.ErrOAuthIdentityNotFound), "expected ErrOAuthIdentityNotFound, got: %v", err)
+
+	// Deleting the user cascades to identities
+	require.NoError(t, s.Delete(ctx, user.ID))
+	list, err = s.ListOAuthIdentities(ctx, user.ID)
+	require.NoError(t, err)
+	assert.Empty(t, list)
+}
+
+func TestStore_Challenges(t *testing.T) {
+	s := getTestStore(t)
+	ctx := context.Background()
+
+	challenge := &entity.Challenge{
+		Nonce:     "nonce-1",
+		Message:   "sign me",
+		Chain:     "ethereum",
+		Address:   "0xAbC",
+		ExpiresAt: time.Now().Add(time.Minute),
+	}
+	require.NoError(t, s.SaveChallenge(ctx, challenge))
+
+	found, err := s.GetChallenge(ctx, "nonce-1")
+	require.NoError(t, err)
+	assert.Equal(t, "sign me", found.Message)
+	assert.Equal(t, "ethereum", found.Chain)
+	assert.Equal(t, "0xAbC", found.Address)
+	assert.False(t, found.CreatedAt.IsZero())
+
+	// Single-use: delete, then gone
+	require.NoError(t, s.DeleteChallenge(ctx, "nonce-1"))
+	_, err = s.GetChallenge(ctx, "nonce-1")
+	assert.True(t, errors.Is(err, store.ErrChallengeNotFound), "expected ErrChallengeNotFound, got: %v", err)
+	err = s.DeleteChallenge(ctx, "nonce-1")
+	assert.True(t, errors.Is(err, store.ErrChallengeNotFound), "expected ErrChallengeNotFound, got: %v", err)
+}
+
+func TestStore_ChallengeExpiry(t *testing.T) {
+	s := getTestStore(t)
+	ctx := context.Background()
+
+	// Expired challenge is reported as such
+	require.NoError(t, s.SaveChallenge(ctx, &entity.Challenge{
+		Nonce:     "nonce-expired",
+		ExpiresAt: time.Now().Add(-time.Second),
+	}))
+	_, err := s.GetChallenge(ctx, "nonce-expired")
+	assert.True(t, errors.Is(err, store.ErrChallengeExpired), "expected ErrChallengeExpired, got: %v", err)
+
+	// Sweep on save evicts expired rows
+	require.NoError(t, s.SaveChallenge(ctx, &entity.Challenge{
+		Nonce:     "nonce-live",
+		ExpiresAt: time.Now().Add(time.Minute),
+	}))
+	_, err = s.GetChallenge(ctx, "nonce-expired")
+	assert.True(t, errors.Is(err, store.ErrChallengeNotFound), "expected expired challenge swept on save, got: %v", err)
+	_, err = s.GetChallenge(ctx, "nonce-live")
+	assert.NoError(t, err)
+}

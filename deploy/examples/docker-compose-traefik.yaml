@@ -22,8 +22,10 @@ volumes:
 
 services:
   # Traefik reverse proxy
+  # v3.0 is not enough: its docker provider negotiates Docker API 1.24, which
+  # modern Docker daemons reject; v3.1+ fixes the negotiation.
   traefik:
-    image: traefik:v3.0
+    image: traefik:v3
     command:
       - "--api.insecure=true"
       - "--providers.docker=true"
@@ -49,16 +51,18 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     labels:
-      # Expose auth endpoints without authentication
+      # Expose auth endpoints without authentication. Connect RPC methods live
+      # under /auth.v1., public keys under /.well-known/jwks.json.
       - "traefik.enable=true"
-      - "traefik.http.routers.psina.rule=PathPrefix(`/auth`)"
+      - "traefik.http.routers.psina.rule=PathPrefix(`/auth.v1.`) || PathPrefix(`/.well-known`)"
       - "traefik.http.routers.psina.entrypoints=web"
       - "traefik.http.services.psina.loadbalancer.server.port=8080"
-      # JWKS endpoint
-      - "traefik.http.routers.jwks.rule=Path(`/.well-known/jwks.json`)"
-      - "traefik.http.routers.jwks.entrypoints=web"
-      - "traefik.http.routers.jwks.service=psina"
+      # h2c (HTTP/2 cleartext) is required for gRPC clients; HTTP/JSON Connect
+      # clients work over it as well.
+      - "traefik.http.services.psina.loadbalancer.server.scheme=h2c"
 
   # PostgreSQL database
   postgres:
@@ -69,13 +73,27 @@ services:
       POSTGRES_DB: psina
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      # Run migrations on startup
-      - ../../migrations/001_init.up.sql:/docker-entrypoint-initdb.d/001_init.sql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U psina -d psina"]
+      # atlas_dev database is used by Atlas as a scratch space for schema diffing
+      test: ["CMD-SHELL", "pg_isready -U psina -d psina && (psql -U psina -d atlas_dev -c 'SELECT 1' > /dev/null 2>&1 || psql -U psina -c 'CREATE DATABASE atlas_dev WITH OWNER psina')"]
       interval: 5s
       timeout: 5s
       retries: 5
+
+  # Applies the declarative schema before psina starts
+  migrate:
+    image: arigaio/atlas:latest
+    volumes:
+      - ../../schema.hcl:/schema.hcl:ro
+    command: >
+      schema apply
+      --url "postgres://psina:password@postgres:5432/psina?sslmode=disable"
+      --to "file:///schema.hcl"
+      --dev-url "postgres://psina:password@postgres:5432/atlas_dev?sslmode=disable"
+      --auto-approve
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   # Example backend service (protected by psina)
   backend:
@@ -88,7 +106,8 @@ services:
       - "traefik.http.routers.backend.entrypoints=web"
       - "traefik.http.routers.backend.middlewares=psina-auth"
       - "traefik.http.services.backend.loadbalancer.server.port=5678"
-      # ForwardAuth middleware
-      - "traefik.http.middlewares.psina-auth.forwardauth.address=http://psina:8080/auth.v1.AuthService/Verify"
+      # ForwardAuth middleware. /verify is the plain-HTTP endpoint made for
+      # ForwardAuth; the Connect RPC Verify method would reject Traefik's bare GET.
+      - "traefik.http.middlewares.psina-auth.forwardauth.address=http://psina:8080/verify"
       - "traefik.http.middlewares.psina-auth.forwardauth.authRequestHeaders=Authorization"
       - "traefik.http.middlewares.psina-auth.forwardauth.authResponseHeaders=X-User-Id,X-User-Email,X-User-Roles"

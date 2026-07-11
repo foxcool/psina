@@ -5,7 +5,7 @@
 #
 # How it works:
 # 1. Client sends request to Traefik with "Authorization: Bearer <token>"
-# 2. Traefik forwards the request to psina's Verify endpoint
+# 2. Traefik forwards the request to psina's /verify endpoint
 # 3. psina validates the token and returns:
 #    - 200 OK with X-User-Id, X-User-Email and X-User-Roles headers (valid token)
 #    - 401 Unauthorized (invalid/expired token)
@@ -19,8 +19,10 @@ http:
   middlewares:
     psina-auth:
       forwardAuth:
-        # psina Verify endpoint
-        address: "http://psina:8080/auth.v1.AuthService/Verify"
+        # Plain-HTTP verify endpoint made for ForwardAuth. Do not point this at
+        # the Connect RPC Verify method (/auth.v1.AuthService/Verify): ForwardAuth
+        # sends a bare GET without the POST + Content-Type that Connect requires.
+        address: "http://psina:8080/verify"
         # Forward the Authorization header to psina
         authRequestHeaders:
           - "Authorization"
@@ -30,8 +32,8 @@ http:
           - "X-User-Email"
           - "X-User-Roles"
 
-  # Example: Protected API route
   routers:
+    # Example: Protected API route
     api-protected:
       rule: "PathPrefix(`/api`)"
       service: "backend-api"
@@ -40,10 +42,10 @@ http:
       entryPoints:
         - "web"
 
-  # Example: Public auth routes (no middleware)
-  routers:
+    # Public auth routes (no middleware): Connect RPC methods live under
+    # /auth.v1., and gateways fetch public keys from /.well-known/jwks.json.
     auth-public:
-      rule: "PathPrefix(`/auth`)"
+      rule: "PathPrefix(`/auth.v1.`) || PathPrefix(`/.well-known`)"
       service: "psina"
       entryPoints:
         - "web"
@@ -53,7 +55,9 @@ http:
     psina:
       loadBalancer:
         servers:
-          - url: "http://psina:8080"
+          # h2c (HTTP/2 cleartext) is required for gRPC clients; HTTP/JSON
+          # Connect clients work over it as well.
+          - url: "h2c://psina:8080"
 
     backend-api:
       loadBalancer:

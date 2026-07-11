@@ -30,7 +30,8 @@ const DefaultQueryTimeout = "5000" // 5 seconds in milliseconds
 // Empty by default for backward compatibility.
 const DefaultTablePrefix = ""
 
-// Store implements UserStore, TokenStore, and CredentialStore using PostgreSQL.
+// Store implements UserStore, TokenStore, CredentialStore, OAuthIdentityStore,
+// and ChallengeStore using PostgreSQL.
 type Store struct {
 	pool        *pgxpool.Pool
 	tablePrefix string
@@ -40,6 +41,8 @@ type Store struct {
 	tableLocalCredentials string
 	tableRefreshTokens    string
 	tablePATs             string
+	tableOAuthIdentities  string
+	tableChallenges       string
 }
 
 // Option configures the Store.
@@ -111,6 +114,8 @@ func (s *Store) initTableNames() {
 	s.tableLocalCredentials = s.tablePrefix + "local_credentials"
 	s.tableRefreshTokens = s.tablePrefix + "refresh_tokens"
 	s.tablePATs = s.tablePrefix + "personal_access_tokens"
+	s.tableOAuthIdentities = s.tablePrefix + "oauth_identities"
+	s.tableChallenges = s.tablePrefix + "auth_challenges"
 }
 
 // TablePrefix returns the current table prefix.
@@ -379,6 +384,150 @@ func (s *Store) TouchPAT(ctx context.Context, hash string, t time.Time) error {
 	_, err := s.pool.Exec(ctx, query, hash, t)
 	if err != nil {
 		return fmt.Errorf("touch pat: %w", err)
+	}
+
+	return nil
+}
+
+// --- OAuthIdentityStore implementation ---
+
+// SaveOAuthIdentity persists a new OAuth identity.
+func (s *Store) SaveOAuthIdentity(ctx context.Context, identity *entity.OAuthIdentity) error {
+	if identity.CreatedAt.IsZero() {
+		identity.CreatedAt = time.Now()
+	}
+
+	query := fmt.Sprintf(`
+		INSERT INTO %s (id, user_id, provider, external_id, email, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`, s.tableOAuthIdentities)
+
+	_, err := s.pool.Exec(ctx, query,
+		identity.ID, identity.UserID, identity.Provider, identity.ExternalID, identity.Email, identity.CreatedAt)
+	if err != nil {
+		return fmt.Errorf("insert oauth identity: %w", err)
+	}
+
+	return nil
+}
+
+// GetOAuthIdentity retrieves an identity by provider and external account id.
+func (s *Store) GetOAuthIdentity(ctx context.Context, provider, externalID string) (*entity.OAuthIdentity, error) {
+	query := fmt.Sprintf(`
+		SELECT id, user_id, provider, external_id, email, created_at
+		FROM %s
+		WHERE provider = $1 AND external_id = $2
+	`, s.tableOAuthIdentities)
+
+	identity := &entity.OAuthIdentity{}
+	err := s.pool.QueryRow(ctx, query, provider, externalID).Scan(
+		&identity.ID, &identity.UserID, &identity.Provider, &identity.ExternalID, &identity.Email, &identity.CreatedAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("%w: %s/%s", store.ErrOAuthIdentityNotFound, provider, externalID)
+		}
+		return nil, fmt.Errorf("query oauth identity: %w", err)
+	}
+
+	return identity, nil
+}
+
+// ListOAuthIdentities returns all OAuth identities linked to a user.
+func (s *Store) ListOAuthIdentities(ctx context.Context, userID string) ([]*entity.OAuthIdentity, error) {
+	query := fmt.Sprintf(`
+		SELECT id, user_id, provider, external_id, email, created_at
+		FROM %s
+		WHERE user_id = $1
+		ORDER BY created_at DESC
+	`, s.tableOAuthIdentities)
+
+	rows, err := s.pool.Query(ctx, query, userID)
+	if err != nil {
+		return nil, fmt.Errorf("query oauth identities: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*entity.OAuthIdentity
+	for rows.Next() {
+		identity := &entity.OAuthIdentity{}
+		if err := rows.Scan(
+			&identity.ID, &identity.UserID, &identity.Provider, &identity.ExternalID, &identity.Email, &identity.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan oauth identity: %w", err)
+		}
+		out = append(out, identity)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate oauth identities: %w", err)
+	}
+
+	return out, nil
+}
+
+// --- ChallengeStore implementation ---
+
+// SaveChallenge persists a challenge keyed by its nonce. Expired rows are
+// swept opportunistically on every save so the table stays bounded without
+// a scheduled job (the expires_at index keeps the sweep cheap).
+func (s *Store) SaveChallenge(ctx context.Context, challenge *entity.Challenge) error {
+	if challenge.CreatedAt.IsZero() {
+		challenge.CreatedAt = time.Now()
+	}
+
+	sweep := fmt.Sprintf(`DELETE FROM %s WHERE expires_at < now()`, s.tableChallenges)
+	if _, err := s.pool.Exec(ctx, sweep); err != nil {
+		return fmt.Errorf("sweep expired challenges: %w", err)
+	}
+
+	query := fmt.Sprintf(`
+		INSERT INTO %s (nonce, message, chain, address, expires_at, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`, s.tableChallenges)
+
+	_, err := s.pool.Exec(ctx, query,
+		challenge.Nonce, challenge.Message, challenge.Chain, challenge.Address, challenge.ExpiresAt, challenge.CreatedAt)
+	if err != nil {
+		return fmt.Errorf("insert challenge: %w", err)
+	}
+
+	return nil
+}
+
+// GetChallenge retrieves a challenge by nonce. An expired challenge is
+// reported as store.ErrChallengeExpired (removal is left to the sweep).
+func (s *Store) GetChallenge(ctx context.Context, nonce string) (*entity.Challenge, error) {
+	query := fmt.Sprintf(`
+		SELECT nonce, message, chain, address, expires_at, created_at
+		FROM %s
+		WHERE nonce = $1
+	`, s.tableChallenges)
+
+	challenge := &entity.Challenge{}
+	err := s.pool.QueryRow(ctx, query, nonce).Scan(
+		&challenge.Nonce, &challenge.Message, &challenge.Chain, &challenge.Address, &challenge.ExpiresAt, &challenge.CreatedAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, store.ErrChallengeNotFound
+		}
+		return nil, fmt.Errorf("query challenge: %w", err)
+	}
+
+	if challenge.ExpiresAt.Before(time.Now()) {
+		return nil, store.ErrChallengeExpired
+	}
+
+	return challenge, nil
+}
+
+// DeleteChallenge removes a challenge by nonce.
+func (s *Store) DeleteChallenge(ctx context.Context, nonce string) error {
+	query := fmt.Sprintf(`DELETE FROM %s WHERE nonce = $1`, s.tableChallenges)
+
+	result, err := s.pool.Exec(ctx, query, nonce)
+	if err != nil {
+		return fmt.Errorf("delete challenge: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return store.ErrChallengeNotFound
 	}
 
 	return nil

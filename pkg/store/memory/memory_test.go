@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/foxcool/psina/pkg/entity"
 	"github.com/foxcool/psina/pkg/store"
@@ -246,4 +247,113 @@ func TestStore_NotFound(t *testing.T) {
 	err = s.SavePasswordHash(ctx, "nonexistent-user", "hash")
 	assert.Error(t, err)
 	assert.True(t, errors.Is(err, store.ErrUserNotFound), "expected ErrUserNotFound, got: %v", err)
+}
+
+func TestStore_OAuthIdentities(t *testing.T) {
+	s := New()
+	ctx := context.Background()
+
+	identity := &entity.OAuthIdentity{
+		ID:         "oauth-1",
+		UserID:     "user-123",
+		Provider:   entity.ProviderTypeGoogle,
+		ExternalID: "sub-42",
+		Email:      "test@gmail.com",
+	}
+	require.NoError(t, s.SaveOAuthIdentity(ctx, identity))
+
+	// Get by natural key
+	found, err := s.GetOAuthIdentity(ctx, entity.ProviderTypeGoogle, "sub-42")
+	require.NoError(t, err)
+	assert.Equal(t, identity.ID, found.ID)
+	assert.Equal(t, identity.UserID, found.UserID)
+	assert.Equal(t, identity.Email, found.Email)
+	assert.False(t, found.CreatedAt.IsZero(), "CreatedAt should be set on save")
+
+	// Returned value is a copy — mutating it must not affect the store
+	found.Email = "mutated@example.com"
+	again, err := s.GetOAuthIdentity(ctx, entity.ProviderTypeGoogle, "sub-42")
+	require.NoError(t, err)
+	assert.Equal(t, "test@gmail.com", again.Email)
+
+	// Same user, second provider
+	require.NoError(t, s.SaveOAuthIdentity(ctx, &entity.OAuthIdentity{
+		ID:         "oauth-2",
+		UserID:     "user-123",
+		Provider:   entity.ProviderTypeGitHub,
+		ExternalID: "99",
+	}))
+
+	list, err := s.ListOAuthIdentities(ctx, "user-123")
+	require.NoError(t, err)
+	assert.Len(t, list, 2)
+
+	// Unknown lookups
+	_, err = s.GetOAuthIdentity(ctx, entity.ProviderTypeGoogle, "unknown")
+	assert.True(t, errors.Is(err, store.ErrOAuthIdentityNotFound), "expected ErrOAuthIdentityNotFound, got: %v", err)
+
+	list, err = s.ListOAuthIdentities(ctx, "nobody")
+	require.NoError(t, err)
+	assert.Empty(t, list)
+}
+
+func TestStore_Challenges(t *testing.T) {
+	s := New()
+	ctx := context.Background()
+
+	challenge := &entity.Challenge{
+		Nonce:     "nonce-1",
+		Message:   "sign me",
+		Chain:     "ethereum",
+		Address:   "0xAbC",
+		ExpiresAt: time.Now().Add(time.Minute),
+	}
+	require.NoError(t, s.SaveChallenge(ctx, challenge))
+
+	found, err := s.GetChallenge(ctx, "nonce-1")
+	require.NoError(t, err)
+	assert.Equal(t, "sign me", found.Message)
+	assert.Equal(t, "ethereum", found.Chain)
+	assert.Equal(t, "0xAbC", found.Address)
+	assert.False(t, found.CreatedAt.IsZero(), "CreatedAt should be set on save")
+
+	// Single-use: delete, then gone
+	require.NoError(t, s.DeleteChallenge(ctx, "nonce-1"))
+	_, err = s.GetChallenge(ctx, "nonce-1")
+	assert.True(t, errors.Is(err, store.ErrChallengeNotFound), "expected ErrChallengeNotFound, got: %v", err)
+
+	// Deleting again reports not found
+	err = s.DeleteChallenge(ctx, "nonce-1")
+	assert.True(t, errors.Is(err, store.ErrChallengeNotFound), "expected ErrChallengeNotFound, got: %v", err)
+}
+
+func TestStore_ChallengeExpiry(t *testing.T) {
+	s := New()
+	ctx := context.Background()
+
+	expired := &entity.Challenge{
+		Nonce:     "nonce-expired",
+		ExpiresAt: time.Now().Add(-time.Second),
+	}
+	require.NoError(t, s.SaveChallenge(ctx, expired))
+
+	// Expired challenge is reported as such and removed
+	_, err := s.GetChallenge(ctx, "nonce-expired")
+	assert.True(t, errors.Is(err, store.ErrChallengeExpired), "expected ErrChallengeExpired, got: %v", err)
+	_, err = s.GetChallenge(ctx, "nonce-expired")
+	assert.True(t, errors.Is(err, store.ErrChallengeNotFound), "expected ErrChallengeNotFound after expiry cleanup, got: %v", err)
+
+	// Sweep on save evicts other expired challenges
+	require.NoError(t, s.SaveChallenge(ctx, &entity.Challenge{
+		Nonce:     "nonce-stale",
+		ExpiresAt: time.Now().Add(-time.Second),
+	}))
+	require.NoError(t, s.SaveChallenge(ctx, &entity.Challenge{
+		Nonce:     "nonce-live",
+		ExpiresAt: time.Now().Add(time.Minute),
+	}))
+	_, err = s.GetChallenge(ctx, "nonce-stale")
+	assert.True(t, errors.Is(err, store.ErrChallengeNotFound), "expected stale challenge swept on save, got: %v", err)
+	_, err = s.GetChallenge(ctx, "nonce-live")
+	assert.NoError(t, err)
 }

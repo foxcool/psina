@@ -20,6 +20,7 @@ import (
 // endpoint is Google's OAuth 2.0 endpoint. Inlined instead of importing
 // golang.org/x/oauth2/google, which drags in cloud.google.com/go/compute/metadata
 // for two URL constants.
+// #nosec G101 -- public endpoint URLs, not credentials
 var endpoint = oauth2.Endpoint{
 	AuthURL:  "https://accounts.google.com/o/oauth2/auth",
 	TokenURL: "https://oauth2.googleapis.com/token",

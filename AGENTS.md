@@ -11,7 +11,7 @@ Name origin: "psina" (рус. "псина") = "doggy" — a guard dog that knows
 
 ## Current Status
 
-**v0.2.0** — Local auth, personal access tokens, standalone deploy (cookies, ES256, health probes, table prefix), gateway e2e tests, security CI. Next: rate limiting, metrics, audit logging.
+**v0.3 in progress** — v0.2 shipped local auth, personal access tokens, standalone deploy (cookies, ES256, health probes, table prefix), gateway e2e tests, security CI. Since then: user roles (opaque strings in JWT/Verify), OAuth RPC contract, oauth_identities/auth_challenges stores, Google OIDC provider. Next: OAuth service layer + wiring, GitHub provider, then wallet auth (SIWE).
 
 ## Directory Map
 
@@ -23,6 +23,7 @@ pkg/
   entity/            # domain types (User, Identity, TokenPair, PersonalAccessToken, etc.)
   token/             # JWT issuer + PAT generation — pure crypto, no storage
   provider/local/    # username/password provider (Argon2id)
+  provider/oauth/    # oauth.Provider iface + UserInfo; google/ — OIDC provider
   provider/wallet/   # chain-agnostic WalletProvider iface + Dispatcher (per-chain impls pending)
   store/
     errors.go        # typed store errors: ErrUserNotFound, ErrTokenNotFound, etc.
@@ -40,7 +41,7 @@ docs/                # architecture, development, contributing
 ```go
 // Provider authenticates users via specific method
 type Provider interface {
-    Type() string  // "local", "passkey", "wallet"
+    Type() string  // entity.ProviderType*: "local", "google", "github", "wallet"
     Authenticate(ctx context.Context, req *entity.AuthRequest) (*entity.Identity, error)
     Register(ctx context.Context, req *entity.RegisterRequest) (*entity.Identity, error)
 }

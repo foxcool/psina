@@ -138,8 +138,7 @@ psina/
 │   └── secrets.env         # Local secrets (gitignored)
 ├── docs/                   # Documentation
 │   ├── architecture.md     # System design (C4, hexagonal)
-│   ├── development.md      # This file
-│   └── ROADMAP.md          # Feature roadmap
+│   └── development.md      # This file
 ├── pkg/                    # Library code
 │   ├── api/auth/v1/        # Generated Connect RPC code
 │   ├── auth/               # Service layer

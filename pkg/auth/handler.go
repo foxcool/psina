@@ -431,6 +431,39 @@ func (h *Handler) setTokenCookies(header http.Header, accessToken, refreshToken 
 		SameSite: h.cookieConfig.SameSite,
 	}
 	header.Add("Set-Cookie", refreshCookie.String())
+
+	// Evict any legacy host-only duplicates so the fresh Domain-scoped cookies
+	// are the only ones the browser sends back.
+	h.clearLegacyHostOnlyCookies(header)
+}
+
+// clearLegacyHostOnlyCookies expires token cookies left under the host-only
+// scope (no Domain attribute) by an earlier deployment that used a different
+// cookie.domain. A host-only cookie and a Domain-scoped cookie of the same name
+// are distinct browser entries, so a Domain-scoped Set-Cookie never overwrites
+// the legacy host-only one — the browser keeps sending both and the server may
+// read the stale token (401 invalid token), with the outcome depending on how
+// each browser orders the duplicates. Emitting a host-only expiry alongside
+// every set/clear makes login and logout self-healing. No-op when Domain is
+// unset, since the primary cookies are already host-only.
+func (h *Handler) clearLegacyHostOnlyCookies(header http.Header) {
+	if h.cookieConfig.Domain == "" {
+		return
+	}
+	for _, name := range []string{AccessTokenCookie, RefreshTokenCookie} {
+		// #nosec G124 -- expiry of a legacy host-only cookie; carries no secret
+		cookie := &http.Cookie{
+			Name:     name,
+			Value:    "",
+			Path:     h.cookieConfig.Path,
+			Expires:  time.Unix(0, 0),
+			MaxAge:   -1,
+			Secure:   h.cookieConfig.Secure,
+			HttpOnly: true,
+			SameSite: h.cookieConfig.SameSite,
+		}
+		header.Add("Set-Cookie", cookie.String())
+	}
 }
 
 // clearTokenCookies removes token cookies.
@@ -464,6 +497,9 @@ func (h *Handler) clearTokenCookies(header http.Header) {
 		SameSite: h.cookieConfig.SameSite,
 	}
 	header.Add("Set-Cookie", refreshCookie.String())
+
+	// Also expire any legacy host-only duplicates so logout leaves nothing behind.
+	h.clearLegacyHostOnlyCookies(header)
 }
 
 // getCookieFromHeader extracts a cookie value from the Cookie header.
@@ -473,11 +509,13 @@ func (h *Handler) getCookieFromHeader(header http.Header, name string) string {
 		return ""
 	}
 
-	// Parse cookies manually since we only have headers
+	// Parse cookies manually since we only have headers. A browser can send the
+	// same name more than once (e.g. a legacy host-only duplicate mid-eviction);
+	// skip empty values so a cleared duplicate never shadows the real token.
 	for _, cookie := range strings.Split(cookieHeader, ";") {
 		cookie = strings.TrimSpace(cookie)
 		parts := strings.SplitN(cookie, "=", 2)
-		if len(parts) == 2 && parts[0] == name {
+		if len(parts) == 2 && parts[0] == name && parts[1] != "" {
 			return parts[1]
 		}
 	}

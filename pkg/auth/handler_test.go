@@ -551,14 +551,17 @@ func TestGetClientIP(t *testing.T) {
 	}
 }
 
-// TestHandler_LegacyHostOnlyCookieEviction covers the stale-cookie bug: when a
-// Domain is configured, login/logout must also expire any legacy host-only
-// duplicate (Domain unset) so the browser stops sending a stale token that the
-// Domain-scoped Set-Cookie can never overwrite.
-func TestHandler_LegacyHostOnlyCookieEviction(t *testing.T) {
-	const domain = "eye.darkfox.info"
+// TestHandler_LegacyScopedCookieEviction covers the stale-cookie bug: when a
+// Domain is configured, login/logout must also expire any legacy duplicate left
+// under a foreign scope — the host-only scope (Domain unset) or a broader parent
+// domain — so the browser stops sending a stale token that the Domain-scoped
+// Set-Cookie can never overwrite. A parent-domain duplicate is the case that
+// host-only-only eviction missed.
+func TestHandler_LegacyScopedCookieEviction(t *testing.T) {
+	const domain = "app.example.com"
+	const parent = "example.com"
 
-	t.Run("login sets domain cookie and evicts host-only duplicate", func(t *testing.T) {
+	t.Run("login sets domain cookie and evicts host-only + parent duplicates", func(t *testing.T) {
 		handler, service, store := setupCookieHandlerWithDomain(t, domain)
 		ctx := context.Background()
 		registerUser(t, store, "evict-login@example.com", "SecurePassword123!", service)
@@ -572,29 +575,27 @@ func TestHandler_LegacyHostOnlyCookieEviction(t *testing.T) {
 
 		for _, name := range []string{AccessTokenCookie, RefreshTokenCookie} {
 			cookies := setCookiesByName(resp.Header(), name)
-			require.Len(t, cookies, 2, "%s: expected a Domain-scoped set + a host-only eviction", name)
+			require.Len(t, cookies, 3, "%s: expected a Domain-scoped set + host-only + parent eviction", name)
 
-			var domainSet, hostOnlyClear *http.Cookie
+			byScope := map[string]*http.Cookie{}
 			for _, c := range cookies {
-				switch c.Domain {
-				case domain:
-					domainSet = c
-				case "":
-					hostOnlyClear = c
-				}
+				byScope[c.Domain] = c
 			}
-			require.NotNil(t, domainSet, "%s: missing Domain-scoped cookie", name)
-			require.NotNil(t, hostOnlyClear, "%s: missing host-only eviction cookie", name)
+			require.Contains(t, byScope, domain, "%s: missing Domain-scoped cookie", name)
+			require.Contains(t, byScope, "", "%s: missing host-only eviction", name)
+			require.Contains(t, byScope, parent, "%s: missing parent-domain eviction", name)
 
-			assert.NotEmpty(t, domainSet.Value, "%s: Domain-scoped cookie must carry the token", name)
-			assert.Greater(t, domainSet.MaxAge, 0, "%s: Domain-scoped cookie must live", name)
+			assert.NotEmpty(t, byScope[domain].Value, "%s: Domain-scoped cookie must carry the token", name)
+			assert.Greater(t, byScope[domain].MaxAge, 0, "%s: Domain-scoped cookie must live", name)
 
-			assert.Empty(t, hostOnlyClear.Value, "%s: host-only eviction must be empty", name)
-			assert.Less(t, hostOnlyClear.MaxAge, 0, "%s: host-only eviction must expire", name)
+			for _, scope := range []string{"", parent} {
+				assert.Empty(t, byScope[scope].Value, "%s: %q eviction must be empty", name, scope)
+				assert.Less(t, byScope[scope].MaxAge, 0, "%s: %q eviction must expire", name, scope)
+			}
 		}
 	})
 
-	t.Run("logout clears both domain and host-only cookies", func(t *testing.T) {
+	t.Run("logout clears domain, host-only and parent cookies", func(t *testing.T) {
 		handler, service, store := setupCookieHandlerWithDomain(t, domain)
 		ctx := context.Background()
 		registerUser(t, store, "evict-logout@example.com", "SecurePassword123!", service)
@@ -604,7 +605,7 @@ func TestHandler_LegacyHostOnlyCookieEviction(t *testing.T) {
 
 		for _, name := range []string{AccessTokenCookie, RefreshTokenCookie} {
 			cookies := setCookiesByName(resp.Header(), name)
-			require.Len(t, cookies, 2, "%s: expected a Domain-scoped clear + a host-only clear", name)
+			require.Len(t, cookies, 3, "%s: expected domain + host-only + parent clears", name)
 			for _, c := range cookies {
 				assert.Empty(t, c.Value, "%s: clear must be empty", name)
 				assert.Less(t, c.MaxAge, 0, "%s: clear must expire", name)
@@ -631,10 +632,27 @@ func TestHandler_LegacyHostOnlyCookieEviction(t *testing.T) {
 	})
 }
 
+func TestParentDomains(t *testing.T) {
+	tests := []struct {
+		host string
+		want []string
+	}{
+		{"app.example.com", []string{"example.com"}},
+		{".app.example.com", []string{"example.com"}},
+		{"a.b.example.com", []string{"b.example.com", "example.com"}},
+		{"example.com", nil},
+		{"localhost", nil},
+		{"", nil},
+	}
+	for _, tt := range tests {
+		assert.Equal(t, tt.want, parentDomains(tt.host), "parentDomains(%q)", tt.host)
+	}
+}
+
 // TestGetCookieFromHeader_SkipsEmptyDuplicate ensures a cleared duplicate does
 // not shadow the real token while the browser is still evicting it.
 func TestGetCookieFromHeader_SkipsEmptyDuplicate(t *testing.T) {
-	handler, _, _ := setupCookieHandlerWithDomain(t, "eye.darkfox.info")
+	handler, _, _ := setupCookieHandlerWithDomain(t, "app.example.com")
 	header := http.Header{"Cookie": []string{"psina_access=; psina_access=real-token"}}
 	assert.Equal(t, "real-token", handler.getCookieFromHeader(header, AccessTokenCookie))
 }

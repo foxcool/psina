@@ -93,6 +93,7 @@ RPCs require a session JWT — PATs cannot manage PATs.
 ```bash
 make help              # list all targets
 
+make lint              # golangci-lint in Docker (matches CI; do not install locally)
 make test-unit         # unit tests, no Docker needed
 make test-integration  # integration tests, requires Docker
 make test-e2e          # gateway e2e stand (Traefik + KrakenD), requires Docker

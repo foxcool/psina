@@ -432,38 +432,65 @@ func (h *Handler) setTokenCookies(header http.Header, accessToken, refreshToken 
 	}
 	header.Add("Set-Cookie", refreshCookie.String())
 
-	// Evict any legacy host-only duplicates so the fresh Domain-scoped cookies
-	// are the only ones the browser sends back.
-	h.clearLegacyHostOnlyCookies(header)
+	// Evict any legacy duplicates left under a foreign scope so the fresh
+	// Domain-scoped cookies are the only ones the browser sends back.
+	h.clearLegacyScopedCookies(header)
 }
 
-// clearLegacyHostOnlyCookies expires token cookies left under the host-only
-// scope (no Domain attribute) by an earlier deployment that used a different
-// cookie.domain. A host-only cookie and a Domain-scoped cookie of the same name
-// are distinct browser entries, so a Domain-scoped Set-Cookie never overwrites
-// the legacy host-only one — the browser keeps sending both and the server may
-// read the stale token (401 invalid token), with the outcome depending on how
-// each browser orders the duplicates. Emitting a host-only expiry alongside
+// clearLegacyScopedCookies expires token cookies left under any scope other
+// than the currently configured one — the host-only scope (no Domain) or a
+// broader parent domain — by an earlier deployment that used a different
+// cookie.domain. A cookie of the same name under a different scope is a
+// distinct browser entry, so a Domain-scoped Set-Cookie never overwrites it:
+// the browser keeps sending both and the server may read the stale token
+// (401 invalid/not-found token), the outcome depending on how the browser
+// orders the duplicates. Emitting an expiry for each foreign scope alongside
 // every set/clear makes login and logout self-healing. No-op when Domain is
 // unset, since the primary cookies are already host-only.
-func (h *Handler) clearLegacyHostOnlyCookies(header http.Header) {
+//
+// A parent-domain duplicate (a cookie left on a broader Domain beside the live
+// host-scoped one) is the case host-only-only eviction missed.
+func (h *Handler) clearLegacyScopedCookies(header http.Header) {
 	if h.cookieConfig.Domain == "" {
 		return
 	}
+	// Foreign scopes to expire: host-only (Domain ""), plus every parent domain
+	// above the configured one down to the registrable domain. Never the
+	// configured domain itself — that carries the live cookie.
+	scopes := append([]string{""}, parentDomains(h.cookieConfig.Domain)...)
 	for _, name := range []string{AccessTokenCookie, RefreshTokenCookie} {
-		// #nosec G124 -- expiry of a legacy host-only cookie; carries no secret
-		cookie := &http.Cookie{
-			Name:     name,
-			Value:    "",
-			Path:     h.cookieConfig.Path,
-			Expires:  time.Unix(0, 0),
-			MaxAge:   -1,
-			Secure:   h.cookieConfig.Secure,
-			HttpOnly: true,
-			SameSite: h.cookieConfig.SameSite,
+		for _, domain := range scopes {
+			// #nosec G124 -- expiry of a legacy scoped cookie; carries no secret
+			cookie := &http.Cookie{
+				Name:     name,
+				Value:    "",
+				Domain:   domain,
+				Path:     h.cookieConfig.Path,
+				Expires:  time.Unix(0, 0),
+				MaxAge:   -1,
+				Secure:   h.cookieConfig.Secure,
+				HttpOnly: true,
+				SameSite: h.cookieConfig.SameSite,
+			}
+			header.Add("Set-Cookie", cookie.String())
 		}
-		header.Add("Set-Cookie", cookie.String())
 	}
+}
+
+// parentDomains returns the parent domains of host above the immediate one,
+// down to (and including) the two-label registrable domain. For "a.b.example"
+// it returns ["b.example"]. Returns nil when host has two or fewer labels. A
+// leading dot is normalized away. A cookie can never be scoped to a public
+// suffix, so a two-label floor is a safe stopping point for the common
+// single-suffix case this heals.
+func parentDomains(host string) []string {
+	host = strings.TrimPrefix(host, ".")
+	labels := strings.Split(host, ".")
+	var out []string
+	for i := 1; i <= len(labels)-2; i++ {
+		out = append(out, strings.Join(labels[i:], "."))
+	}
+	return out
 }
 
 // clearTokenCookies removes token cookies.
@@ -498,8 +525,8 @@ func (h *Handler) clearTokenCookies(header http.Header) {
 	}
 	header.Add("Set-Cookie", refreshCookie.String())
 
-	// Also expire any legacy host-only duplicates so logout leaves nothing behind.
-	h.clearLegacyHostOnlyCookies(header)
+	// Also expire any legacy foreign-scope duplicates so logout leaves nothing behind.
+	h.clearLegacyScopedCookies(header)
 }
 
 // getCookieFromHeader extracts a cookie value from the Cookie header.

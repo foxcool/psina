@@ -7,7 +7,7 @@ COMPOSE_FILE=deploy/compose.yaml
 # Path to the e2e gateway stand compose file
 E2E_COMPOSE=deploy/e2e/compose.yaml
 
-.PHONY: gen buf-gen go-gen test test-unit test-integration test-e2e up down clean logs help schema-apply schema-diff
+.PHONY: gen buf-gen go-gen lint test test-unit test-integration test-e2e up down clean logs help schema-apply schema-diff
 
 # Default target
 help:
@@ -15,6 +15,7 @@ help:
 	@echo "  gen               - Generate all code (buf + go generate)"
 	@echo "  buf-gen           - Generate protobuf files with buf"
 	@echo "  go-gen            - Generate go code (go generate)"
+	@echo "  lint              - Run golangci-lint via Docker (matches CI)"
 	@echo "  test              - Run all tests"
 	@echo "  test-unit         - Run unit tests only"
 	@echo "  test-integration  - Run integration tests (requires Atlas CLI)"
@@ -43,6 +44,10 @@ endif
 go-gen:
 	@echo "Generating go code..."
 	go generate ./...
+
+# Run golangci-lint via Docker (matches CI, no local install needed)
+lint:
+	docker run --rm -v $(PWD):/app -w /app golangci/golangci-lint:latest golangci-lint run
 
 # Run all tests
 test: test-unit test-integration

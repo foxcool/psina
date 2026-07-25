@@ -576,9 +576,10 @@ func TestHandler_LegacyHostOnlyCookieEviction(t *testing.T) {
 
 			var domainSet, hostOnlyClear *http.Cookie
 			for _, c := range cookies {
-				if c.Domain == domain {
+				switch c.Domain {
+				case domain:
 					domainSet = c
-				} else if c.Domain == "" {
+				case "":
 					hostOnlyClear = c
 				}
 			}

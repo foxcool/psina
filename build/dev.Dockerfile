@@ -1,4 +1,4 @@
-FROM golang:1.25-alpine
+FROM golang:1.26-alpine
 
 ENV PROJECT_PATH=github.com/foxcool/psina
 
@@ -16,5 +16,5 @@ RUN apk add --no-cache git
 WORKDIR ${GOPATH}/src/${PROJECT_PATH}
 COPY go.mod go.sum ./
 
-# Install air for live reload
-RUN go install github.com/air-verse/air@latest
+# Install air for live reload (pinned: @latest silently raises the Go floor)
+RUN go install github.com/air-verse/air@v1.67.2

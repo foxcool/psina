@@ -17,12 +17,12 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
-	"github.com/foxcool/psina/pkg/api/auth/v1/authv1connect"
-	"github.com/foxcool/psina/pkg/auth"
-	"github.com/foxcool/psina/pkg/provider/local"
-	"github.com/foxcool/psina/pkg/store/memory"
-	"github.com/foxcool/psina/pkg/store/postgres"
-	"github.com/foxcool/psina/pkg/token"
+	"github.com/foxcool/psina/api/auth/v1/authv1connect"
+	"github.com/foxcool/psina/auth"
+	"github.com/foxcool/psina/provider/local"
+	"github.com/foxcool/psina/store/memory"
+	"github.com/foxcool/psina/store/postgres"
+	"github.com/foxcool/psina/token"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 )

@@ -10,7 +10,7 @@ cmd = "go build -o tmp/psina ./cmd/psina"
 # Path to the output binary relative to root
 bin = "tmp/psina"
 # Directories to watch for changes
-include_dir = ["cmd", "internal", "pkg", "api"]
+include_dir = ["cmd", "api", "auth", "entity", "provider", "store", "token"]
 # Directories to exclude from watching
 exclude_dir = ["tmp", "deploy", "docs", "build", ".git", "gen"]
 # File extensions to watch

@@ -60,7 +60,7 @@ test-unit:
 # Run integration tests (requires Docker)
 test-integration:
 	@echo "Running integration tests..."
-	go test -v -tags=integration -coverprofile=coverage-integration.out ./pkg/...
+	go test -v -tags=integration -coverprofile=coverage-integration.out ./...
 
 # Run e2e gateway tests against a docker compose stand (Traefik + KrakenD).
 # Uses a dedicated project name so it never clobbers the dev stack (make up).

@@ -139,22 +139,20 @@ psina/
 ├── docs/                   # Documentation
 │   ├── architecture.md     # System design (C4, hexagonal)
 │   └── development.md      # This file
-├── pkg/                    # Library code
-│   ├── api/auth/v1/        # Generated Connect RPC code
-│   ├── auth/               # Service layer
-│   │   ├── service.go      # Business logic orchestration
-│   │   ├── handler.go      # Connect RPC handler
-│   │   ├── ports.go        # Interface definitions
-│   │   └── validation.go   # Input validation
-│   ├── entity/             # Domain types (User, Token, etc.)
-│   ├── provider/           # Auth providers
-│   │   └── local/          # Email/password (Argon2id)
-│   ├── store/              # Storage backends
-│   │   ├── errors.go       # Typed storage errors
-│   │   ├── postgres/       # Production store
-│   │   └── memory/         # Testing/dev store
-│   ├── testutil/           # Test helpers (testcontainers)
-│   └── token/              # JWT issuer (RS256, JWKS)
+├── auth/                   # Service layer
+│   ├── service.go          # Business logic orchestration
+│   ├── handler.go          # Connect RPC handler
+│   ├── ports.go            # Interface definitions
+│   └── validation.go       # Input validation
+├── entity/                 # Domain types (User, Token, etc.)
+├── provider/               # Auth providers
+│   └── local/              # Email/password (Argon2id)
+├── store/                  # Storage backends
+│   ├── errors.go           # Typed storage errors
+│   ├── postgres/           # Production store
+│   └── memory/             # Testing/dev store
+├── testutil/               # Test helpers (testcontainers)
+├── token/                  # JWT issuer (RS256, JWKS)
 └── schema.hcl              # Database schema (Atlas)
 ```
 
@@ -162,11 +160,11 @@ psina/
 
 Hexagonal (Ports & Adapters):
 
-- **Ports** (`pkg/auth/ports.go`): interfaces for Provider, UserStore, TokenStore, CredentialStore, PATStore, TokenIssuer
-- **Adapters**: `pkg/provider/*`, `pkg/store/*`, `pkg/token/`
-- **Core**: `pkg/auth/service.go` orchestrates business logic
+- **Ports** (`auth/ports.go`): interfaces for Provider, UserStore, TokenStore, CredentialStore, PATStore, TokenIssuer
+- **Adapters**: `provider/*`, `store/*`, `token/`
+- **Core**: `auth/service.go` orchestrates business logic
 
-Key principle: domain logic in `pkg/auth/` and `pkg/entity/`, adapters are replaceable.
+Key principle: domain logic in `auth/` and `entity/`, adapters are replaceable.
 
 ## Development Workflow
 
@@ -186,8 +184,8 @@ make buf-gen
 
 Generates:
 
-- Go structs from proto (`pkg/api/auth/v1/*.pb.go`)
-- Connect RPC handlers (`pkg/api/auth/v1/authv1connect/`)
+- Go structs from proto (`api/auth/v1/*.pb.go`)
+- Connect RPC handlers (`api/auth/v1/authv1connect/`)
 
 ### Go generate
 

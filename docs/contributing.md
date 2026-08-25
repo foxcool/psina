@@ -34,15 +34,14 @@ make down
 ## Project Structure
 
 ```text
-pkg/                    # Library code (public API)
-├── auth/               # Service layer + interfaces (ports.go)
-├── entity/             # Domain types (User, Token, Claims)
-├── provider/           # Auth providers (local, passkey, wallet)
-├── store/              # Storage backends (postgres, memory)
-└── token/              # JWT issuer
+auth/                   # Service layer + interfaces (ports.go)
+entity/                 # Domain types (User, Token, Claims)
+provider/               # Auth providers (local, passkey, wallet)
+store/                  # Storage backends (postgres, memory)
+token/                  # JWT issuer
 
 cmd/psina/              # Standalone binary
-api/auth/v1/            # Proto definitions
+api/auth/v1/            # Proto definitions + generated code
 deploy/                 # Docker, compose, examples
 docs/                   # Documentation
 ```
@@ -91,7 +90,7 @@ golangci-lint run
 
 ## Adding a New Provider
 
-Providers implement the `Provider` interface in `pkg/auth/ports.go`:
+Providers implement the `Provider` interface in `auth/ports.go`:
 
 ```go
 type Provider interface {
@@ -103,17 +102,17 @@ type Provider interface {
 
 Steps:
 
-1. Create `pkg/provider/yourprovider/` directory
+1. Create `provider/yourprovider/` directory
 2. Implement the interface
 3. Add unit tests (`yourprovider_test.go`)
 4. Update README roadmap table
 5. Add integration example if needed
 
-Example: see `pkg/provider/local/` for reference.
+Example: see `provider/local/` for reference.
 
 ## Adding a New Store
 
-Stores implement interfaces in `pkg/auth/ports.go`:
+Stores implement interfaces in `auth/ports.go`:
 
 ```go
 type UserStore interface {
@@ -137,13 +136,13 @@ type CredentialStore interface {
 
 Steps:
 
-1. Create `pkg/store/yourstore/` directory
+1. Create `store/yourstore/` directory
 2. Implement all three interfaces (or subset if applicable)
-3. Use typed errors from `pkg/store/errors.go`
+3. Use typed errors from `store/errors.go`
 4. Add integration tests with real database
 5. Update documentation
 
-Example: see `pkg/store/postgres/` and `pkg/store/memory/` for reference.
+Example: see `store/postgres/` and `store/memory/` for reference.
 
 ## Commit Messages
 
@@ -174,7 +173,7 @@ chore: update Go to 1.24
 Use typed errors for matching:
 
 ```go
-// In pkg/store/errors.go
+// In store/errors.go
 var ErrUserNotFound = errors.New("user not found")
 
 // In store implementation

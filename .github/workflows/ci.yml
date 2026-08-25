@@ -138,6 +138,11 @@ jobs:
         with:
           comment-pr: true
           claude-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Without this the action caches a marker under a key whose
+          # restore-keys prefix omits the SHA, so it matches any commit on the
+          # PR: the review runs once and silently no-ops on everything pushed
+          # afterwards. We would rather re-review than never review a commit.
+          run-every-commit: true
 
       # The action reports success even when the audit itself crashed: on
       # failure it writes {"error": ...} with no "findings" key, and its

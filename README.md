@@ -51,10 +51,10 @@ PSINA_DB_URL="postgres://user:pass@localhost:5432/psina?sslmode=disable" ./psina
 
 ```go
 import (
-    "github.com/foxcool/psina/pkg/auth"
-    "github.com/foxcool/psina/pkg/provider/local"
-    "github.com/foxcool/psina/pkg/store/postgres"
-    "github.com/foxcool/psina/pkg/token"
+    "github.com/foxcool/psina/auth"
+    "github.com/foxcool/psina/provider/local"
+    "github.com/foxcool/psina/store/postgres"
+    "github.com/foxcool/psina/token"
 )
 
 func main() {
@@ -275,12 +275,11 @@ make schema-apply
 Hexagonal architecture with pluggable providers and stores:
 
 ```text
-pkg/
-├── auth/           # Service layer (orchestration + ports)
-├── entity/         # Domain types
-├── token/          # JWT issuer (pure crypto)
-├── provider/       # Auth providers (local, oauth, wallet)
-└── store/          # Storage backends (postgres, memory)
+auth/        # Service layer (orchestration + ports)
+entity/      # Domain types
+token/       # JWT issuer (pure crypto)
+provider/    # Auth providers (local, oauth, wallet)
+store/       # Storage backends (postgres, memory)
 ```
 
 See [docs/architecture.md](docs/architecture.md) for details.

@@ -177,7 +177,7 @@ func (app *Service) DeleteUser(ctx context.Context, targetUserID string) error {
 
 - **Hexagonal Architecture**: Domain isolated from adapters
 - **Plugin System**: Providers as pluggable modules
-- **Dual Deployment**: Library (pkg/) or microservice (cmd/)
+- **Dual Deployment**: Library (import the packages) or microservice (cmd/)
 - **Stateless JWT**: No session storage required
 - **Single Port**: gRPC + HTTP/JSON + gRPC-Web via Connect RPC
 

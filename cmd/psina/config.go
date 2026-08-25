@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/foxcool/psina/pkg/auth"
+	"github.com/foxcool/psina/auth"
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/confmap"
 	"github.com/knadh/koanf/providers/env"

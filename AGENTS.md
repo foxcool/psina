@@ -7,7 +7,7 @@
 Name origin: "psina" (рус. "псина") = "doggy" — a guard dog that knows pack from strangers.
 
 - Connect RPC on :8080 (gRPC + HTTP/JSON on same port), PostgreSQL 17+, JWT RS256/ES256
-- Hexagonal architecture: domain logic in `pkg/auth/` + `pkg/entity/`, adapters are replaceable
+- Hexagonal architecture: domain logic in `auth/` + `entity/`, adapters are replaceable
 
 ## Current Status
 
@@ -17,26 +17,25 @@ Name origin: "psina" (рус. "псина") = "doggy" — a guard dog that knows
 
 ```text
 cmd/psina/           # binary entrypoint + config (koanf, slog, graceful shutdown)
-pkg/
-  api/auth/v1/       # generated Connect RPC code — DO NOT EDIT
-  auth/              # service layer: service.go, handler.go, ports.go, validation.go
-  entity/            # domain types (User, Identity, TokenPair, PersonalAccessToken, etc.)
-  token/             # JWT issuer + PAT generation — pure crypto, no storage
-  provider/local/    # username/password provider (Argon2id)
-  provider/oauth/    # oauth.Provider iface + UserInfo; google/ — OIDC provider
-  provider/wallet/   # chain-agnostic WalletProvider iface + Dispatcher (per-chain impls pending)
-  store/
-    errors.go        # typed store errors: ErrUserNotFound, ErrTokenNotFound, etc.
-    postgres/        # production store
-    memory/          # dev/test in-memory store
-  testutil/          # testcontainers helpers for integration tests
 api/auth/v1/         # auth.proto — edit here, then make gen
+                     # alongside it: generated Connect RPC code — DO NOT EDIT
+auth/                # service layer: service.go, handler.go, ports.go, validation.go
+entity/              # domain types (User, Identity, TokenPair, PersonalAccessToken, etc.)
+token/               # JWT issuer + PAT generation — pure crypto, no storage
+provider/local/      # username/password provider (Argon2id)
+provider/oauth/      # oauth.Provider iface + UserInfo; google/ — OIDC provider
+provider/wallet/     # chain-agnostic WalletProvider iface + Dispatcher (per-chain impls pending)
+store/
+  errors.go          # typed store errors: ErrUserNotFound, ErrTokenNotFound, etc.
+  postgres/          # production store
+  memory/            # dev/test in-memory store
+testutil/            # testcontainers helpers for integration tests
 schema.hcl           # Atlas declarative schema — edit here, then make schema-apply
 deploy/              # Docker Compose files
 docs/                # architecture, development, contributing
 ```
 
-## Core Interfaces (`pkg/auth/ports.go`)
+## Core Interfaces (`auth/ports.go`)
 
 ```go
 // Provider authenticates users via specific method
@@ -111,7 +110,7 @@ Direct equivalents (when `make` isn't available):
 
 ```bash
 go test -v -race ./...                   # unit tests
-go test -v -tags=integration ./pkg/...  # integration tests
+go test -v -tags=integration ./...      # integration tests
 buf generate --template buf.gen.yaml    # proto generation
 go run ./cmd/psina/...                  # run dev server (in-memory store)
 ```
@@ -181,12 +180,12 @@ DefaultQueryTimeout = 5000  // milliseconds
 
 ## Architecture Rules
 
-- **New auth method** → implement `Provider` interface from `pkg/auth/ports.go`, place in `pkg/provider/<name>/`
-- **New wallet chain** → implement `wallet.WalletProvider` (`pkg/provider/wallet/provider.go`), register it with a `wallet.Dispatcher`, place in `pkg/provider/wallet/<chain>/`
-- **New storage backend** → implement `UserStore`/`TokenStore`/`CredentialStore`/`PATStore`, place in `pkg/store/<name>/`. Optional stores for the wallet/OAuth track (interfaces declared, backends pending): `OAuthIdentityStore`, `WalletIdentityStore`, `ChallengeStore`.
-- **Store errors** → return typed errors from `pkg/store/errors.go`; handler maps them to Connect codes via `errors.Is()`
+- **New auth method** → implement `Provider` interface from `auth/ports.go`, place in `provider/<name>/`
+- **New wallet chain** → implement `wallet.WalletProvider` (`provider/wallet/provider.go`), register it with a `wallet.Dispatcher`, place in `provider/wallet/<chain>/`
+- **New storage backend** → implement `UserStore`/`TokenStore`/`CredentialStore`/`PATStore`, place in `store/<name>/`. Optional stores for the wallet/OAuth track (interfaces declared, backends pending): `OAuthIdentityStore`, `WalletIdentityStore`, `ChallengeStore`.
+- **Store errors** → return typed errors from `store/errors.go`; handler maps them to Connect codes via `errors.Is()`
 - **Schema changes** → edit `schema.hcl`, then `make schema-apply` — never write raw SQL migrations
-- **Proto changes** → edit `api/auth/v1/auth.proto`, then `make gen` — never edit `pkg/api/auth/v1/` directly
+- **Proto changes** → edit `api/auth/v1/auth.proto`, then `make gen` — never edit the generated files in `api/auth/v1/` directly
 - **Roles** → opaque strings on `users.roles`, emitted in the JWT `roles` claim and
   `VerifyResponse`/`X-User-Roles`; psina never interprets them (authorization is the
   app's job). psina has no role-management API and does not derive roles from email —
@@ -221,10 +220,10 @@ Service errors: `ErrInvalidCredentials`, `ErrTokenExpired`, `ErrPATDisabled`,
 
 ```go
 import (
-    "github.com/foxcool/psina/pkg/auth"
-    "github.com/foxcool/psina/pkg/provider/local"
-    "github.com/foxcool/psina/pkg/store/postgres"
-    "github.com/foxcool/psina/pkg/token"
+    "github.com/foxcool/psina/auth"
+    "github.com/foxcool/psina/provider/local"
+    "github.com/foxcool/psina/store/postgres"
+    "github.com/foxcool/psina/token"
 )
 
 func main() {

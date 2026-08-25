@@ -139,3 +139,23 @@ jobs:
           comment-pr: true
           claude-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
 
+      # The action reports success even when the audit itself crashed: on
+      # failure it writes {"error": ...} with no "findings" key, and its
+      # `jq '.findings // []'` turns that into an empty findings list. A
+      # broken audit is then indistinguishable from a clean diff. Fail here
+      # so a review that never ran can never be reported as passing.
+      - name: Fail if the audit did not actually run
+        if: always()
+        run: |
+          results=claudecode-results.json
+          if [ ! -f "$results" ]; then
+            echo "::error::$results missing — the security audit did not produce results."
+            exit 1
+          fi
+          if jq -e 'has("error")' "$results" >/dev/null 2>&1; then
+            echo "::error::Security audit failed to run; findings were NOT collected."
+            jq -r '.error' "$results"
+            exit 1
+          fi
+          echo "Audit ran; findings: $(jq -r '.findings | if . == null then 0 else length end' "$results")"
+

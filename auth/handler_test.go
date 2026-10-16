@@ -9,7 +9,7 @@ import (
 	"connectrpc.com/connect"
 	authv1 "github.com/foxcool/psina/api/auth/v1"
 	"github.com/foxcool/psina/entity"
-	storeerr "github.com/foxcool/psina/store"
+	psinastore "github.com/foxcool/psina/store"
 	"github.com/foxcool/psina/store/memory"
 	"github.com/foxcool/psina/token"
 	"github.com/stretchr/testify/assert"
@@ -167,7 +167,7 @@ func TestHandler_Register(t *testing.T) {
 				callCount++
 				if callCount > 1 {
 					// What the real local provider returns, not the service sentinel.
-					return nil, fmt.Errorf("%w: %s", storeerr.ErrUserExists, req.Email)
+					return nil, fmt.Errorf("%w: %s", psinastore.ErrUserExists, req.Email)
 				}
 				return &entity.Identity{UserID: "user-123", Email: req.Email, Provider: "mock"}, nil
 			},

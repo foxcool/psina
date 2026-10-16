@@ -144,11 +144,11 @@ type failingCredentialStore struct {
 }
 
 func (f *failingCredentialStore) SavePasswordHash(ctx context.Context, userID, hash string) error {
-	return errors.New("database connection lost")
+	return errDBDown
 }
 
 func (f *failingCredentialStore) GetPasswordHash(ctx context.Context, userID string) (string, error) {
-	return "", errors.New("database connection lost")
+	return "", errDBDown
 }
 
 func TestProvider_RegisterCompensatingDelete(t *testing.T) {
@@ -229,7 +229,7 @@ func TestProvider_StorageFailuresAreNotMasked(t *testing.T) {
 		provider := local.New(mem, &failingCredentialStore{})
 
 		_, err := provider.Authenticate(ctx, &entity.AuthRequest{Email: "a@example.com", Password: "x"})
-		require.Error(t, err)
+		require.ErrorIs(t, err, errDBDown)
 		assert.NotErrorIs(t, err, auth.ErrInvalidCredentials)
 	})
 }

@@ -5,11 +5,14 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
+	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/foxcool/psina/auth"
 	"github.com/foxcool/psina/entity"
+	"github.com/foxcool/psina/store"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/argon2"
 )
@@ -47,18 +50,22 @@ func (p *Provider) Type() string {
 }
 
 // Register creates a new user account with password.
+// A taken email yields an error wrapping store.ErrUserExists.
 func (p *Provider) Register(ctx context.Context, req *entity.RegisterRequest) (*entity.Identity, error) {
 	if req.Email == "" {
-		return nil, fmt.Errorf("email required")
+		return nil, fmt.Errorf("%w: email required", auth.ErrInvalidEmail)
 	}
 	if req.Password == "" {
-		return nil, fmt.Errorf("password required")
+		return nil, fmt.Errorf("%w: password required", auth.ErrPasswordTooShort)
 	}
 
-	// Check if user already exists
-	existing, err := p.userStore.GetByEmail(ctx, req.Email)
-	if err == nil && existing != nil {
-		return nil, fmt.Errorf("user already exists")
+	// Fast path for the common duplicate; Create still enforces uniqueness on a race.
+	_, err := p.userStore.GetByEmail(ctx, req.Email)
+	switch {
+	case err == nil:
+		return nil, fmt.Errorf("%w: %s", store.ErrUserExists, req.Email)
+	case !errors.Is(err, store.ErrUserNotFound):
+		return nil, fmt.Errorf("lookup user: %w", err)
 	}
 
 	// Hash password
@@ -80,8 +87,11 @@ func (p *Provider) Register(ctx context.Context, req *entity.RegisterRequest) (*
 
 	// Store password hash with compensating delete on failure
 	if err := p.credentialStore.SavePasswordHash(ctx, user.ID, passwordHash); err != nil {
-		// Rollback: delete orphaned user
-		_ = p.userStore.Delete(ctx, user.ID)
+		// Rollback: an orphaned user without credentials blocks re-registration of the email.
+		if delErr := p.userStore.Delete(ctx, user.ID); delErr != nil {
+			slog.ErrorContext(ctx, "rollback of user without credentials failed",
+				"user_id", user.ID, "error", delErr)
+		}
 		return nil, fmt.Errorf("store password: %w", err)
 	}
 
@@ -94,29 +104,31 @@ func (p *Provider) Register(ctx context.Context, req *entity.RegisterRequest) (*
 }
 
 // Authenticate verifies email and password credentials.
+// Unknown email, missing credentials and wrong password all yield auth.ErrInvalidCredentials
+// so callers cannot tell them apart; storage failures are returned wrapped as they are.
 func (p *Provider) Authenticate(ctx context.Context, req *entity.AuthRequest) (*entity.Identity, error) {
-	if req.Email == "" {
-		return nil, fmt.Errorf("email required")
-	}
-	if req.Password == "" {
-		return nil, fmt.Errorf("password required")
+	if req.Email == "" || req.Password == "" {
+		return nil, auth.ErrInvalidCredentials
 	}
 
-	// Retrieve user
 	user, err := p.userStore.GetByEmail(ctx, req.Email)
+	if errors.Is(err, store.ErrUserNotFound) {
+		return nil, auth.ErrInvalidCredentials
+	}
 	if err != nil {
-		return nil, fmt.Errorf("invalid credentials")
+		return nil, fmt.Errorf("get user: %w", err)
 	}
 
-	// Get stored password hash
 	storedHash, err := p.credentialStore.GetPasswordHash(ctx, user.ID)
+	if errors.Is(err, store.ErrCredentialNotFound) {
+		return nil, auth.ErrInvalidCredentials
+	}
 	if err != nil {
-		return nil, fmt.Errorf("invalid credentials")
+		return nil, fmt.Errorf("get password hash: %w", err)
 	}
 
-	// Verify password
 	if !verifyPassword(req.Password, storedHash) {
-		return nil, fmt.Errorf("invalid credentials")
+		return nil, auth.ErrInvalidCredentials
 	}
 
 	return &entity.Identity{

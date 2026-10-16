@@ -130,7 +130,7 @@ func TestE2E_DuplicateRegistration(t *testing.T) {
 
 	// Second registration with same email should fail
 	_, err = service.Register(ctx, "duplicate@example.com", "differentpassword")
-	assert.Error(t, err)
+	assert.ErrorIs(t, err, auth.ErrUserExists)
 }
 
 func TestE2E_InvalidLogin(t *testing.T) {
@@ -143,11 +143,11 @@ func TestE2E_InvalidLogin(t *testing.T) {
 
 	// Wrong password
 	_, err = service.Login(ctx, "login@example.com", "wrongpassword")
-	assert.Error(t, err)
+	assert.ErrorIs(t, err, auth.ErrInvalidCredentials)
 
 	// Non-existent user
 	_, err = service.Login(ctx, "nonexistent@example.com", "anypassword")
-	assert.Error(t, err)
+	assert.ErrorIs(t, err, auth.ErrInvalidCredentials)
 }
 
 func TestE2E_EmailNormalization(t *testing.T) {

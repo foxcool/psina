@@ -23,8 +23,6 @@ import (
 	"github.com/foxcool/psina/store/memory"
 	"github.com/foxcool/psina/store/postgres"
 	"github.com/foxcool/psina/token"
-	"golang.org/x/net/http2"
-	"golang.org/x/net/http2/h2c"
 )
 
 // Build information (set by goreleaser via ldflags).
@@ -252,10 +250,14 @@ func run() error {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	// Create server with h2c (HTTP/2 cleartext for gRPC)
+	// HTTP/1.1 for JSON clients and ForwardAuth, HTTP/2 cleartext (prior knowledge) for gRPC.
+	protocols := new(http.Protocols)
+	protocols.SetHTTP1(true)
+	protocols.SetUnencryptedHTTP2(true)
 	server := &http.Server{
 		Addr:         fmt.Sprintf(":%d", config.Server.Port),
-		Handler:      h2c.NewHandler(mux, &http2.Server{}),
+		Handler:      mux,
+		Protocols:    protocols,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  120 * time.Second,

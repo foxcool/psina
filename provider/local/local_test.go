@@ -1,14 +1,20 @@
 package local_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"testing"
 
+	"connectrpc.com/connect"
+	authv1 "github.com/foxcool/psina/api/auth/v1"
 	"github.com/foxcool/psina/auth"
 	"github.com/foxcool/psina/entity"
 	"github.com/foxcool/psina/provider/local"
+	psinastore "github.com/foxcool/psina/store"
 	"github.com/foxcool/psina/store/memory"
+	"github.com/foxcool/psina/token"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -44,8 +50,7 @@ func TestProvider_RegisterDuplicateEmail(t *testing.T) {
 
 	// Second registration with same email should fail
 	_, err = provider.Register(context.Background(), req)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "already exists")
+	assert.ErrorIs(t, err, psinastore.ErrUserExists)
 }
 
 func TestProvider_Authenticate(t *testing.T) {
@@ -89,8 +94,7 @@ func TestProvider_AuthenticateWrongPassword(t *testing.T) {
 		Password: "WrongPassword",
 	}
 	_, err = provider.Authenticate(context.Background(), authReq)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid credentials")
+	assert.ErrorIs(t, err, auth.ErrInvalidCredentials)
 }
 
 func TestProvider_AuthenticateNonexistentUser(t *testing.T) {
@@ -102,8 +106,7 @@ func TestProvider_AuthenticateNonexistentUser(t *testing.T) {
 		Password: "password",
 	}
 	_, err := provider.Authenticate(context.Background(), authReq)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid credentials")
+	assert.ErrorIs(t, err, auth.ErrInvalidCredentials)
 }
 
 func TestProvider_PasswordHashing(t *testing.T) {
@@ -141,11 +144,11 @@ type failingCredentialStore struct {
 }
 
 func (f *failingCredentialStore) SavePasswordHash(ctx context.Context, userID, hash string) error {
-	return errors.New("database connection lost")
+	return errDBDown
 }
 
 func (f *failingCredentialStore) GetPasswordHash(ctx context.Context, userID string) (string, error) {
-	return "", errors.New("database connection lost")
+	return "", errDBDown
 }
 
 func TestProvider_RegisterCompensatingDelete(t *testing.T) {
@@ -166,4 +169,127 @@ func TestProvider_RegisterCompensatingDelete(t *testing.T) {
 	// User should NOT exist (compensating delete worked)
 	_, err = userStore.GetByEmail(context.Background(), "test@example.com")
 	assert.Error(t, err, "user should be deleted after credential store failure")
+}
+
+// brokenUserStore fails every call it overrides; the rest delegate to the embedded store.
+type brokenUserStore struct {
+	auth.UserStore
+	failGetByEmail bool
+	failDelete     bool
+	created        bool
+}
+
+var errDBDown = errors.New("database connection lost")
+
+func (b *brokenUserStore) GetByEmail(ctx context.Context, email string) (*entity.User, error) {
+	if b.failGetByEmail {
+		return nil, errDBDown
+	}
+	return b.UserStore.GetByEmail(ctx, email)
+}
+
+func (b *brokenUserStore) Create(ctx context.Context, user *entity.User) error {
+	b.created = true
+	return b.UserStore.Create(ctx, user)
+}
+
+func (b *brokenUserStore) Delete(ctx context.Context, id string) error {
+	if b.failDelete {
+		return errDBDown
+	}
+	return b.UserStore.Delete(ctx, id)
+}
+
+func TestProvider_StorageFailuresAreNotMasked(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("register lookup failure", func(t *testing.T) {
+		mem := memory.New()
+		users := &brokenUserStore{UserStore: mem, failGetByEmail: true}
+		provider := local.New(users, mem)
+
+		_, err := provider.Register(ctx, &entity.RegisterRequest{Email: "a@example.com", Password: "SecurePassword123!"})
+		require.ErrorIs(t, err, errDBDown)
+		assert.NotErrorIs(t, err, psinastore.ErrUserExists)
+		assert.False(t, users.created, "must not create a user when the duplicate check failed")
+	})
+
+	t.Run("authenticate user lookup failure", func(t *testing.T) {
+		mem := memory.New()
+		provider := local.New(&brokenUserStore{UserStore: mem, failGetByEmail: true}, mem)
+
+		_, err := provider.Authenticate(ctx, &entity.AuthRequest{Email: "a@example.com", Password: "x"})
+		require.ErrorIs(t, err, errDBDown)
+		assert.NotErrorIs(t, err, auth.ErrInvalidCredentials)
+	})
+
+	t.Run("authenticate credential lookup failure", func(t *testing.T) {
+		mem := memory.New()
+		require.NoError(t, mem.Create(ctx, &entity.User{ID: "u1", Email: "a@example.com"}))
+		provider := local.New(mem, &failingCredentialStore{})
+
+		_, err := provider.Authenticate(ctx, &entity.AuthRequest{Email: "a@example.com", Password: "x"})
+		require.ErrorIs(t, err, errDBDown)
+		assert.NotErrorIs(t, err, auth.ErrInvalidCredentials)
+	})
+}
+
+func TestProvider_RegisterRollbackFailureIsLogged(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	mem := memory.New()
+	provider := local.New(&brokenUserStore{UserStore: mem, failDelete: true}, &failingCredentialStore{})
+
+	_, err := provider.Register(context.Background(), &entity.RegisterRequest{Email: "a@example.com", Password: "SecurePassword123!"})
+	require.Error(t, err)
+	assert.Contains(t, buf.String(), "rollback of user without credentials failed")
+}
+
+// The handler maps service sentinels to Connect codes; this guards the whole chain
+// with the real provider, which mock-provider tests in package auth cannot.
+func TestProvider_ConnectCodesThroughHandler(t *testing.T) {
+	mem := memory.New()
+	issuer, err := token.New()
+	require.NoError(t, err)
+	svc := auth.NewService(mem, mem, issuer, []auth.Provider{local.New(mem, mem)})
+	handler := auth.NewHandler(svc)
+	ctx := context.Background()
+
+	_, err = handler.Register(ctx, connect.NewRequest(&authv1.RegisterRequest{
+		Email: "dup@example.com", Password: "SecurePassword123!",
+	}))
+	require.NoError(t, err)
+
+	tests := []struct {
+		name string
+		call func() error
+		want connect.Code
+	}{
+		{"duplicate register", func() error {
+			_, err := handler.Register(ctx, connect.NewRequest(&authv1.RegisterRequest{
+				Email: "dup@example.com", Password: "AnotherPassword123!",
+			}))
+			return err
+		}, connect.CodeAlreadyExists},
+		{"wrong password", func() error {
+			_, err := handler.Login(ctx, connect.NewRequest(&authv1.LoginRequest{
+				Email: "dup@example.com", Password: "WrongPassword123!",
+			}))
+			return err
+		}, connect.CodeUnauthenticated},
+		{"unknown user", func() error {
+			_, err := handler.Login(ctx, connect.NewRequest(&authv1.LoginRequest{
+				Email: "nobody@example.com", Password: "WrongPassword123!",
+			}))
+			return err
+		}, connect.CodeUnauthenticated},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, connect.CodeOf(tt.call()))
+		})
+	}
 }

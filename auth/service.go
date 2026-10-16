@@ -166,6 +166,10 @@ func (s *Service) Register(ctx context.Context, email, password string) (*Regist
 		Password: password,
 	}
 	identity, err := s.localProvider.Register(ctx, req)
+	if errors.Is(err, store.ErrUserExists) {
+		// Translate to the service sentinel the handler maps to AlreadyExists.
+		return nil, fmt.Errorf("register: %w", ErrUserExists)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("register: %w", err)
 	}

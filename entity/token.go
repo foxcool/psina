@@ -28,6 +28,19 @@ type RefreshToken struct {
 	ExpiresAt time.Time
 	CreatedAt time.Time
 	Revoked   bool
+	// RotatedAt is when Refresh exchanged this token; nil if it never was.
+	RotatedAt *time.Time
+	// EndedAt is when logout or reuse detection revoked this token; nil if not.
+	EndedAt *time.Time
+}
+
+// RefreshFamily summarises a refresh token family for reuse decisions.
+type RefreshFamily struct {
+	// SessionEnded is true if any member was revoked by logout or reuse
+	// detection (RevokeTokens), as opposed to rotation.
+	SessionEnded bool
+	// LastRotatedAt is the latest rotation in the family; nil if none.
+	LastRotatedAt *time.Time
 }
 
 // PersonalAccessToken represents a long-lived, opaque API token. Only the SHA256

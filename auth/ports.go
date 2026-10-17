@@ -37,16 +37,34 @@ type UserStore interface {
 
 // TokenStore handles refresh token persistence.
 type TokenStore interface {
-	// SaveRefreshToken persists a refresh token.
+	// SaveRefreshToken persists a refresh token. A token whose Parent (family
+	// root) has been revoked by RevokeTokens, or no longer exists, is refused
+	// with store.ErrTokenRevoked, atomically with respect to that revocation.
+	// The root row anchors the session: never delete the root of a family
+	// that still has live members (e.g. in an expiry cleanup — the root
+	// expires before its successors).
 	SaveRefreshToken(ctx context.Context, token *entity.RefreshToken) error
 
 	// GetRefreshToken retrieves a refresh token by its hash.
 	GetRefreshToken(ctx context.Context, hash string) (*entity.RefreshToken, error)
 
-	// RevokeTokens revokes a token and all tokens in its family.
-	// Works for both single token revocation and family revocation.
+	// RevokeTokens revokes the token with this hash and every token whose
+	// parent it is, stamping EndedAt. Pass the family root to end a session:
+	// SaveRefreshToken checks only the root, so revoking a child alone does
+	// not stop new successors from joining.
 	// Query: WHERE hash = $1 OR parent = $1
 	RevokeTokens(ctx context.Context, hash string) error
+
+	// RotateRefreshToken atomically revokes a live token, stamps RotatedAt = now
+	// and returns it. Of concurrent callers with the same hash exactly one wins;
+	// losers, like any caller presenting an already revoked token, get
+	// store.ErrTokenRevoked together with the token. An expired token yields
+	// store.ErrTokenExpired with the token, a missing one store.ErrTokenNotFound.
+	RotateRefreshToken(ctx context.Context, hash string, now time.Time) (*entity.RefreshToken, error)
+
+	// GetRefreshFamily summarises the family rooted at root (the root token
+	// itself plus every token whose parent is root).
+	GetRefreshFamily(ctx context.Context, root string) (*entity.RefreshFamily, error)
 }
 
 // PATStore handles personal access token persistence.

@@ -29,6 +29,7 @@ store/
   errors.go          # typed store errors: ErrUserNotFound, ErrTokenNotFound, etc.
   postgres/          # production store
   memory/            # dev/test in-memory store
+  storetest/         # behavioural contract tests every backend runs
 testutil/            # testcontainers helpers for integration tests
 schema.hcl           # Atlas declarative schema — edit here, then make schema-apply
 deploy/              # Docker Compose files
@@ -55,9 +56,11 @@ type UserStore interface {
 
 // TokenStore handles refresh tokens
 type TokenStore interface {
-    SaveRefreshToken(ctx context.Context, token *entity.RefreshToken) error
+    SaveRefreshToken(ctx context.Context, token *entity.RefreshToken) error // refuses (ErrTokenRevoked) a child of an ended or missing root
     GetRefreshToken(ctx context.Context, hash string) (*entity.RefreshToken, error)
-    RevokeTokens(ctx context.Context, hash string) error  // revokes token and its family
+    RevokeTokens(ctx context.Context, hash string) error  // pass the family root to end a session
+    RotateRefreshToken(ctx context.Context, hash string, now time.Time) (*entity.RefreshToken, error) // atomic; one winner
+    GetRefreshFamily(ctx context.Context, root string) (*entity.RefreshFamily, error) // reuse-leeway decisions
 }
 
 // PATStore handles personal access tokens (opaque psn_ tokens)
@@ -131,6 +134,8 @@ db:
 jwt:
   privateKeyPath: "" # empty = ephemeral key (dev only!)
   algorithm: RS256   # RS256 or ES256
+token:
+  refreshReuseLeeway: 10s # duplicate-refresh grace; 0s = strict reuse detection
 pat:
   enabled: true
   maxPerUser: 50     # -1 = unlimited
@@ -162,6 +167,9 @@ RefreshTokenTTL    = 7 * 24 * time.Hour
 ClockSkewTolerance = 30 * time.Second  // for nbf claim
 Algorithm          = RS256
 
+// Refresh rotation (atomic; a duplicate within the leeway gets a sibling pair)
+DefaultRefreshReuseLeeway = 10 * time.Second  // auth.WithRefreshReuseLeeway; 0 = strict
+
 // Personal access tokens (opaque, SHA256-hashed at rest)
 PATPrefix               = "psn_"
 DefaultPATMaxPerUser    = 50
@@ -182,7 +190,7 @@ DefaultQueryTimeout = 5000  // milliseconds
 
 - **New auth method** → implement `Provider` interface from `auth/ports.go`, place in `provider/<name>/`
 - **New wallet chain** → implement `wallet.WalletProvider` (`provider/wallet/provider.go`), register it with a `wallet.Dispatcher`, place in `provider/wallet/<chain>/`
-- **New storage backend** → implement `UserStore`/`TokenStore`/`CredentialStore`/`PATStore`, place in `store/<name>/`. Optional stores for the wallet/OAuth track (interfaces declared, backends pending): `OAuthIdentityStore`, `WalletIdentityStore`, `ChallengeStore`.
+- **New storage backend** → implement `UserStore`/`TokenStore`/`CredentialStore`/`PATStore`, place in `store/<name>/`, run the `store/storetest` contracts against it. Optional stores for the wallet/OAuth track (interfaces declared, backends pending): `OAuthIdentityStore`, `WalletIdentityStore`, `ChallengeStore`.
 - **Store errors** → return typed errors from `store/errors.go`; handler maps them to Connect codes via `errors.Is()`
 - **Schema changes** → edit `schema.hcl`, then `make schema-apply` — never write raw SQL migrations
 - **Proto changes** → edit `api/auth/v1/auth.proto`, then `make gen` — never edit the generated files in `api/auth/v1/` directly
@@ -204,7 +212,8 @@ if errors.Is(err, store.ErrUserNotFound) {
 }
 ```
 
-Store errors: `ErrUserNotFound`, `ErrUserExists`, `ErrTokenNotFound`, `ErrCredentialNotFound`.
+Store errors: `ErrUserNotFound`, `ErrUserExists`, `ErrTokenNotFound`, `ErrTokenRevoked`,
+`ErrTokenExpired`, `ErrCredentialNotFound`.
 Service errors: `ErrInvalidCredentials`, `ErrTokenExpired`, `ErrPATDisabled`,
 `ErrPATLimitReached`, `ErrPATNameRequired`, `ErrPATNameTooLong`, `ErrPATExpiryInvalid`, etc.
 

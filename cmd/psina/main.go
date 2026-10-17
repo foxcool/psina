@@ -117,7 +117,7 @@ func run() error {
 	provider := local.New(userStore, credStore)
 
 	// Initialize service
-	var serviceOpts []auth.ServiceOption
+	serviceOpts := []auth.ServiceOption{auth.WithRefreshReuseLeeway(config.Token.RefreshReuseLeeway)}
 	if config.PAT.Enabled {
 		serviceOpts = append(serviceOpts, auth.WithPAT(patStore, auth.PATConfig{
 			MaxPerUser:    config.PAT.MaxPerUser,

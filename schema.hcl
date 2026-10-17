@@ -118,6 +118,21 @@ table "refresh_tokens" {
     default = false
   }
 
+  // Set only by rotation: a replay of a token rotated moments ago is a
+  // duplicate refresh, not necessarily reuse.
+  column "rotated_at" {
+    type = timestamptz
+    null = true
+  }
+
+  // Set by logout and reuse revocation. Revoking by family root always stamps
+  // the root row, so an ended session is visible even when it had no live
+  // member at that moment (a successor still being saved).
+  column "ended_at" {
+    type = timestamptz
+    null = true
+  }
+
   primary_key {
     columns = [column.hash]
   }

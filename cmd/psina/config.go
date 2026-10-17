@@ -33,6 +33,9 @@ type Config struct {
 		PrivateKey     string `koanf:"privatekey"` // PEM-encoded key (alternative to path)
 		Algorithm      string `koanf:"algorithm"`  // "RS256" or "ES256" (default: RS256)
 	} `koanf:"jwt"`
+	Token struct {
+		RefreshReuseLeeway time.Duration `koanf:"refreshreuseleeway"` // Grace for duplicate refreshes; 0 = strict (default: 10s)
+	} `koanf:"token"`
 	Cookie struct {
 		Enabled  bool   `koanf:"enabled"`
 		Domain   string `koanf:"domain"`
@@ -53,19 +56,20 @@ func loadConfig() (*Config, error) {
 
 	// Default values
 	defaults := map[string]any{
-		"logger.level":      "info",
-		"logger.format":     "json",
-		"server.port":       8080,
-		"db.tableprefix":    "",
-		"jwt.algorithm":     "RS256",
-		"cookie.enabled":    false,
-		"cookie.secure":     true,
-		"cookie.samesite":   "strict",
-		"cookie.path":       "/",
-		"pat.enabled":       true,
-		"pat.maxperuser":    auth.DefaultPATMaxPerUser,
-		"pat.maxttl":        "0s",
-		"pat.touchinterval": auth.DefaultPATTouchInterval.String(),
+		"logger.level":             "info",
+		"logger.format":            "json",
+		"server.port":              8080,
+		"db.tableprefix":           "",
+		"jwt.algorithm":            "RS256",
+		"token.refreshreuseleeway": auth.DefaultRefreshReuseLeeway.String(),
+		"cookie.enabled":           false,
+		"cookie.secure":            true,
+		"cookie.samesite":          "strict",
+		"cookie.path":              "/",
+		"pat.enabled":              true,
+		"pat.maxperuser":           auth.DefaultPATMaxPerUser,
+		"pat.maxttl":               "0s",
+		"pat.touchinterval":        auth.DefaultPATTouchInterval.String(),
 	}
 	if err := k.Load(confmap.Provider(defaults, "."), nil); err != nil {
 		return nil, fmt.Errorf("load defaults: %w", err)
@@ -125,6 +129,10 @@ func validateConfig(c *Config) error {
 		// OK
 	default:
 		return fmt.Errorf("unsupported JWT algorithm: %s (supported: RS256, ES256)", c.JWT.Algorithm)
+	}
+
+	if c.Token.RefreshReuseLeeway < 0 {
+		return fmt.Errorf("token.refreshreuseleeway must not be negative: %s", c.Token.RefreshReuseLeeway)
 	}
 
 	// Validate SameSite

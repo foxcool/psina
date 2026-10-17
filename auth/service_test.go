@@ -3,7 +3,9 @@ package auth
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/foxcool/psina/entity"
 	"github.com/foxcool/psina/store"
@@ -43,15 +45,36 @@ func (m *mockProvider) Authenticate(ctx context.Context, req *entity.AuthRequest
 	}, nil
 }
 
-func setupTestService(t *testing.T) (*Service, *memory.Store) {
+func setupTestService(t *testing.T, opts ...ServiceOption) (*Service, *memory.Store) {
 	t.Helper()
 	memStore := memory.New()
 	issuer, err := token.New()
 	require.NoError(t, err)
 
 	provider := &mockProvider{}
-	service := NewService(memStore, memStore, issuer, []Provider{provider}, WithPAT(memStore, PATConfig{}))
+	opts = append([]ServiceOption{WithPAT(memStore, PATConfig{})}, opts...)
+	service := NewService(memStore, memStore, issuer, []Provider{provider}, opts...)
 	return service, memStore
+}
+
+// fakeClock is a manually advanced clock for WithClock.
+type fakeClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func newFakeClock() *fakeClock { return &fakeClock{t: time.Now()} }
+
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *fakeClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(d)
 }
 
 func TestService_Register(t *testing.T) {
@@ -225,7 +248,8 @@ func TestService_Refresh(t *testing.T) {
 }
 
 func TestService_Refresh_TokenReuse(t *testing.T) {
-	service, memStore := setupTestService(t)
+	clock := newFakeClock()
+	service, memStore := setupTestService(t, WithClock(clock.Now))
 	ctx := context.Background()
 
 	// Create user
@@ -237,18 +261,237 @@ func TestService_Refresh_TokenReuse(t *testing.T) {
 	require.NoError(t, err)
 
 	// First refresh - should succeed
-	_, err = service.Refresh(ctx, result.TokenPair.RefreshToken)
+	second, err := service.Refresh(ctx, result.TokenPair.RefreshToken)
 	require.NoError(t, err)
 
-	// Second refresh with same token - should detect reuse
+	// Same token again once the leeway is over - should detect reuse
+	clock.Advance(DefaultRefreshReuseLeeway + time.Second)
 	_, err = service.Refresh(ctx, result.TokenPair.RefreshToken)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrTokenReuse))
 
 	// Verify error contains user_id
 	var reuseErr *TokenReuseError
-	assert.True(t, errors.As(err, &reuseErr))
+	require.True(t, errors.As(err, &reuseErr))
 	assert.Equal(t, "user-123", reuseErr.UserID)
+
+	// The whole family is revoked, including the legitimate successor
+	_, err = service.Refresh(ctx, second.RefreshToken)
+	assert.ErrorIs(t, err, ErrTokenReuse)
+}
+
+// registerForRefresh creates the mock provider's user and returns its first refresh token.
+func registerForRefresh(t *testing.T, service *Service, memStore *memory.Store) string {
+	t.Helper()
+	ctx := context.Background()
+	require.NoError(t, memStore.Create(ctx, &entity.User{ID: "user-123", Email: "test@example.com"}))
+	result, err := service.Register(ctx, "test@example.com", "SecurePassword123!")
+	require.NoError(t, err)
+	return result.TokenPair.RefreshToken
+}
+
+func TestService_Refresh_ReuseLeeway(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("duplicate within leeway gets a pair and keeps the family", func(t *testing.T) {
+		clock := newFakeClock()
+		service, memStore := setupTestService(t, WithClock(clock.Now))
+		r1 := registerForRefresh(t, service, memStore)
+
+		first, err := service.Refresh(ctx, r1)
+		require.NoError(t, err)
+		clock.Advance(DefaultRefreshReuseLeeway)
+		dup, err := service.Refresh(ctx, r1)
+		require.NoError(t, err)
+		assert.NotEqual(t, first.RefreshToken, dup.RefreshToken)
+
+		// Both successors are live members of the same family
+		_, err = service.Refresh(ctx, dup.RefreshToken)
+		require.NoError(t, err)
+		_, err = service.Refresh(ctx, first.RefreshToken)
+		require.NoError(t, err)
+	})
+
+	t.Run("strict mode treats an immediate duplicate as reuse", func(t *testing.T) {
+		service, memStore := setupTestService(t, WithRefreshReuseLeeway(0))
+		r1 := registerForRefresh(t, service, memStore)
+
+		_, err := service.Refresh(ctx, r1)
+		require.NoError(t, err)
+		_, err = service.Refresh(ctx, r1)
+		assert.ErrorIs(t, err, ErrTokenReuse)
+	})
+
+	t.Run("older generation is reuse even within leeway", func(t *testing.T) {
+		clock := newFakeClock()
+		service, memStore := setupTestService(t, WithClock(clock.Now))
+		r1 := registerForRefresh(t, service, memStore)
+
+		r2, err := service.Refresh(ctx, r1)
+		require.NoError(t, err)
+		// Distinct stamps: equal ones count r1 as the latest rotation too.
+		clock.Advance(time.Second)
+		r3, err := service.Refresh(ctx, r2.RefreshToken)
+		require.NoError(t, err)
+
+		// The client has moved on to r3, so r1 cannot be a duplicate
+		_, err = service.Refresh(ctx, r1)
+		require.ErrorIs(t, err, ErrTokenReuse)
+		_, err = service.Refresh(ctx, r3.RefreshToken)
+		assert.ErrorIs(t, err, ErrTokenReuse, "family must be revoked")
+	})
+
+	t.Run("no grace after logout", func(t *testing.T) {
+		service, memStore := setupTestService(t)
+		r1 := registerForRefresh(t, service, memStore)
+
+		r2, err := service.Refresh(ctx, r1)
+		require.NoError(t, err)
+		require.NoError(t, service.Logout(ctx, r2.RefreshToken))
+
+		_, err = service.Refresh(ctx, r1)
+		assert.ErrorIs(t, err, ErrTokenReuse)
+	})
+
+	t.Run("logout ends siblings minted within leeway", func(t *testing.T) {
+		service, memStore := setupTestService(t)
+		r1 := registerForRefresh(t, service, memStore)
+
+		tabA, err := service.Refresh(ctx, r1)
+		require.NoError(t, err)
+		tabB, err := service.Refresh(ctx, r1)
+		require.NoError(t, err)
+
+		require.NoError(t, service.Logout(ctx, tabA.RefreshToken))
+		_, err = service.Refresh(ctx, tabB.RefreshToken)
+		assert.ErrorIs(t, err, ErrTokenReuse)
+	})
+
+	t.Run("replay from a lagging clock beyond leeway is reuse", func(t *testing.T) {
+		clock := newFakeClock()
+		service, memStore := setupTestService(t, WithClock(clock.Now))
+		r1 := registerForRefresh(t, service, memStore)
+
+		// The rotating replica was ahead by more than the leeway.
+		clock.Advance(DefaultRefreshReuseLeeway + time.Second)
+		_, err := service.Refresh(ctx, r1)
+		require.NoError(t, err)
+		clock.Advance(-(DefaultRefreshReuseLeeway + time.Second) * 2)
+
+		_, err = service.Refresh(ctx, r1)
+		assert.ErrorIs(t, err, ErrTokenReuse)
+	})
+
+	t.Run("logged out token is reuse without grace", func(t *testing.T) {
+		service, memStore := setupTestService(t)
+		r1 := registerForRefresh(t, service, memStore)
+
+		require.NoError(t, service.Logout(ctx, r1))
+		_, err := service.Refresh(ctx, r1)
+		assert.ErrorIs(t, err, ErrTokenReuse)
+	})
+
+	t.Run("expired token", func(t *testing.T) {
+		clock := newFakeClock()
+		service, memStore := setupTestService(t, WithClock(clock.Now))
+		r1 := registerForRefresh(t, service, memStore)
+
+		clock.Advance(token.RefreshTokenTTL)
+		_, err := service.Refresh(ctx, r1)
+		assert.ErrorIs(t, err, ErrTokenExpired)
+	})
+}
+
+// logoutBeforeSave ends the session right before the successor token is
+// saved: the interleaving the SaveRefreshToken root check exists for.
+type logoutBeforeSave struct {
+	*memory.Store
+	root      string
+	successor string // hash of the token offered for saving after the logout
+}
+
+func (s *logoutBeforeSave) SaveRefreshToken(ctx context.Context, rt *entity.RefreshToken) error {
+	if s.root != "" && rt.Parent == s.root {
+		if err := s.RevokeTokens(ctx, s.root); err != nil {
+			return err
+		}
+		s.successor = rt.Hash
+	}
+	return s.Store.SaveRefreshToken(ctx, rt)
+}
+
+func TestService_Refresh_SessionEndsBeforeSave(t *testing.T) {
+	ctx := context.Background()
+	memStore := memory.New()
+	issuer, err := token.New()
+	require.NoError(t, err)
+	racy := &logoutBeforeSave{Store: memStore}
+	service := NewService(racy, memStore, issuer, []Provider{&mockProvider{}})
+
+	r1 := registerForRefresh(t, service, memStore)
+	racy.root = token.HashToken(r1)
+
+	_, err = service.Refresh(ctx, r1)
+	require.ErrorIs(t, err, ErrTokenReuse)
+
+	// The successor offered after the logout must not join the ended session.
+	require.NotEmpty(t, racy.successor)
+	_, err = memStore.GetRefreshToken(ctx, racy.successor)
+	assert.ErrorIs(t, err, store.ErrTokenNotFound)
+}
+
+func TestService_Refresh_Concurrent(t *testing.T) {
+	const n = 10
+	ctx := context.Background()
+
+	run := func(t *testing.T, service *Service, r1 string) (winners []string, reuse int) {
+		t.Helper()
+		errs := make([]error, n)
+		pairs := make([]*entity.TokenPair, n)
+		var wg sync.WaitGroup
+		for i := range n {
+			wg.Go(func() {
+				pairs[i], errs[i] = service.Refresh(ctx, r1)
+			})
+		}
+		wg.Wait()
+		for i, err := range errs {
+			switch {
+			case err == nil:
+				winners = append(winners, pairs[i].RefreshToken)
+			case errors.Is(err, ErrTokenReuse):
+				reuse++
+			default:
+				t.Errorf("unexpected error: %v", err)
+			}
+		}
+		return winners, reuse
+	}
+
+	t.Run("leeway absorbs duplicates", func(t *testing.T) {
+		service, memStore := setupTestService(t)
+		winners, _ := run(t, service, registerForRefresh(t, service, memStore))
+		assert.Len(t, winners, n)
+	})
+
+	t.Run("strict: concurrent replays end the session", func(t *testing.T) {
+		service, memStore := setupTestService(t, WithRefreshReuseLeeway(0))
+		r1 := registerForRefresh(t, service, memStore)
+		winners, reuse := run(t, service, r1)
+
+		// One rotation wins; whether its pair is handed out depends on whether
+		// the losers end the session before its post-save check. Either way
+		// the session must end and nothing issued may stay usable.
+		assert.LessOrEqual(t, len(winners), 1)
+		assert.Equal(t, n, len(winners)+reuse)
+		family, err := memStore.GetRefreshFamily(ctx, token.HashToken(r1))
+		require.NoError(t, err)
+		assert.True(t, family.SessionEnded)
+		for _, rt := range winners {
+			_, err := service.Refresh(ctx, rt)
+			assert.ErrorIs(t, err, ErrTokenReuse)
+		}
+	})
 }
 
 func TestService_Refresh_NotFound(t *testing.T) {

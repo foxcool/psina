@@ -37,7 +37,9 @@ type UserStore interface {
 
 // TokenStore handles refresh token persistence.
 type TokenStore interface {
-	// SaveRefreshToken persists a refresh token.
+	// SaveRefreshToken persists a refresh token. A token whose Parent (family
+	// root) has been revoked by RevokeTokens is refused with
+	// store.ErrTokenRevoked, atomically with respect to that revocation.
 	SaveRefreshToken(ctx context.Context, token *entity.RefreshToken) error
 
 	// GetRefreshToken retrieves a refresh token by its hash.
@@ -47,6 +49,17 @@ type TokenStore interface {
 	// Works for both single token revocation and family revocation.
 	// Query: WHERE hash = $1 OR parent = $1
 	RevokeTokens(ctx context.Context, hash string) error
+
+	// RotateRefreshToken atomically revokes a live token, stamps RotatedAt = now
+	// and returns it. Of concurrent callers with the same hash exactly one wins;
+	// losers, like any caller presenting an already revoked token, get
+	// store.ErrTokenRevoked together with the token. An expired token yields
+	// store.ErrTokenExpired with the token, a missing one store.ErrTokenNotFound.
+	RotateRefreshToken(ctx context.Context, hash string, now time.Time) (*entity.RefreshToken, error)
+
+	// GetRefreshFamily summarises the family rooted at root (the root token
+	// itself plus every token whose parent is root).
+	GetRefreshFamily(ctx context.Context, root string) (*entity.RefreshFamily, error)
 }
 
 // PATStore handles personal access token persistence.

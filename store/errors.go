@@ -13,6 +13,12 @@ var (
 	// ErrTokenNotFound indicates the requested refresh token does not exist.
 	ErrTokenNotFound = errors.New("refresh token not found")
 
+	// ErrTokenRevoked indicates the refresh token was already revoked or rotated.
+	ErrTokenRevoked = errors.New("refresh token revoked")
+
+	// ErrTokenExpired indicates the refresh token exists but has expired.
+	ErrTokenExpired = errors.New("refresh token expired")
+
 	// ErrCredentialNotFound indicates no credentials exist for the user.
 	ErrCredentialNotFound = errors.New("credential not found")
 

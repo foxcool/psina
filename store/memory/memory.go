@@ -130,9 +130,22 @@ func (s *Store) SaveRefreshToken(ctx context.Context, token *entity.RefreshToken
 		token.CreatedAt = now
 	}
 
+	// A successor may not join a family whose session has ended (same
+	// contract as the postgres root lock; here the mutex serialises it).
+	if root, ok := s.refreshTokens[token.Parent]; ok && token.Parent != "" && root.EndedAt != nil {
+		return fmt.Errorf("%w: session ended", store.ErrTokenRevoked)
+	}
+
 	s.refreshTokens[token.Hash] = token
 
 	return nil
+}
+
+// snapshot copies a stored token: callers must not alias structs that
+// revoke and rotate mutate under the lock.
+func snapshot(token *entity.RefreshToken) *entity.RefreshToken {
+	cp := *token
+	return &cp
 }
 
 // GetRefreshToken retrieves a refresh token by its hash.
@@ -145,7 +158,49 @@ func (s *Store) GetRefreshToken(ctx context.Context, hash string) (*entity.Refre
 		return nil, store.ErrTokenNotFound
 	}
 
-	return token, nil
+	return snapshot(token), nil
+}
+
+// RotateRefreshToken atomically revokes a live token and stamps RotatedAt.
+func (s *Store) RotateRefreshToken(ctx context.Context, hash string, now time.Time) (*entity.RefreshToken, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	token, exists := s.refreshTokens[hash]
+	if !exists {
+		return nil, store.ErrTokenNotFound
+	}
+	if token.Revoked {
+		return snapshot(token), store.ErrTokenRevoked
+	}
+	if !token.ExpiresAt.After(now) {
+		return snapshot(token), store.ErrTokenExpired
+	}
+
+	token.Revoked = true
+	token.RotatedAt = &now
+	return snapshot(token), nil
+}
+
+// GetRefreshFamily summarises the family rooted at root.
+func (s *Store) GetRefreshFamily(ctx context.Context, root string) (*entity.RefreshFamily, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	family := &entity.RefreshFamily{}
+	for _, token := range s.refreshTokens {
+		if token.Hash != root && token.Parent != root {
+			continue
+		}
+		if token.EndedAt != nil {
+			family.SessionEnded = true
+		}
+		if token.RotatedAt != nil && (family.LastRotatedAt == nil || token.RotatedAt.After(*family.LastRotatedAt)) {
+			t := *token.RotatedAt
+			family.LastRotatedAt = &t
+		}
+	}
+	return family, nil
 }
 
 // RevokeTokens revokes a token and all tokens in its family.
@@ -153,9 +208,13 @@ func (s *Store) RevokeTokens(ctx context.Context, hash string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	now := time.Now()
 	for _, token := range s.refreshTokens {
 		if token.Hash == hash || token.Parent == hash {
 			token.Revoked = true
+			if token.EndedAt == nil {
+				token.EndedAt = &now
+			}
 		}
 	}
 

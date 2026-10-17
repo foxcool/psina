@@ -339,7 +339,8 @@ func TestHandler_Refresh(t *testing.T) {
 	})
 
 	t.Run("token reuse", func(t *testing.T) {
-		handler, service, store := setupTestHandler(t)
+		service, store := setupTestService(t, WithRefreshReuseLeeway(0))
+		handler := NewHandler(service)
 		result := registerUser(t, store, "reuse@example.com", "SecurePassword123!", service)
 
 		ctx := context.Background()

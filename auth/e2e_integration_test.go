@@ -4,11 +4,16 @@ package auth_test
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"os"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/foxcool/psina/auth"
+	"github.com/foxcool/psina/entity"
 	"github.com/foxcool/psina/provider/local"
 	"github.com/foxcool/psina/store/postgres"
 	"github.com/foxcool/psina/testutil"
@@ -35,7 +40,7 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-func getTestService(t *testing.T) *auth.Service {
+func getTestService(t *testing.T, opts ...auth.ServiceOption) *auth.Service {
 	t.Helper()
 	testDB.MustTruncate(t)
 
@@ -44,11 +49,114 @@ func getTestService(t *testing.T) *auth.Service {
 	issuer, err := token.New()
 	require.NoError(t, err)
 
-	return auth.NewService(store, store, issuer, []auth.Provider{provider}, auth.WithPAT(store, auth.PATConfig{}))
+	opts = append([]auth.ServiceOption{auth.WithPAT(store, auth.PATConfig{})}, opts...)
+	return auth.NewService(store, store, issuer, []auth.Provider{provider}, opts...)
+}
+
+// concurrentRefresh presents the same refresh token n times in parallel.
+func concurrentRefresh(t *testing.T, service *auth.Service, refreshToken string, n int) (pairs []string, reuse int) {
+	t.Helper()
+	ctx := context.Background()
+	results := make([]string, n)
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Go(func() {
+			pair, err := service.Refresh(ctx, refreshToken)
+			errs[i] = err
+			if err == nil {
+				results[i] = pair.RefreshToken
+			}
+		})
+	}
+	wg.Wait()
+	for i, err := range errs {
+		switch {
+		case err == nil:
+			pairs = append(pairs, results[i])
+		case errors.Is(err, auth.ErrTokenReuse):
+			reuse++
+		default:
+			t.Errorf("unexpected refresh error: %v", err)
+		}
+	}
+	return pairs, reuse
+}
+
+func TestE2E_ConcurrentRefresh(t *testing.T) {
+	const n = 10
+	ctx := context.Background()
+
+	t.Run("leeway: every duplicate succeeds and the family stays alive", func(t *testing.T) {
+		service := getTestService(t)
+		reg, err := service.Register(ctx, "concurrent@example.com", "password123")
+		require.NoError(t, err)
+
+		pairs, _ := concurrentRefresh(t, service, reg.TokenPair.RefreshToken, n)
+		require.Len(t, pairs, n)
+		for _, rt := range pairs {
+			_, err := service.Refresh(ctx, rt)
+			assert.NoError(t, err, "every successor must be a live family member")
+		}
+	})
+
+	t.Run("strict: concurrent replays end the session", func(t *testing.T) {
+		service := getTestService(t, auth.WithRefreshReuseLeeway(0))
+		reg, err := service.Register(ctx, "strict@example.com", "password123")
+		require.NoError(t, err)
+
+		pairs, reuse := concurrentRefresh(t, service, reg.TokenPair.RefreshToken, n)
+		assert.LessOrEqual(t, len(pairs), 1)
+		assert.Equal(t, n, len(pairs)+reuse)
+		for _, rt := range pairs {
+			_, err := service.Refresh(ctx, rt)
+			assert.ErrorIs(t, err, auth.ErrTokenReuse, "nothing issued may outlive the ended session")
+		}
+	})
+
+	t.Run("logout racing a refresh leaves nothing usable", func(t *testing.T) {
+		// Probabilistic: the interleaving that matters (logout's UPDATE
+		// overlapping the successor INSERT) is hit only on some iterations.
+		service := getTestService(t)
+		for i := range 10 {
+			reg, err := service.Register(ctx, fmt.Sprintf("race%d@example.com", i), "password123")
+			require.NoError(t, err)
+			rt := reg.TokenPair.RefreshToken
+
+			var pair *entity.TokenPair
+			var wg sync.WaitGroup
+			wg.Go(func() { pair, _ = service.Refresh(ctx, rt) })
+			wg.Go(func() { assert.NoError(t, service.Logout(ctx, rt)) })
+			wg.Wait()
+
+			if pair != nil {
+				_, err := service.Refresh(ctx, pair.RefreshToken)
+				assert.ErrorIs(t, err, auth.ErrTokenReuse, "iteration %d: successor outlived logout", i)
+			}
+		}
+	})
+
+	t.Run("replay after the leeway revokes the family", func(t *testing.T) {
+		// Refresh calls below are sequential, so a plain variable is enough.
+		now := time.Now()
+		service := getTestService(t, auth.WithClock(func() time.Time { return now }))
+		reg, err := service.Register(ctx, "late@example.com", "password123")
+		require.NoError(t, err)
+
+		next, err := service.Refresh(ctx, reg.TokenPair.RefreshToken)
+		require.NoError(t, err)
+
+		now = now.Add(auth.DefaultRefreshReuseLeeway + time.Second)
+		_, err = service.Refresh(ctx, reg.TokenPair.RefreshToken)
+		require.ErrorIs(t, err, auth.ErrTokenReuse)
+		_, err = service.Refresh(ctx, next.RefreshToken)
+		assert.ErrorIs(t, err, auth.ErrTokenReuse, "successor must be revoked with the family")
+	})
 }
 
 func TestE2E_FullAuthFlow(t *testing.T) {
-	service := getTestService(t)
+	// Strict reuse detection: step 5 replays a token right after rotating it.
+	service := getTestService(t, auth.WithRefreshReuseLeeway(0))
 	ctx := context.Background()
 
 	// 1. Register

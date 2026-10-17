@@ -126,6 +126,8 @@ type TokenStore interface {
     SaveRefreshToken(ctx context.Context, token *entity.RefreshToken) error
     GetRefreshToken(ctx context.Context, hash string) (*entity.RefreshToken, error)
     RevokeTokens(ctx context.Context, hash string) error
+    RotateRefreshToken(ctx context.Context, hash string, now time.Time) (*entity.RefreshToken, error)
+    GetRefreshFamily(ctx context.Context, root string) (*entity.RefreshFamily, error)
 }
 
 type CredentialStore interface {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -78,7 +79,14 @@ type Service struct {
 	// PAT support is optional; nil patStore means the feature is disabled.
 	patStore  PATStore
 	patConfig PATConfig
+
+	refreshReuseLeeway time.Duration
+	now                func() time.Time
 }
+
+// DefaultRefreshReuseLeeway is how long a just-rotated refresh token may be
+// presented again without tripping reuse detection.
+const DefaultRefreshReuseLeeway = 10 * time.Second
 
 // ServiceOption configures the Service.
 type ServiceOption func(*Service)
@@ -95,6 +103,24 @@ func WithPAT(store PATStore, cfg PATConfig) ServiceOption {
 	return func(s *Service) {
 		s.patStore = store
 		s.patConfig = cfg
+	}
+}
+
+// WithRefreshReuseLeeway sets how long after a rotation the same refresh token
+// still yields a new pair instead of revoking the family. It absorbs duplicate
+// refreshes from one client (two tabs, a retried request); the price is that a
+// stolen token replayed inside the window is not detected. 0 = strict: every
+// replay revokes the family. Negative values are treated as 0.
+func WithRefreshReuseLeeway(d time.Duration) ServiceOption {
+	return func(s *Service) {
+		s.refreshReuseLeeway = max(d, 0)
+	}
+}
+
+// WithClock replaces time.Now for refresh token lifecycle decisions (tests).
+func WithClock(now func() time.Time) ServiceOption {
+	return func(s *Service) {
+		s.now = now
 	}
 }
 
@@ -123,6 +149,9 @@ func NewService(
 		tokenStore:    tokenStore,
 		userStore:     userStore,
 		issuer:        issuer,
+
+		refreshReuseLeeway: DefaultRefreshReuseLeeway,
+		now:                time.Now,
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -238,47 +267,103 @@ func (s *Service) Login(ctx context.Context, email, password string) (*LoginResu
 // Refresh exchanges a refresh token for a new token pair.
 func (s *Service) Refresh(ctx context.Context, refreshToken string) (*entity.TokenPair, error) {
 	hash := token.HashToken(refreshToken)
+	now := s.now()
 
-	rt, err := s.tokenStore.GetRefreshToken(ctx, hash)
-	if err != nil {
-		return nil, fmt.Errorf("get refresh token: %w", err)
-	}
-
-	// Token reuse detection — revoke entire family
-	if rt.Revoked {
-		familyRoot := rt.Parent
-		if familyRoot == "" {
-			familyRoot = rt.Hash
-		}
-		_ = s.tokenStore.RevokeTokens(ctx, familyRoot)
-		return nil, &TokenReuseError{UserID: rt.UserID}
-	}
-
-	if time.Now().After(rt.ExpiresAt) {
+	// Rotation is a single atomic store operation: of concurrent refreshes with
+	// the same token exactly one gets here with err == nil.
+	rt, err := s.tokenStore.RotateRefreshToken(ctx, hash, now)
+	switch {
+	case err == nil:
+	case errors.Is(err, store.ErrTokenExpired):
 		return nil, ErrTokenExpired
+	case errors.Is(err, store.ErrTokenRevoked):
+		dup, err := s.isDuplicateRefresh(ctx, rt, now)
+		if err != nil {
+			return nil, err
+		}
+		if !dup {
+			return nil, s.revokeReusedFamily(ctx, rt)
+		}
+		// The accepted cost of the leeway is that a replay here goes undetected;
+		// log it so it is at least observable.
+		slog.InfoContext(ctx, "duplicate refresh within reuse leeway",
+			"user_id", rt.UserID, "since_rotation", now.Sub(*rt.RotatedAt))
+	default:
+		return nil, fmt.Errorf("rotate refresh token: %w", err)
 	}
-
-	// Revoke current token (children have parent=root, not parent=current)
-	_ = s.tokenStore.RevokeTokens(ctx, hash)
 
 	user, err := s.userStore.GetByID(ctx, rt.UserID)
 	if err != nil {
 		return nil, fmt.Errorf("get user: %w", err)
 	}
 
-	// Preserve family root for new token
-	parent := rt.Parent
-	if parent == "" {
-		parent = rt.Hash
+	// Rotation and saving the successor are separate steps; a logout or reuse
+	// revocation landing between them ends the session first, and the store
+	// then refuses the successor (SaveRefreshToken contract).
+	pair, err := s.issueTokens(ctx, user.ID, user.Email, user.Roles, familyRoot(rt))
+	if errors.Is(err, store.ErrTokenRevoked) {
+		return nil, &TokenReuseError{UserID: rt.UserID}
 	}
-
-	return s.issueTokens(ctx, user.ID, user.Email, user.Roles, parent)
+	return pair, err
 }
 
-// Logout revokes a refresh token and its family.
+// isDuplicateRefresh reports whether a replay of an already revoked token is a
+// duplicate of a legitimate refresh rather than reuse. All must hold: the token
+// was revoked by rotation (not logout), within the leeway, it is the family's
+// most recent rotation (the client has not moved on to its successor; ties
+// count as latest), and the session has not ended.
+func (s *Service) isDuplicateRefresh(ctx context.Context, rt *entity.RefreshToken, now time.Time) (bool, error) {
+	// An expired token gets no grace even if it was rotated moments ago.
+	if s.refreshReuseLeeway == 0 || rt.RotatedAt == nil || !rt.ExpiresAt.After(now) {
+		return false, nil
+	}
+	// Concurrent callers read the clock independently, so now may slightly
+	// precede the winner's RotatedAt. Bound that side too: a replica with a
+	// fast clock must not stretch the window.
+	since := now.Sub(*rt.RotatedAt)
+	if since > s.refreshReuseLeeway || since < -s.refreshReuseLeeway {
+		return false, nil
+	}
+	family, err := s.tokenStore.GetRefreshFamily(ctx, familyRoot(rt))
+	if err != nil {
+		return false, fmt.Errorf("get refresh family: %w", err)
+	}
+	if family.SessionEnded || family.LastRotatedAt == nil {
+		return false, nil
+	}
+	return !rt.RotatedAt.Before(*family.LastRotatedAt), nil
+}
+
+// revokeReusedFamily ends the session a replayed token belongs to.
+func (s *Service) revokeReusedFamily(ctx context.Context, rt *entity.RefreshToken) error {
+	if err := s.tokenStore.RevokeTokens(ctx, familyRoot(rt)); err != nil {
+		// The replay is refused either way, so the error is not returned; but a
+		// family that survived reuse detection stays usable and must be visible.
+		slog.ErrorContext(ctx, "revoke reused refresh token family", "user_id", rt.UserID, "error", err)
+	}
+	return &TokenReuseError{UserID: rt.UserID}
+}
+
+// familyRoot returns the hash every token of rt's family uses as parent.
+func familyRoot(rt *entity.RefreshToken) string {
+	if rt.Parent == "" {
+		return rt.Hash
+	}
+	return rt.Parent
+}
+
+// Logout ends the session: it revokes the whole family of the token, not just
+// the token itself, so siblings minted within the reuse leeway end with it.
+// An unknown token is not an error.
 func (s *Service) Logout(ctx context.Context, refreshToken string) error {
-	hash := token.HashToken(refreshToken)
-	return s.tokenStore.RevokeTokens(ctx, hash)
+	rt, err := s.tokenStore.GetRefreshToken(ctx, token.HashToken(refreshToken))
+	if errors.Is(err, store.ErrTokenNotFound) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("get refresh token: %w", err)
+	}
+	return s.tokenStore.RevokeTokens(ctx, familyRoot(rt))
 }
 
 // Verify validates a credential and returns claims. It accepts both short-lived
@@ -421,12 +506,13 @@ func (s *Service) issueTokens(ctx context.Context, userID, email string, roles [
 		return nil, fmt.Errorf("generate tokens: %w", err)
 	}
 
+	now := s.now()
 	rt := &entity.RefreshToken{
 		Hash:      refreshHash,
 		UserID:    userID,
 		Parent:    parent,
-		ExpiresAt: time.Now().Add(token.RefreshTokenTTL),
-		CreatedAt: time.Now(),
+		ExpiresAt: now.Add(token.RefreshTokenTTL),
+		CreatedAt: now,
 		Revoked:   false,
 	}
 	if err := s.tokenStore.SaveRefreshToken(ctx, rt); err != nil {

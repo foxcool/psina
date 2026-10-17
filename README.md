@@ -131,6 +131,7 @@ Environment variables (prefix `PSINA_`):
 | `PSINA_JWT_PRIVATEKEYPATH` | _(empty)_ | Private key file path |
 | `PSINA_JWT_PRIVATEKEY` | _(empty)_ | Private key PEM (alternative to path) |
 | `PSINA_JWT_ALGORITHM` | `RS256` | JWT algorithm: `RS256` or `ES256` |
+| `PSINA_TOKEN_REFRESHREUSELEEWAY` | `10s` | Grace for duplicate refreshes of a just-rotated token; `0s` = strict |
 | `PSINA_COOKIE_ENABLED` | `false` | Enable HttpOnly refresh token cookies |
 | `PSINA_COOKIE_DOMAIN` | _(required if enabled)_ | Cookie domain |
 | `PSINA_COOKIE_SECURE` | `true` | HTTPS-only cookies |
@@ -154,6 +155,8 @@ db:
 jwt:
   privateKeyPath: "/etc/psina/jwt.pem"
   algorithm: ES256  # or RS256
+token:
+  refreshReuseLeeway: 10s  # 0s = strict reuse detection
 cookie:
   enabled: true
   domain: "example.com"
@@ -196,9 +199,19 @@ stored for forward compatibility but not enforced yet.
 psina implements [RFC 6819](https://datatracker.ietf.org/doc/html/rfc6819) refresh token rotation:
 
 1. Each refresh returns a new token pair
-2. Old refresh token is immediately revoked  
-3. If revoked token is reused → entire token family is revoked
+2. Old refresh token is revoked atomically: of concurrent refreshes with one token, exactly one rotates it
+3. If a revoked token is reused → entire token family is revoked
 4. Security event logged with user context
+
+Duplicate refreshes from one client (two tabs, a retried request) would trip
+step 3 and log the user out. Within `PSINA_TOKEN_REFRESHREUSELEEWAY` (default
+`10s`) of a rotation, the same token yields another pair in the same family
+instead — but only while it is the family's latest rotation and the session was
+not logged out. The price: a stolen token replayed inside that window is not
+detected (it is logged at info level). Set `0s` for strict detection.
+
+Logout ends the whole session: it revokes every token of the family, including
+siblings minted within the leeway.
 
 ### Production Checklist
 

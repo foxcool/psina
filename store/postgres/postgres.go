@@ -231,29 +231,48 @@ func (s *Store) SaveRefreshToken(ctx context.Context, token *entity.RefreshToken
 		token.CreatedAt = now
 	}
 
-	query := fmt.Sprintf(`
+	insert := fmt.Sprintf(`
 		INSERT INTO %s (hash, user_id, parent, expires_at, created_at, revoked)
 		VALUES ($1, $2, $3, $4, $5, $6)
 	`, s.tableRefreshTokens)
+	args := []any{token.Hash, token.UserID, token.Parent, token.ExpiresAt, token.CreatedAt, token.Revoked}
 
-	_, err := s.pool.Exec(ctx, query, token.Hash, token.UserID, token.Parent, token.ExpiresAt, token.CreatedAt, token.Revoked)
-	if err != nil {
-		return fmt.Errorf("insert refresh token: %w", err)
+	if token.Parent == "" {
+		if _, err := s.pool.Exec(ctx, insert, args...); err != nil {
+			return fmt.Errorf("insert refresh token: %w", err)
+		}
+		return nil
 	}
 
-	return nil
+	// A successor joins its family under a share lock on the root row, which
+	// RevokeTokens locks exclusively: the two serialise, so the successor is
+	// either refused here or seen by the revoking UPDATE.
+	lockRoot := fmt.Sprintf(`SELECT ended_at FROM %s WHERE hash = $1 FOR SHARE`, s.tableRefreshTokens)
+	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		var endedAt *time.Time
+		err := tx.QueryRow(ctx, lockRoot, token.Parent).Scan(&endedAt)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("lock refresh family root: %w", err)
+		}
+		if endedAt != nil {
+			return fmt.Errorf("%w: session ended", store.ErrTokenRevoked)
+		}
+		if _, err := tx.Exec(ctx, insert, args...); err != nil {
+			return fmt.Errorf("insert refresh token: %w", err)
+		}
+		return nil
+	})
 }
 
 // GetRefreshToken retrieves a refresh token by its hash.
 func (s *Store) GetRefreshToken(ctx context.Context, hash string) (*entity.RefreshToken, error) {
 	query := fmt.Sprintf(`
-		SELECT hash, user_id, parent, expires_at, created_at, revoked
+		SELECT %s
 		FROM %s
 		WHERE hash = $1
-	`, s.tableRefreshTokens)
+	`, refreshTokenColumns, s.tableRefreshTokens)
 
-	token := &entity.RefreshToken{}
-	err := s.pool.QueryRow(ctx, query, hash).Scan(&token.Hash, &token.UserID, &token.Parent, &token.ExpiresAt, &token.CreatedAt, &token.Revoked)
+	token, err := scanRefreshToken(s.pool.QueryRow(ctx, query, hash))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, store.ErrTokenNotFound
@@ -264,20 +283,84 @@ func (s *Store) GetRefreshToken(ctx context.Context, hash string) (*entity.Refre
 	return token, nil
 }
 
-// RevokeTokens revokes a token and all tokens in its family.
-func (s *Store) RevokeTokens(ctx context.Context, hash string) error {
+const refreshTokenColumns = "hash, user_id, parent, expires_at, created_at, revoked, rotated_at, ended_at"
+
+func scanRefreshToken(row pgx.Row) (*entity.RefreshToken, error) {
+	token := &entity.RefreshToken{}
+	err := row.Scan(&token.Hash, &token.UserID, &token.Parent, &token.ExpiresAt, &token.CreatedAt, &token.Revoked, &token.RotatedAt, &token.EndedAt)
+	if err != nil {
+		return nil, err
+	}
+	return token, nil
+}
+
+// RotateRefreshToken atomically revokes a live token and stamps rotated_at.
+// The conditional UPDATE is the serialization point: of concurrent callers
+// only one matches the row.
+func (s *Store) RotateRefreshToken(ctx context.Context, hash string, now time.Time) (*entity.RefreshToken, error) {
 	query := fmt.Sprintf(`
 		UPDATE %s
-		SET revoked = true
+		SET revoked = true, rotated_at = $2
+		WHERE hash = $1 AND NOT revoked AND expires_at > $2
+		RETURNING %s
+	`, s.tableRefreshTokens, refreshTokenColumns)
+
+	token, err := scanRefreshToken(s.pool.QueryRow(ctx, query, hash, now))
+	if err == nil {
+		return token, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("rotate refresh token: %w", err)
+	}
+
+	// Nothing matched: tell missing, revoked and expired apart. revoked only
+	// ever goes false -> true, so this read cannot contradict the UPDATE.
+	token, err = s.GetRefreshToken(ctx, hash)
+	if err != nil {
+		return nil, err
+	}
+	if token.Revoked {
+		return token, store.ErrTokenRevoked
+	}
+	return token, store.ErrTokenExpired
+}
+
+// GetRefreshFamily summarises the family rooted at root.
+func (s *Store) GetRefreshFamily(ctx context.Context, root string) (*entity.RefreshFamily, error) {
+	query := fmt.Sprintf(`
+		SELECT COALESCE(bool_or(ended_at IS NOT NULL), false), max(rotated_at)
+		FROM %s
 		WHERE hash = $1 OR parent = $1
 	`, s.tableRefreshTokens)
 
-	_, err := s.pool.Exec(ctx, query, hash)
-	if err != nil {
-		return fmt.Errorf("revoke tokens: %w", err)
+	family := &entity.RefreshFamily{}
+	if err := s.pool.QueryRow(ctx, query, root).Scan(&family.SessionEnded, &family.LastRotatedAt); err != nil {
+		return nil, fmt.Errorf("query refresh family: %w", err)
 	}
+	return family, nil
+}
 
-	return nil
+// RevokeTokens revokes a token and all tokens in its family.
+func (s *Store) RevokeTokens(ctx context.Context, hash string) error {
+	// Lock the root first, in its own statement: under READ COMMITTED the
+	// UPDATE below then takes its snapshot after any successor that held the
+	// share lock (SaveRefreshToken) has committed, so it cannot miss it.
+	lockRoot := fmt.Sprintf(`SELECT 1 FROM %s WHERE hash = $1 FOR UPDATE`, s.tableRefreshTokens)
+	revoke := fmt.Sprintf(`
+		UPDATE %s
+		SET revoked = true, ended_at = COALESCE(ended_at, now())
+		WHERE hash = $1 OR parent = $1
+	`, s.tableRefreshTokens)
+
+	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, lockRoot, hash); err != nil {
+			return fmt.Errorf("lock refresh family root: %w", err)
+		}
+		if _, err := tx.Exec(ctx, revoke, hash); err != nil {
+			return fmt.Errorf("revoke tokens: %w", err)
+		}
+		return nil
+	})
 }
 
 // --- PATStore implementation ---

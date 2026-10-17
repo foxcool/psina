@@ -270,7 +270,7 @@ func (s *Store) GetRefreshToken(ctx context.Context, hash string) (*entity.Refre
 		SELECT %s
 		FROM %s
 		WHERE hash = $1
-	`, refreshTokenColumns, s.tableRefreshTokens)
+	`, refreshRowColumns, s.tableRefreshTokens)
 
 	token, err := scanRefreshToken(s.pool.QueryRow(ctx, query, hash))
 	if err != nil {
@@ -283,7 +283,7 @@ func (s *Store) GetRefreshToken(ctx context.Context, hash string) (*entity.Refre
 	return token, nil
 }
 
-const refreshTokenColumns = "hash, user_id, parent, expires_at, created_at, revoked, rotated_at, ended_at"
+const refreshRowColumns = "hash, user_id, parent, expires_at, created_at, revoked, rotated_at, ended_at"
 
 func scanRefreshToken(row pgx.Row) (*entity.RefreshToken, error) {
 	token := &entity.RefreshToken{}
@@ -303,7 +303,7 @@ func (s *Store) RotateRefreshToken(ctx context.Context, hash string, now time.Ti
 		SET revoked = true, rotated_at = $2
 		WHERE hash = $1 AND NOT revoked AND expires_at > $2
 		RETURNING %s
-	`, s.tableRefreshTokens, refreshTokenColumns)
+	`, s.tableRefreshTokens, refreshRowColumns)
 
 	token, err := scanRefreshToken(s.pool.QueryRow(ctx, query, hash, now))
 	if err == nil {

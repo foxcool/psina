@@ -78,7 +78,7 @@ func RefreshRotation(t *testing.T, newStore NewTokenStore) {
 		assert.NotNil(t, rt.EndedAt)
 	})
 
-	t.Run("revoking a family with no live member still ends it", func(t *testing.T) {
+	t.Run("revoking a family with no live member ends it and refuses successors", func(t *testing.T) {
 		// The successor of a rotated root may not be saved yet when a logout lands.
 		s, userID := newStore(t)
 		save(t, s, &entity.RefreshToken{Hash: "root", UserID: userID})
@@ -154,6 +154,18 @@ func RefreshRotation(t *testing.T, newStore NewTokenStore) {
 		family, err = s.GetRefreshFamily(ctx, "root")
 		require.NoError(t, err)
 		assert.True(t, family.SessionEnded)
+	})
+
+	t.Run("successor without a root row is refused", func(t *testing.T) {
+		// The root anchors the session lock; with it gone a revoke could not
+		// serialise against this save.
+		s, userID := newStore(t)
+		err := s.SaveRefreshToken(ctx, &entity.RefreshToken{
+			Hash: "orphan", UserID: userID, Parent: "gone", ExpiresAt: now.Add(time.Hour),
+		})
+		require.ErrorIs(t, err, store.ErrTokenRevoked)
+		_, err = s.GetRefreshToken(ctx, "orphan")
+		assert.ErrorIs(t, err, store.ErrTokenNotFound)
 	})
 
 	t.Run("unknown family is empty", func(t *testing.T) {

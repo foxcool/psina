@@ -130,13 +130,20 @@ func (s *Store) SaveRefreshToken(ctx context.Context, token *entity.RefreshToken
 		token.CreatedAt = now
 	}
 
-	// A successor may not join a family whose session has ended (same
-	// contract as the postgres root lock; here the mutex serialises it).
-	if root, ok := s.refreshTokens[token.Parent]; ok && token.Parent != "" && root.EndedAt != nil {
-		return fmt.Errorf("%w: session ended", store.ErrTokenRevoked)
+	// A successor may not join a family whose session has ended or whose root
+	// is gone (same contract as the postgres root lock; here the mutex
+	// serialises it).
+	if token.Parent != "" {
+		root, ok := s.refreshTokens[token.Parent]
+		if !ok {
+			return fmt.Errorf("%w: family root missing", store.ErrTokenRevoked)
+		}
+		if root.EndedAt != nil {
+			return fmt.Errorf("%w: session ended", store.ErrTokenRevoked)
+		}
 	}
 
-	s.refreshTokens[token.Hash] = token
+	s.refreshTokens[token.Hash] = snapshot(token)
 
 	return nil
 }

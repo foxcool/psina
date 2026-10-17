@@ -124,11 +124,18 @@ func TestE2E_ConcurrentRefresh(t *testing.T) {
 			rt := reg.TokenPair.RefreshToken
 
 			var pair *entity.TokenPair
+			var refreshErr error
 			var wg sync.WaitGroup
-			wg.Go(func() { pair, _ = service.Refresh(ctx, rt) })
+			wg.Go(func() { pair, refreshErr = service.Refresh(ctx, rt) })
 			wg.Go(func() { assert.NoError(t, service.Logout(ctx, rt)) })
 			wg.Wait()
 
+			// Logout first: the refresh is refused as reuse. Refresh first: its
+			// successor must not outlive the logout that follows.
+			if refreshErr != nil {
+				assert.ErrorIs(t, refreshErr, auth.ErrTokenReuse, "iteration %d", i)
+				continue
+			}
 			if pair != nil {
 				_, err := service.Refresh(ctx, pair.RefreshToken)
 				assert.ErrorIs(t, err, auth.ErrTokenReuse, "iteration %d: successor outlived logout", i)

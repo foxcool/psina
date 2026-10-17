@@ -479,9 +479,9 @@ func TestService_Refresh_Concurrent(t *testing.T) {
 		r1 := registerForRefresh(t, service, memStore)
 		winners, reuse := run(t, service, r1)
 
-		// One rotation wins; whether its pair is handed out depends on whether
-		// the losers end the session before its post-save check. Either way
-		// the session must end and nothing issued may stay usable.
+		// One rotation wins; its pair is handed out only if its successor is
+		// saved before a loser ends the session (otherwise SaveRefreshToken
+		// refuses it). Either way the session ends and nothing issued stays usable.
 		assert.LessOrEqual(t, len(winners), 1)
 		assert.Equal(t, n, len(winners)+reuse)
 		family, err := memStore.GetRefreshFamily(ctx, token.HashToken(r1))

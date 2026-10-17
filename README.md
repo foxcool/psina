@@ -206,9 +206,10 @@ psina implements [RFC 6819](https://datatracker.ietf.org/doc/html/rfc6819) refre
 Duplicate refreshes from one client (two tabs, a retried request) would trip
 step 3 and log the user out. Within `PSINA_TOKEN_REFRESHREUSELEEWAY` (default
 `10s`) of a rotation, the same token yields another pair in the same family
-instead — but only while it is the family's latest rotation and the session was
-not logged out. The price: a stolen token replayed inside that window is not
-detected (it is logged at info level). Set `0s` for strict detection.
+instead — but only while it is the family's latest rotation, the token is not
+expired and the session has not ended (logout or reuse detection). The
+price: a stolen token replayed inside that window is not detected (it is
+logged at info level). Set `0s` for strict detection.
 
 Logout ends the whole session: it revokes every token of the family, including
 siblings minted within the leeway.

@@ -123,9 +123,9 @@ type UserStore interface {
 }
 
 type TokenStore interface {
-    SaveRefreshToken(ctx context.Context, token *entity.RefreshToken) error
+    SaveRefreshToken(ctx context.Context, token *entity.RefreshToken) error // refuses (ErrTokenRevoked) a child of an ended or missing root
     GetRefreshToken(ctx context.Context, hash string) (*entity.RefreshToken, error)
-    RevokeTokens(ctx context.Context, hash string) error
+    RevokeTokens(ctx context.Context, hash string) error // pass the family root to end a session
     RotateRefreshToken(ctx context.Context, hash string, now time.Time) (*entity.RefreshToken, error)
     GetRefreshFamily(ctx context.Context, root string) (*entity.RefreshFamily, error)
 }

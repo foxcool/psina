@@ -309,9 +309,9 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*entity.Tok
 
 // isDuplicateRefresh reports whether a replay of an already revoked token is a
 // duplicate of a legitimate refresh rather than reuse. All must hold: the token
-// was revoked by rotation (not logout), within the leeway, it is the family's
-// most recent rotation (the client has not moved on to its successor; ties
-// count as latest), and the session has not ended.
+// is not expired, was revoked by rotation (not logout), within the leeway, it
+// is the family's most recent rotation (the client has not moved on to its
+// successor; ties count as latest), and the session has not ended.
 func (s *Service) isDuplicateRefresh(ctx context.Context, rt *entity.RefreshToken, now time.Time) (bool, error) {
 	// An expired token gets no grace even if it was rotated moments ago.
 	if s.refreshReuseLeeway == 0 || rt.RotatedAt == nil || !rt.ExpiresAt.After(now) {

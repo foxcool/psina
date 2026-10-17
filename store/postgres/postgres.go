@@ -246,12 +246,16 @@ func (s *Store) SaveRefreshToken(ctx context.Context, token *entity.RefreshToken
 
 	// A successor joins its family under a share lock on the root row, which
 	// RevokeTokens locks exclusively: the two serialise, so the successor is
-	// either refused here or seen by the revoking UPDATE.
+	// either refused here or seen by the revoking UPDATE. Without a root row
+	// there is nothing to serialise on, so that is refused too.
 	lockRoot := fmt.Sprintf(`SELECT ended_at FROM %s WHERE hash = $1 FOR SHARE`, s.tableRefreshTokens)
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		var endedAt *time.Time
 		err := tx.QueryRow(ctx, lockRoot, token.Parent).Scan(&endedAt)
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("%w: family root missing", store.ErrTokenRevoked)
+		}
+		if err != nil {
 			return fmt.Errorf("lock refresh family root: %w", err)
 		}
 		if endedAt != nil {

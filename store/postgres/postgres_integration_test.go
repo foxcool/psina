@@ -329,7 +329,7 @@ func TestStore_OAuthIdentities(t *testing.T) {
 		Provider:   entity.ProviderTypeGoogle,
 		ExternalID: "sub-42",
 	})
-	assert.Error(t, err)
+	assert.True(t, errors.Is(err, store.ErrOAuthIdentityExists), "expected ErrOAuthIdentityExists, got: %v", err)
 
 	// Unknown lookup
 	_, err = s.GetOAuthIdentity(ctx, entity.ProviderTypeGoogle, "unknown")

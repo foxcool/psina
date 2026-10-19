@@ -92,6 +92,11 @@ message GetOAuthURLResponse {
   string url = 1;           // provider authorization URL to redirect the user to
   // Single-use CSRF state embedded in the URL; expires server-side.
   string state = 2;
+  // Browser-binding secret for OAuthCallback. Set only when cookies are
+  // disabled: keep it in the browser that started the flow (e.g.
+  // sessionStorage keyed by state), never in a URL. With cookies enabled it
+  // travels in an HttpOnly cookie instead and this field is empty.
+  string binding = 3;
 }
 
 message OAuthCallbackRequest {
@@ -99,6 +104,9 @@ message OAuthCallbackRequest {
   string code = 2;          // authorization code from the provider redirect
   string state = 3;         // state from the provider redirect
   string redirect_uri = 4;  // same value that was passed to GetOAuthURL
+  // GetOAuthURLResponse.binding of this flow. Leave empty when cookies are
+  // enabled: the binding cookie is used.
+  string binding = 5;
 }
 
 message OAuthCallbackResponse {

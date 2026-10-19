@@ -10,7 +10,9 @@ import (
 
 	"connectrpc.com/connect"
 	authv1 "github.com/foxcool/psina/api/auth/v1"
+	"github.com/foxcool/psina/api/auth/v1/authv1connect"
 	"github.com/foxcool/psina/entity"
+	"github.com/foxcool/psina/provider/oauth"
 	"github.com/foxcool/psina/store"
 	"github.com/foxcool/psina/token"
 )
@@ -241,22 +243,114 @@ func (h *Handler) Verify(
 	return resp, nil
 }
 
-// GetOAuthURL starts an OAuth sign-in flow. Not implemented yet: the service
-// layer lands with the OAuth track (PS-7he); until then the RPC exists only so
-// the API contract is published ahead of the implementation.
+// GetOAuthURL starts an OAuth sign-in flow. The browser-binding secret goes
+// into an HttpOnly cookie when cookies are enabled, otherwise into the
+// response for the client to keep.
 func (h *Handler) GetOAuthURL(
 	ctx context.Context,
 	req *connect.Request[authv1.GetOAuthURLRequest],
 ) (*connect.Response[authv1.GetOAuthURLResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("OAuth sign-in is not implemented yet"))
+	if req.Msg.Provider == "" || req.Msg.RedirectUri == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("provider and redirect_uri are required"))
+	}
+
+	result, err := h.service.GetOAuthURL(ctx, req.Msg.Provider, req.Msg.RedirectUri)
+	if err != nil {
+		return nil, oauthErrorToConnect(ctx, err)
+	}
+
+	resp := connect.NewResponse(&authv1.GetOAuthURLResponse{
+		Url:   result.URL,
+		State: result.State,
+	})
+	if h.cookieConfig.Enabled {
+		h.setOAuthBindingCookie(resp.Header(), result.State, result.Binding, h.service.oauthConfig.StateTTL)
+	} else {
+		resp.Msg.Binding = result.Binding
+	}
+	return resp, nil
 }
 
-// OAuthCallback completes an OAuth sign-in flow. See GetOAuthURL.
+// OAuthCallback completes an OAuth sign-in flow and issues a session like Login.
 func (h *Handler) OAuthCallback(
 	ctx context.Context,
 	req *connect.Request[authv1.OAuthCallbackRequest],
 ) (*connect.Response[authv1.OAuthCallbackResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("OAuth sign-in is not implemented yet"))
+	msg := req.Msg
+	if msg.Provider == "" || msg.RedirectUri == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("provider and redirect_uri are required"))
+	}
+
+	// In cookie mode only the cookie counts: a binding in the body could come
+	// from a page other than the one that started the flow.
+	binding := msg.Binding
+	if h.cookieConfig.Enabled {
+		binding = h.getCookieFromHeader(req.Header(), oauthBindingCookieName(msg.State))
+	}
+
+	result, err := h.service.OAuthCallback(ctx, OAuthCallbackRequest{
+		Provider:    msg.Provider,
+		Code:        msg.Code,
+		State:       msg.State,
+		RedirectURI: msg.RedirectUri,
+		Binding:     binding,
+	})
+	if err != nil {
+		cerr := oauthErrorToConnect(ctx, err)
+		// The binding cookie is single-use like the state; drop it on any outcome.
+		if h.cookieConfig.Enabled {
+			h.clearOAuthBindingCookie(cerr.Meta(), msg.State)
+		}
+		return nil, cerr
+	}
+
+	resp := connect.NewResponse(&authv1.OAuthCallbackResponse{
+		UserId:       result.UserID,
+		Email:        result.Email,
+		AccessToken:  result.TokenPair.AccessToken,
+		RefreshToken: result.TokenPair.RefreshToken,
+		ExpiresIn:    result.TokenPair.ExpiresIn,
+		IsNewUser:    result.IsNewUser,
+	})
+	if h.cookieConfig.Enabled {
+		h.clearOAuthBindingCookie(resp.Header(), msg.State)
+		h.setTokenCookies(resp.Header(), result.TokenPair.AccessToken, result.TokenPair.RefreshToken)
+	}
+	return resp, nil
+}
+
+// errOAuthStateOrCode is the one message for a rejected state and a rejected
+// code, so a client cannot tell which check failed.
+var errOAuthStateOrCode = errors.New("invalid oauth state or code")
+
+// oauthErrorToConnect maps OAuth service errors to connect codes. Unexpected
+// errors are logged and reach the client without storage or provider detail.
+func oauthErrorToConnect(ctx context.Context, err error) *connect.Error {
+	switch {
+	case errors.Is(err, ErrOAuthDisabled):
+		return connect.NewError(connect.CodeUnimplemented, ErrOAuthDisabled)
+	case errors.Is(err, ErrOAuthProviderUnknown):
+		return connect.NewError(connect.CodeInvalidArgument, ErrOAuthProviderUnknown)
+	case errors.Is(err, oauth.ErrRedirectURINotAllowed):
+		return connect.NewError(connect.CodePermissionDenied, oauth.ErrRedirectURINotAllowed)
+	case errors.Is(err, ErrOAuthStateInvalid):
+		return connect.NewError(connect.CodeUnauthenticated, errOAuthStateOrCode)
+	case errors.Is(err, ErrOAuthExchangeFailed):
+		// Also a provider outage looks like this; keep it visible.
+		slog.WarnContext(ctx, "oauth code exchange failed", "error", err)
+		return connect.NewError(connect.CodeUnauthenticated, errOAuthStateOrCode)
+	case errors.Is(err, ErrOAuthEmailRequired):
+		return connect.NewError(connect.CodeFailedPrecondition, ErrOAuthEmailRequired)
+	case errors.Is(err, ErrOAuthEmailUnverified):
+		return connect.NewError(connect.CodeFailedPrecondition, ErrOAuthEmailUnverified)
+	case errors.Is(err, ErrOAuthLinkDisabled):
+		return connect.NewError(connect.CodeFailedPrecondition, ErrOAuthLinkDisabled)
+	case errors.Is(err, ErrOAuthAccountHasPassword):
+		return connect.NewError(connect.CodeFailedPrecondition, ErrOAuthAccountHasPassword)
+	default:
+		slog.ErrorContext(ctx, "oauth sign-in failed", "error", err)
+		return connect.NewError(connect.CodeInternal, errors.New("internal error"))
+	}
 }
 
 // CreatePersonalAccessToken mints a PAT for the authenticated caller.
@@ -527,6 +621,54 @@ func (h *Handler) clearTokenCookies(header http.Header) {
 
 	// Also expire any legacy foreign-scope duplicates so logout leaves nothing behind.
 	h.clearLegacyScopedCookies(header)
+}
+
+// Binding cookies are per flow: the name carries a state prefix so two flows
+// in two tabs do not overwrite each other. 8 base64url characters (48 random
+// bits) make a collision between one browser's concurrent flows negligible
+// while keeping the name short.
+const (
+	oauthBindingCookiePrefix     = "psina_oauth_"
+	oauthBindingCookieStateChars = 8
+)
+
+// oauthBindingCookieName returns the binding cookie of the flow with this state.
+func oauthBindingCookieName(state string) string {
+	return oauthBindingCookiePrefix + state[:min(len(state), oauthBindingCookieStateChars)]
+}
+
+// setOAuthBindingCookie hands the browser the binding secret of a new flow.
+// SameSite=Lax rather than the session cookies' configured mode: the flow is
+// a round trip through the provider, and a deployment that calls the callback
+// RPC from the provider-redirected navigation itself must still get the
+// cookie. The path limits it to the callback RPC, the only reader.
+func (h *Handler) setOAuthBindingCookie(header http.Header, state, binding string, ttl time.Duration) {
+	cookie := &http.Cookie{
+		Name:     oauthBindingCookieName(state),
+		Value:    binding,
+		Domain:   h.cookieConfig.Domain,
+		Path:     authv1connect.AuthServiceOAuthCallbackProcedure,
+		MaxAge:   int(ttl.Seconds()),
+		Secure:   h.cookieConfig.Secure, // #nosec G124 -- driven by cookieConfig, as for token cookies
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	}
+	header.Add("Set-Cookie", cookie.String())
+}
+
+// clearOAuthBindingCookie expires the binding cookie of a finished flow.
+func (h *Handler) clearOAuthBindingCookie(header http.Header, state string) {
+	cookie := &http.Cookie{
+		Name:     oauthBindingCookieName(state),
+		Value:    "",
+		Domain:   h.cookieConfig.Domain,
+		Path:     authv1connect.AuthServiceOAuthCallbackProcedure,
+		MaxAge:   -1,
+		Secure:   h.cookieConfig.Secure, // #nosec G124 -- empty-value clear
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	}
+	header.Add("Set-Cookie", cookie.String())
 }
 
 // getCookieFromHeader extracts a cookie value from the Cookie header.

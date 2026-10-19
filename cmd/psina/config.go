@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -49,9 +48,17 @@ type Config struct {
 		MaxTTL        time.Duration `koanf:"maxttl"`        // Max token lifetime; 0 = unlimited
 		TouchInterval time.Duration `koanf:"touchinterval"` // Min interval between last-used updates; -1 = every verify (default: 1m)
 	} `koanf:"pat"`
+	OAuth struct {
+		AutoLinkEmail bool `koanf:"autolinkemail"` // Link a first sign-in to a passwordless account with the same verified email (default: true)
+		Google        struct {
+			ClientID     string   `koanf:"clientid"`
+			ClientSecret string   `koanf:"clientsecret"`
+			RedirectURIs []string `koanf:"redirecturis"` // Exact-match whitelist; comma-separated in env
+		} `koanf:"google"`
+	} `koanf:"oauth"`
 }
 
-func loadConfig() (*Config, error) {
+func loadConfig(args []string) (*Config, error) {
 	k := koanf.New(".")
 
 	// Default values
@@ -70,6 +77,7 @@ func loadConfig() (*Config, error) {
 		"pat.maxperuser":           auth.DefaultPATMaxPerUser,
 		"pat.maxttl":               "0s",
 		"pat.touchinterval":        auth.DefaultPATTouchInterval.String(),
+		"oauth.autolinkemail":      true,
 	}
 	if err := k.Load(confmap.Provider(defaults, "."), nil); err != nil {
 		return nil, fmt.Errorf("load defaults: %w", err)
@@ -87,13 +95,23 @@ func loadConfig() (*Config, error) {
 		fmt.Println(f.FlagUsages())
 	}
 	configFile := f.StringP("config", "c", "", "Path to config file (yaml)")
-	if err := f.Parse(os.Args[1:]); err != nil {
+	if err := f.Parse(args); err != nil {
 		return nil, fmt.Errorf("parse flags: %w", err)
 	}
 
-	// Load config file if provided
+	// Load config file if provided. Keys are lowercased to match the defaults
+	// and env keys: koanf keeps YAML keys as written, so a documented
+	// "tablePrefix" would sit beside the default "tableprefix" and lose to it.
 	if *configFile != "" {
-		if err := k.Load(file.Provider(*configFile), yaml.Parser()); err != nil {
+		fk := koanf.New(".")
+		if err := fk.Load(file.Provider(*configFile), yaml.Parser()); err != nil {
+			return nil, fmt.Errorf("load config file: %w", err)
+		}
+		lowered := make(map[string]any, len(fk.Keys()))
+		for key, value := range fk.All() {
+			lowered[strings.ToLower(key)] = value
+		}
+		if err := k.Load(confmap.Provider(lowered, "."), nil); err != nil {
 			return nil, fmt.Errorf("load config file: %w", err)
 		}
 	}
@@ -113,6 +131,8 @@ func loadConfig() (*Config, error) {
 	if err := k.Unmarshal("", &config); err != nil {
 		return nil, fmt.Errorf("unmarshal config: %w", err)
 	}
+
+	config.OAuth.Google.RedirectURIs = splitList(config.OAuth.Google.RedirectURIs)
 
 	// Validate
 	if err := validateConfig(&config); err != nil {
@@ -148,5 +168,29 @@ func validateConfig(c *Config) error {
 		return fmt.Errorf("cookie.domain is required when cookies are enabled")
 	}
 
+	// Google is enabled by its client id; a half-configured client is a typo,
+	// not a request to run without it.
+	g := c.OAuth.Google
+	if g.ClientID != "" || g.ClientSecret != "" || len(g.RedirectURIs) > 0 {
+		if g.ClientID == "" || g.ClientSecret == "" || len(g.RedirectURIs) == 0 {
+			return fmt.Errorf("oauth.google needs clientid, clientsecret and redirecturis together")
+		}
+	}
+
 	return nil
+}
+
+// splitList normalizes a list setting: an env variable arrives as one
+// comma-separated string, a YAML list as items. Values are trimmed, empty
+// ones (e.g. from a trailing comma) dropped.
+func splitList(values []string) []string {
+	var out []string
+	for _, v := range values {
+		for item := range strings.SplitSeq(v, ",") {
+			if item = strings.TrimSpace(item); item != "" {
+				out = append(out, item)
+			}
+		}
+	}
+	return out
 }

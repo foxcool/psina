@@ -14,3 +14,7 @@ func TestContract_RefreshRotation(t *testing.T) {
 		return memory.New(), "user-123"
 	})
 }
+
+func TestContract_Challenges(t *testing.T) {
+	storetest.Challenges(t, func(t *testing.T) auth.ChallengeStore { return memory.New() })
+}

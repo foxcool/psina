@@ -243,6 +243,26 @@ table "auth_challenges" {
     default = ""
   }
 
+  // OAuth flow secrets; empty for wallet challenges.
+  column "code_verifier" {
+    type    = text
+    null    = false
+    default = ""
+  }
+
+  column "oauth_nonce" {
+    type    = text
+    null    = false
+    default = ""
+  }
+
+  // hex sha256 of the browser-binding secret.
+  column "binding_hash" {
+    type    = varchar(64)
+    null    = false
+    default = ""
+  }
+
   column "expires_at" {
     type = timestamptz
     null = false

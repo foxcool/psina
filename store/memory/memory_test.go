@@ -297,36 +297,6 @@ func TestStore_OAuthIdentities(t *testing.T) {
 	assert.Empty(t, list)
 }
 
-func TestStore_Challenges(t *testing.T) {
-	s := New()
-	ctx := context.Background()
-
-	challenge := &entity.Challenge{
-		Nonce:     "nonce-1",
-		Message:   "sign me",
-		Chain:     "ethereum",
-		Address:   "0xAbC",
-		ExpiresAt: time.Now().Add(time.Minute),
-	}
-	require.NoError(t, s.SaveChallenge(ctx, challenge))
-
-	found, err := s.GetChallenge(ctx, "nonce-1")
-	require.NoError(t, err)
-	assert.Equal(t, "sign me", found.Message)
-	assert.Equal(t, "ethereum", found.Chain)
-	assert.Equal(t, "0xAbC", found.Address)
-	assert.False(t, found.CreatedAt.IsZero(), "CreatedAt should be set on save")
-
-	// Single-use: delete, then gone
-	require.NoError(t, s.DeleteChallenge(ctx, "nonce-1"))
-	_, err = s.GetChallenge(ctx, "nonce-1")
-	assert.True(t, errors.Is(err, store.ErrChallengeNotFound), "expected ErrChallengeNotFound, got: %v", err)
-
-	// Deleting again reports not found
-	err = s.DeleteChallenge(ctx, "nonce-1")
-	assert.True(t, errors.Is(err, store.ErrChallengeNotFound), "expected ErrChallengeNotFound, got: %v", err)
-}
-
 func TestStore_ChallengeExpiry(t *testing.T) {
 	s := New()
 	ctx := context.Background()

@@ -566,12 +566,14 @@ func (s *Store) SaveChallenge(ctx context.Context, challenge *entity.Challenge) 
 	}
 
 	query := fmt.Sprintf(`
-		INSERT INTO %s (nonce, message, chain, address, expires_at, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO %s (nonce, message, chain, address, code_verifier, oauth_nonce, binding_hash, expires_at, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 	`, s.tableChallenges)
 
 	_, err := s.pool.Exec(ctx, query,
-		challenge.Nonce, challenge.Message, challenge.Chain, challenge.Address, challenge.ExpiresAt, challenge.CreatedAt)
+		challenge.Nonce, challenge.Message, challenge.Chain, challenge.Address,
+		challenge.CodeVerifier, challenge.OAuthNonce, challenge.BindingHash,
+		challenge.ExpiresAt, challenge.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("insert challenge: %w", err)
 	}
@@ -583,14 +585,16 @@ func (s *Store) SaveChallenge(ctx context.Context, challenge *entity.Challenge) 
 // reported as store.ErrChallengeExpired (removal is left to the sweep).
 func (s *Store) GetChallenge(ctx context.Context, nonce string) (*entity.Challenge, error) {
 	query := fmt.Sprintf(`
-		SELECT nonce, message, chain, address, expires_at, created_at
+		SELECT nonce, message, chain, address, code_verifier, oauth_nonce, binding_hash, expires_at, created_at
 		FROM %s
 		WHERE nonce = $1
 	`, s.tableChallenges)
 
 	challenge := &entity.Challenge{}
 	err := s.pool.QueryRow(ctx, query, nonce).Scan(
-		&challenge.Nonce, &challenge.Message, &challenge.Chain, &challenge.Address, &challenge.ExpiresAt, &challenge.CreatedAt)
+		&challenge.Nonce, &challenge.Message, &challenge.Chain, &challenge.Address,
+		&challenge.CodeVerifier, &challenge.OAuthNonce, &challenge.BindingHash,
+		&challenge.ExpiresAt, &challenge.CreatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, store.ErrChallengeNotFound

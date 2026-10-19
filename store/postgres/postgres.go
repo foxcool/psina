@@ -492,6 +492,9 @@ func (s *Store) SaveOAuthIdentity(ctx context.Context, identity *entity.OAuthIde
 	_, err := s.pool.Exec(ctx, query,
 		identity.ID, identity.UserID, identity.Provider, identity.ExternalID, identity.Email, identity.CreatedAt)
 	if err != nil {
+		if isDuplicateKeyError(err) {
+			return fmt.Errorf("%w: %s/%s", store.ErrOAuthIdentityExists, identity.Provider, identity.ExternalID)
+		}
 		return fmt.Errorf("insert oauth identity: %w", err)
 	}
 

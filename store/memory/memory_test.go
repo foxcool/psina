@@ -288,6 +288,18 @@ func TestStore_OAuthIdentities(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, list, 2)
 
+	// Duplicate (provider, external_id) is refused, the original link is kept
+	err = s.SaveOAuthIdentity(ctx, &entity.OAuthIdentity{
+		ID:         "oauth-3",
+		UserID:     "user-other",
+		Provider:   entity.ProviderTypeGoogle,
+		ExternalID: "sub-42",
+	})
+	assert.True(t, errors.Is(err, store.ErrOAuthIdentityExists), "expected ErrOAuthIdentityExists, got: %v", err)
+	again, err = s.GetOAuthIdentity(ctx, entity.ProviderTypeGoogle, "sub-42")
+	require.NoError(t, err)
+	assert.Equal(t, "user-123", again.UserID)
+
 	// Unknown lookups
 	_, err = s.GetOAuthIdentity(ctx, entity.ProviderTypeGoogle, "unknown")
 	assert.True(t, errors.Is(err, store.ErrOAuthIdentityNotFound), "expected ErrOAuthIdentityNotFound, got: %v", err)

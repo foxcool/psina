@@ -25,6 +25,10 @@ var (
 	// ErrOAuthIdentityNotFound indicates no OAuth identity matches the lookup.
 	ErrOAuthIdentityNotFound = errors.New("oauth identity not found")
 
+	// ErrOAuthIdentityExists indicates the (provider, external id) pair is
+	// already linked to a user.
+	ErrOAuthIdentityExists = errors.New("oauth identity already exists")
+
 	// ErrWalletIdentityNotFound indicates no wallet identity matches the lookup.
 	ErrWalletIdentityNotFound = errors.New("wallet identity not found")
 

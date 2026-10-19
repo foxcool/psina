@@ -309,11 +309,15 @@ func (s *Store) SaveOAuthIdentity(ctx context.Context, identity *entity.OAuthIde
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	key := oauthKey{identity.Provider, identity.ExternalID}
+	if _, exists := s.oauthIdentities[key]; exists {
+		return fmt.Errorf("%w: %s/%s", store.ErrOAuthIdentityExists, identity.Provider, identity.ExternalID)
+	}
 	if identity.CreatedAt.IsZero() {
 		identity.CreatedAt = time.Now()
 	}
 	stored := *identity
-	s.oauthIdentities[oauthKey{identity.Provider, identity.ExternalID}] = &stored
+	s.oauthIdentities[key] = &stored
 
 	return nil
 }

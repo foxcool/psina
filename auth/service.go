@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/foxcool/psina/entity"
+	"github.com/foxcool/psina/provider/oauth"
 	"github.com/foxcool/psina/store"
 	"github.com/foxcool/psina/token"
 	"github.com/go-jose/go-jose/v4"
@@ -79,6 +80,13 @@ type Service struct {
 	// PAT support is optional; nil patStore means the feature is disabled.
 	patStore  PATStore
 	patConfig PATConfig
+
+	// OAuth support is optional; nil oauthProviders means the feature is disabled.
+	// Kept apart from providers: a different interface (oauth.Provider).
+	oauthProviders  map[string]oauth.Provider
+	oauthIdentities OAuthIdentityStore
+	challenges      ChallengeStore
+	oauthConfig     OAuthConfig
 
 	refreshReuseLeeway time.Duration
 	now                func() time.Time

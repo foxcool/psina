@@ -11,7 +11,7 @@ Name origin: "psina" (рус. "псина") = "doggy" — a guard dog that knows
 
 ## Current Status
 
-**v0.3 in progress** — v0.2 shipped local auth, personal access tokens, standalone deploy (cookies, ES256, health probes, table prefix), gateway e2e tests, security CI. Since then: user roles (opaque strings in JWT/Verify), OAuth RPC contract, oauth_identities/auth_challenges stores, Google OIDC provider with PKCE (S256) and nonce. Next: OAuth service layer + wiring, GitHub provider, then wallet auth (SIWE).
+**v0.3 in progress** — v0.2 shipped local auth, personal access tokens, standalone deploy (cookies, ES256, health probes, table prefix), gateway e2e tests, security CI. Since then: user roles (opaque strings in JWT/Verify), OAuth RPC contract, oauth_identities/auth_challenges stores, Google OIDC provider with PKCE (S256) and nonce, OAuth service layer + RPCs with browser-bound state (Google wired in cmd/psina). Next: GitHub provider, then wallet auth (SIWE).
 
 ## Directory Map
 
@@ -141,6 +141,12 @@ pat:
   maxPerUser: 50     # -1 = unlimited
   maxTTL: 0s         # 0s = unlimited
   touchInterval: 1m  # last-used update throttle; -1ns = every verify
+oauth:
+  autoLinkEmail: true # link to a passwordless account with the same verified email
+  google:            # enabled when clientID is set; all three required together
+    clientID: ""
+    clientSecret: ""
+    redirectURIs: [] # exact-match whitelist; comma-separated in env
 ```
 
 ## HTTP Endpoints
@@ -154,7 +160,11 @@ POST /auth.v1.AuthService/Verify                     - Validate JWT or PAT (Forw
 POST /auth.v1.AuthService/CreatePersonalAccessToken  - Mint PAT (session JWT only)
 POST /auth.v1.AuthService/ListPersonalAccessTokens   - List PATs (session JWT only)
 POST /auth.v1.AuthService/RevokePersonalAccessToken  - Revoke PAT by UUID (session JWT only)
+POST /auth.v1.AuthService/GetOAuthURL                - Start OAuth sign-in (state + browser binding)
+POST /auth.v1.AuthService/OAuthCallback              - Finish OAuth sign-in + return tokens
 GET  /.well-known/jwks.json                          - Public keys for gateway validation
+GET  /verify                                         - HTTP ForwardAuth endpoint
+GET  /healthz, /readyz                               - Liveness / readiness (checks DB)
 GET  /health                                         - Health check with DB status
 ```
 
@@ -190,7 +200,7 @@ DefaultQueryTimeout = 5000  // milliseconds
 
 - **New auth method** → implement `Provider` interface from `auth/ports.go`, place in `provider/<name>/`
 - **New wallet chain** → implement `wallet.WalletProvider` (`provider/wallet/provider.go`), register it with a `wallet.Dispatcher`, place in `provider/wallet/<chain>/`
-- **New storage backend** → implement `UserStore`/`TokenStore`/`CredentialStore`/`PATStore`, place in `store/<name>/`, run the `store/storetest` contracts against it. Optional stores for the wallet/OAuth track (interfaces declared, backends pending): `OAuthIdentityStore`, `WalletIdentityStore`, `ChallengeStore`.
+- **New storage backend** → implement `UserStore`/`TokenStore`/`CredentialStore`/`PATStore`, place in `store/<name>/`, run the `store/storetest` contracts against it. Optional stores: `OAuthIdentityStore` and `ChallengeStore` (OAuth; both backends implement them), `WalletIdentityStore` (wallet track, backends pending).
 - **Store errors** → return typed errors from `store/errors.go`; handler maps them to Connect codes via `errors.Is()`
 - **Schema changes** → edit `schema.hcl`, then `make schema-apply` — never write raw SQL migrations
 - **Proto changes** → edit `api/auth/v1/auth.proto`, then `make gen` — never edit the generated files in `api/auth/v1/` directly

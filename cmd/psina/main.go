@@ -20,6 +20,8 @@ import (
 	"github.com/foxcool/psina/api/auth/v1/authv1connect"
 	"github.com/foxcool/psina/auth"
 	"github.com/foxcool/psina/provider/local"
+	"github.com/foxcool/psina/provider/oauth"
+	"github.com/foxcool/psina/provider/oauth/google"
 	"github.com/foxcool/psina/store/memory"
 	"github.com/foxcool/psina/store/postgres"
 	"github.com/foxcool/psina/token"
@@ -49,7 +51,7 @@ func run() error {
 	ctx := context.Background()
 
 	// Load config
-	config, err := loadConfig()
+	config, err := loadConfig(os.Args[1:])
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
@@ -71,6 +73,8 @@ func run() error {
 	var tokenStore auth.TokenStore
 	var credStore auth.CredentialStore
 	var patStore auth.PATStore
+	var oauthIdentityStore auth.OAuthIdentityStore
+	var challengeStore auth.ChallengeStore
 	var cleanup func()
 	var dbPing func(context.Context) error
 
@@ -91,6 +95,8 @@ func run() error {
 		tokenStore = pgStore
 		credStore = pgStore
 		patStore = pgStore
+		oauthIdentityStore = pgStore
+		challengeStore = pgStore
 	} else {
 		// Development: use in-memory store
 		slog.Warn("using in-memory store (data will not persist)")
@@ -103,6 +109,8 @@ func run() error {
 		tokenStore = memStore
 		credStore = memStore
 		patStore = memStore
+		oauthIdentityStore = memStore
+		challengeStore = memStore
 	}
 	defer cleanup()
 
@@ -124,6 +132,15 @@ func run() error {
 			MaxTTL:        config.PAT.MaxTTL,
 			TouchInterval: config.PAT.TouchInterval,
 		}))
+	}
+	oauthProviders, err := createOAuthProviders(config)
+	if err != nil {
+		return fmt.Errorf("create oauth providers: %w", err)
+	}
+	if len(oauthProviders) > 0 {
+		serviceOpts = append(serviceOpts, auth.WithOAuth(oauthProviders, oauthIdentityStore, challengeStore, credStore,
+			auth.OAuthConfig{DisableAutoLinkEmail: !config.OAuth.AutoLinkEmail}))
+		slog.Info("oauth sign-in enabled", "providers", len(oauthProviders), "auto_link_email", config.OAuth.AutoLinkEmail)
 	}
 	service := auth.NewService(tokenStore, userStore, issuer, []auth.Provider{provider}, serviceOpts...)
 
@@ -422,4 +439,21 @@ func setupLogger(config *Config) *slog.Logger {
 	}
 
 	return slog.New(handler)
+}
+
+// createOAuthProviders builds the OAuth providers that have credentials configured.
+func createOAuthProviders(config *Config) ([]oauth.Provider, error) {
+	var providers []oauth.Provider
+	if g := config.OAuth.Google; g.ClientID != "" {
+		p, err := google.New(google.Config{
+			ClientID:     g.ClientID,
+			ClientSecret: g.ClientSecret,
+			RedirectURIs: g.RedirectURIs,
+		})
+		if err != nil {
+			return nil, err
+		}
+		providers = append(providers, p)
+	}
+	return providers, nil
 }

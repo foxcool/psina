@@ -113,6 +113,8 @@ curl http://localhost:8080/.well-known/jwks.json
 | `POST /auth.v1.AuthService/CreatePersonalAccessToken` | Mint a PAT (session JWT required) |
 | `POST /auth.v1.AuthService/ListPersonalAccessTokens` | List caller's PATs (session JWT required) |
 | `POST /auth.v1.AuthService/RevokePersonalAccessToken` | Revoke a PAT by id (session JWT required) |
+| `POST /auth.v1.AuthService/GetOAuthURL` | Start OAuth sign-in: provider URL, state, browser binding |
+| `POST /auth.v1.AuthService/OAuthCallback` | Finish OAuth sign-in, returns tokens |
 | `GET /.well-known/jwks.json` | Public keys for JWT validation |
 | `GET /verify` | HTTP ForwardAuth endpoint (Traefik) |
 | `GET /healthz` | Liveness probe |
@@ -141,6 +143,10 @@ Environment variables (prefix `PSINA_`):
 | `PSINA_PAT_MAXPERUSER` | `50` | Max PATs per user; `-1` = unlimited |
 | `PSINA_PAT_MAXTTL` | `0s` | Max PAT lifetime; `0s` = unlimited |
 | `PSINA_PAT_TOUCHINTERVAL` | `1m` | Min interval between last-used updates; `-1ns` = every verify |
+| `PSINA_OAUTH_GOOGLE_CLIENTID` | _(empty)_ | Google OAuth client id; set to enable Google sign-in |
+| `PSINA_OAUTH_GOOGLE_CLIENTSECRET` | _(empty)_ | Google OAuth client secret |
+| `PSINA_OAUTH_GOOGLE_REDIRECTURIS` | _(empty)_ | Allowed redirect URIs, comma-separated (exact match) |
+| `PSINA_OAUTH_AUTOLINKEMAIL` | `true` | Link a first OAuth sign-in to an existing passwordless account with the same verified email; accounts with a password are never linked |
 | `PSINA_LOGGER_LEVEL` | `info` | Log level: debug, info, warn, error |
 | `PSINA_LOGGER_FORMAT` | `json` | Log format: json, text |
 
@@ -167,6 +173,12 @@ pat:
   maxPerUser: 50
   maxTTL: 0s        # 0s = unlimited
   touchInterval: 1m
+oauth:
+  autoLinkEmail: true
+  google:
+    clientID: "...apps.googleusercontent.com"
+    clientSecret: "..."
+    redirectURIs: ["https://app.example.com/oauth/callback"]
 logger:
   level: info
   format: json

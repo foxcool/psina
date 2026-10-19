@@ -609,7 +609,12 @@ type GetOAuthURLResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Url   string                 `protobuf:"bytes,1,opt,name=url,proto3" json:"url,omitempty"` // provider authorization URL to redirect the user to
 	// Single-use CSRF state embedded in the URL; expires server-side.
-	State         string `protobuf:"bytes,2,opt,name=state,proto3" json:"state,omitempty"`
+	State string `protobuf:"bytes,2,opt,name=state,proto3" json:"state,omitempty"`
+	// Browser-binding secret for OAuthCallback. Set only when cookies are
+	// disabled: keep it in the browser that started the flow (e.g.
+	// sessionStorage keyed by state), never in a URL. With cookies enabled it
+	// travels in an HttpOnly cookie instead and this field is empty.
+	Binding       string `protobuf:"bytes,3,opt,name=binding,proto3" json:"binding,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -658,12 +663,22 @@ func (x *GetOAuthURLResponse) GetState() string {
 	return ""
 }
 
+func (x *GetOAuthURLResponse) GetBinding() string {
+	if x != nil {
+		return x.Binding
+	}
+	return ""
+}
+
 type OAuthCallbackRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Provider      string                 `protobuf:"bytes,1,opt,name=provider,proto3" json:"provider,omitempty"`                          // must match the GetOAuthURL provider
-	Code          string                 `protobuf:"bytes,2,opt,name=code,proto3" json:"code,omitempty"`                                  // authorization code from the provider redirect
-	State         string                 `protobuf:"bytes,3,opt,name=state,proto3" json:"state,omitempty"`                                // state from the provider redirect
-	RedirectUri   string                 `protobuf:"bytes,4,opt,name=redirect_uri,json=redirectUri,proto3" json:"redirect_uri,omitempty"` // same value that was passed to GetOAuthURL
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Provider    string                 `protobuf:"bytes,1,opt,name=provider,proto3" json:"provider,omitempty"`                          // must match the GetOAuthURL provider
+	Code        string                 `protobuf:"bytes,2,opt,name=code,proto3" json:"code,omitempty"`                                  // authorization code from the provider redirect
+	State       string                 `protobuf:"bytes,3,opt,name=state,proto3" json:"state,omitempty"`                                // state from the provider redirect
+	RedirectUri string                 `protobuf:"bytes,4,opt,name=redirect_uri,json=redirectUri,proto3" json:"redirect_uri,omitempty"` // same value that was passed to GetOAuthURL
+	// GetOAuthURLResponse.binding of this flow. Leave empty when cookies are
+	// enabled: the binding cookie is used.
+	Binding       string `protobuf:"bytes,5,opt,name=binding,proto3" json:"binding,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -722,6 +737,13 @@ func (x *OAuthCallbackRequest) GetState() string {
 func (x *OAuthCallbackRequest) GetRedirectUri() string {
 	if x != nil {
 		return x.RedirectUri
+	}
+	return ""
+}
+
+func (x *OAuthCallbackRequest) GetBinding() string {
+	if x != nil {
+		return x.Binding
 	}
 	return ""
 }
@@ -1217,15 +1239,17 @@ const file_auth_v1_auth_proto_rawDesc = "" +
 	"\x05roles\x18\x03 \x03(\tR\x05roles\"S\n" +
 	"\x12GetOAuthURLRequest\x12\x1a\n" +
 	"\bprovider\x18\x01 \x01(\tR\bprovider\x12!\n" +
-	"\fredirect_uri\x18\x02 \x01(\tR\vredirectUri\"=\n" +
+	"\fredirect_uri\x18\x02 \x01(\tR\vredirectUri\"W\n" +
 	"\x13GetOAuthURLResponse\x12\x10\n" +
 	"\x03url\x18\x01 \x01(\tR\x03url\x12\x14\n" +
-	"\x05state\x18\x02 \x01(\tR\x05state\"\x7f\n" +
+	"\x05state\x18\x02 \x01(\tR\x05state\x12\x18\n" +
+	"\abinding\x18\x03 \x01(\tR\abinding\"\x99\x01\n" +
 	"\x14OAuthCallbackRequest\x12\x1a\n" +
 	"\bprovider\x18\x01 \x01(\tR\bprovider\x12\x12\n" +
 	"\x04code\x18\x02 \x01(\tR\x04code\x12\x14\n" +
 	"\x05state\x18\x03 \x01(\tR\x05state\x12!\n" +
-	"\fredirect_uri\x18\x04 \x01(\tR\vredirectUri\"\xcd\x01\n" +
+	"\fredirect_uri\x18\x04 \x01(\tR\vredirectUri\x12\x18\n" +
+	"\abinding\x18\x05 \x01(\tR\abinding\"\xcd\x01\n" +
 	"\x15OAuthCallbackResponse\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId\x12\x14\n" +
 	"\x05email\x18\x02 \x01(\tR\x05email\x12!\n" +

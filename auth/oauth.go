@@ -37,6 +37,10 @@ var (
 	// ErrOAuthLinkDisabled means an account with the provider's email exists
 	// and automatic linking is turned off.
 	ErrOAuthLinkDisabled = errors.New("account exists and automatic oauth linking is disabled")
+	// ErrOAuthAccountHasPassword means an account with the provider's email
+	// exists and holds a password, so it is not linked automatically. Its
+	// password holder may link the provider explicitly (personal-usuw).
+	ErrOAuthAccountHasPassword = errors.New("an account with this email has a password and is not linked automatically")
 )
 
 // DefaultOAuthStateTTL bounds how long a user may spend at the provider.
@@ -49,15 +53,27 @@ const oauthSecretBytes = 32
 type OAuthConfig struct {
 	// DisableAutoLinkEmail stops a first OAuth sign-in from attaching to an
 	// existing account with the same (provider-verified) email. Inverted so the
-	// zero value keeps the default: linking enabled.
+	// zero value keeps the default: linking enabled. Accounts holding a
+	// password are never auto-linked either way.
 	DisableAutoLinkEmail bool
 	// StateTTL is the lifetime of a flow's state. 0 = DefaultOAuthStateTTL.
 	StateTTL time.Duration
 }
 
 // WithOAuth enables OAuth sign-in through the given providers, keyed by
-// ProviderName(). A duplicate name is a wiring bug and panics.
-func WithOAuth(providers []oauth.Provider, identities OAuthIdentityStore, challenges ChallengeStore, cfg OAuthConfig) ServiceOption {
+// ProviderName(). credentials tells password accounts apart: auto-link skips
+// them. All stores are required; a nil store or a duplicate name is a wiring
+// bug and panics at startup rather than on the first sign-in.
+func WithOAuth(
+	providers []oauth.Provider,
+	identities OAuthIdentityStore,
+	challenges ChallengeStore,
+	credentials CredentialStore,
+	cfg OAuthConfig,
+) ServiceOption {
+	if identities == nil || challenges == nil || credentials == nil {
+		panic("auth: WithOAuth needs identity, challenge and credential stores")
+	}
 	if cfg.StateTTL == 0 {
 		cfg.StateTTL = DefaultOAuthStateTTL
 	}
@@ -72,6 +88,7 @@ func WithOAuth(providers []oauth.Provider, identities OAuthIdentityStore, challe
 		s.oauthProviders = registry
 		s.oauthIdentities = identities
 		s.challenges = challenges
+		s.credentials = credentials
 		s.oauthConfig = cfg
 	}
 }
@@ -276,8 +293,10 @@ func (s *Service) resolveOAuthUser(ctx context.Context, provider string, info *o
 	if err != nil {
 		return nil, false, err
 	}
-	if !isNew && s.oauthConfig.DisableAutoLinkEmail {
-		return nil, false, ErrOAuthLinkDisabled
+	if !isNew {
+		if err := s.checkAutoLink(ctx, user.ID); err != nil {
+			return nil, false, err
+		}
 	}
 
 	err = s.oauthIdentities.SaveOAuthIdentity(ctx, &entity.OAuthIdentity{
@@ -323,6 +342,28 @@ func (s *Service) discardUnlinkedUser(ctx context.Context, userID string) {
 	}
 	if err := s.userStore.Delete(ctx, userID); err != nil {
 		slog.ErrorContext(ctx, "delete user after failed oauth link", "user_id", userID, "error", err)
+	}
+}
+
+// checkAutoLink decides whether a first OAuth sign-in may attach to an
+// existing account found by email. A password account is refused: local
+// registration does not verify email, so whoever registered the address
+// first may not own it, and linking would hand them the provider's sign-in
+// (pre-account takeover). Its owner proves control by signing in instead.
+// shortcut: a password saved after this check (a registration racing the
+// sign-in) is not seen; closing it needs the transactional link of personal-w3zn.
+func (s *Service) checkAutoLink(ctx context.Context, userID string) error {
+	if s.oauthConfig.DisableAutoLinkEmail {
+		return ErrOAuthLinkDisabled
+	}
+	_, err := s.credentials.GetPasswordHash(ctx, userID)
+	switch {
+	case err == nil:
+		return ErrOAuthAccountHasPassword
+	case errors.Is(err, store.ErrCredentialNotFound):
+		return nil
+	default:
+		return fmt.Errorf("get password hash: %w", err)
 	}
 }
 

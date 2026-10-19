@@ -86,6 +86,7 @@ type Service struct {
 	oauthProviders  map[string]oauth.Provider
 	oauthIdentities OAuthIdentityStore
 	challenges      ChallengeStore
+	credentials     CredentialStore
 	oauthConfig     OAuthConfig
 
 	refreshReuseLeeway time.Duration

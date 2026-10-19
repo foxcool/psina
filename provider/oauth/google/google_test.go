@@ -24,7 +24,20 @@ import (
 const (
 	testClientID = "client-123.apps.googleusercontent.com"
 	testRedirect = "https://app.example.com/callback"
+	testNonce    = "nonce-abc"
 )
+
+// testVerifier is one PKCE verifier shared by the URL and exchange sides.
+var testVerifier = oauth2.GenerateVerifier()
+
+func testParams() oauth.AuthParams {
+	return oauth.AuthParams{
+		State:        "state-xyz",
+		RedirectURI:  testRedirect,
+		CodeVerifier: testVerifier,
+		Nonce:        testNonce,
+	}
+}
 
 func testConfig() Config {
 	return Config{
@@ -65,7 +78,7 @@ func TestProvider_AuthCodeURL(t *testing.T) {
 	p, err := New(testConfig())
 	require.NoError(t, err)
 
-	got, err := p.AuthCodeURL("state-xyz", testRedirect)
+	got, err := p.AuthCodeURL(testParams())
 	require.NoError(t, err)
 
 	u, err := url.Parse(got)
@@ -77,10 +90,39 @@ func TestProvider_AuthCodeURL(t *testing.T) {
 	assert.Equal(t, "code", q.Get("response_type"))
 	assert.Contains(t, q.Get("scope"), "openid")
 	assert.Contains(t, q.Get("scope"), "email")
+	assert.Equal(t, oauth2.S256ChallengeFromVerifier(testVerifier), q.Get("code_challenge"))
+	assert.Equal(t, "S256", q.Get("code_challenge_method"))
+	assert.Equal(t, testNonce, q.Get("nonce"))
+	assert.Empty(t, q.Get("code_verifier"), "verifier must never leave the server")
 
 	// Whitelist is exact-match
-	_, err = p.AuthCodeURL("state-xyz", "https://evil.example.com/callback")
+	params := testParams()
+	params.RedirectURI = "https://evil.example.com/callback"
+	_, err = p.AuthCodeURL(params)
 	assert.True(t, errors.Is(err, oauth.ErrRedirectURINotAllowed), "expected ErrRedirectURINotAllowed, got: %v", err)
+}
+
+func TestProvider_MissingAuthParams(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*oauth.AuthParams)
+	}{
+		{"no code verifier", func(p *oauth.AuthParams) { p.CodeVerifier = "" }},
+		{"no nonce", func(p *oauth.AuthParams) { p.Nonce = "" }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := fakeTokenEndpoint(t, signIDToken(t, validClaims()))
+			params := testParams()
+			tt.mutate(&params)
+
+			_, err := p.AuthCodeURL(params)
+			assert.True(t, errors.Is(err, oauth.ErrMissingAuthParams), "AuthCodeURL: expected ErrMissingAuthParams, got: %v", err)
+			_, err = p.ExchangeCode(context.Background(), "auth-code", params)
+			assert.True(t, errors.Is(err, oauth.ErrMissingAuthParams), "ExchangeCode: expected ErrMissingAuthParams, got: %v", err)
+		})
+	}
 }
 
 // signIDToken produces a well-formed RS256-signed ID token with the given claims.
@@ -104,6 +146,7 @@ func validClaims() map[string]any {
 		"sub":            "google-sub-42",
 		"email":          "user@gmail.com",
 		"email_verified": true,
+		"nonce":          testNonce,
 		"exp":            time.Now().Add(time.Hour).Unix(),
 		"iat":            time.Now().Unix(),
 	}
@@ -117,6 +160,7 @@ func fakeTokenEndpoint(t *testing.T, idToken string) *Provider {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.NoError(t, r.ParseForm())
 		assert.Equal(t, "authorization_code", r.Form.Get("grant_type"))
+		assert.Equal(t, testVerifier, r.Form.Get("code_verifier"))
 
 		w.Header().Set("Content-Type", "application/json")
 		resp := map[string]any{
@@ -142,7 +186,7 @@ func fakeTokenEndpoint(t *testing.T, idToken string) *Provider {
 func TestProvider_ExchangeCode(t *testing.T) {
 	p := fakeTokenEndpoint(t, signIDToken(t, validClaims()))
 
-	info, err := p.ExchangeCode(context.Background(), "auth-code", testRedirect)
+	info, err := p.ExchangeCode(context.Background(), "auth-code", testParams())
 	require.NoError(t, err)
 	assert.Equal(t, "google-sub-42", info.ExternalID)
 	assert.Equal(t, "user@gmail.com", info.Email)
@@ -158,6 +202,8 @@ func TestProvider_ExchangeCode_Rejections(t *testing.T) {
 		{"wrong issuer", func(c map[string]any) { c["iss"] = "https://evil.example.com" }},
 		{"expired", func(c map[string]any) { c["exp"] = time.Now().Add(-time.Hour).Unix() }},
 		{"missing sub", func(c map[string]any) { delete(c, "sub") }},
+		{"wrong nonce", func(c map[string]any) { c["nonce"] = "attacker-nonce" }},
+		{"missing nonce", func(c map[string]any) { delete(c, "nonce") }},
 	}
 
 	for _, tt := range tests {
@@ -166,7 +212,7 @@ func TestProvider_ExchangeCode_Rejections(t *testing.T) {
 			tt.mutate(claims)
 			p := fakeTokenEndpoint(t, signIDToken(t, claims))
 
-			_, err := p.ExchangeCode(context.Background(), "auth-code", testRedirect)
+			_, err := p.ExchangeCode(context.Background(), "auth-code", testParams())
 			assert.True(t, errors.Is(err, oauth.ErrInvalidToken), "expected ErrInvalidToken, got: %v", err)
 		})
 	}
@@ -175,21 +221,23 @@ func TestProvider_ExchangeCode_Rejections(t *testing.T) {
 func TestProvider_ExchangeCode_NoIDToken(t *testing.T) {
 	p := fakeTokenEndpoint(t, "")
 
-	_, err := p.ExchangeCode(context.Background(), "auth-code", testRedirect)
+	_, err := p.ExchangeCode(context.Background(), "auth-code", testParams())
 	assert.True(t, errors.Is(err, oauth.ErrInvalidToken), "expected ErrInvalidToken, got: %v", err)
 }
 
 func TestProvider_ExchangeCode_MalformedIDToken(t *testing.T) {
 	p := fakeTokenEndpoint(t, "not-a-jwt")
 
-	_, err := p.ExchangeCode(context.Background(), "auth-code", testRedirect)
+	_, err := p.ExchangeCode(context.Background(), "auth-code", testParams())
 	assert.True(t, errors.Is(err, oauth.ErrInvalidToken), "expected ErrInvalidToken, got: %v", err)
 }
 
 func TestProvider_ExchangeCode_RedirectWhitelist(t *testing.T) {
 	p := fakeTokenEndpoint(t, signIDToken(t, validClaims()))
 
-	_, err := p.ExchangeCode(context.Background(), "auth-code", "https://evil.example.com/callback")
+	params := testParams()
+	params.RedirectURI = "https://evil.example.com/callback"
+	_, err := p.ExchangeCode(context.Background(), "auth-code", params)
 	assert.True(t, errors.Is(err, oauth.ErrRedirectURINotAllowed), "expected ErrRedirectURINotAllowed, got: %v", err)
 }
 
@@ -198,7 +246,7 @@ func TestProvider_AlternateIssuerForm(t *testing.T) {
 	claims["iss"] = "accounts.google.com" // Google may omit the scheme
 	p := fakeTokenEndpoint(t, signIDToken(t, claims))
 
-	info, err := p.ExchangeCode(context.Background(), "auth-code", testRedirect)
+	info, err := p.ExchangeCode(context.Background(), "auth-code", testParams())
 	require.NoError(t, err)
 	assert.Equal(t, "google-sub-42", info.ExternalID)
 }

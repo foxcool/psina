@@ -5,6 +5,7 @@ package google
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"slices"
 	"time"
@@ -82,13 +83,32 @@ func (p *Provider) oauthConfig(redirectURI string) (*oauth2.Config, error) {
 	}, nil
 }
 
-// AuthCodeURL builds Google's authorization URL for the given CSRF state.
-func (p *Provider) AuthCodeURL(state, redirectURI string) (string, error) {
-	conf, err := p.oauthConfig(redirectURI)
+// requireParams rejects a flow without PKCE verifier or nonce: silently
+// sending a URL without them would downgrade the flow instead of failing.
+func requireParams(params oauth.AuthParams) error {
+	if params.CodeVerifier == "" {
+		return fmt.Errorf("%w: code verifier is required", oauth.ErrMissingAuthParams)
+	}
+	if params.Nonce == "" {
+		return fmt.Errorf("%w: nonce is required", oauth.ErrMissingAuthParams)
+	}
+	return nil
+}
+
+// AuthCodeURL builds Google's authorization URL with state, PKCE S256
+// challenge and OIDC nonce.
+func (p *Provider) AuthCodeURL(params oauth.AuthParams) (string, error) {
+	if err := requireParams(params); err != nil {
+		return "", err
+	}
+	conf, err := p.oauthConfig(params.RedirectURI)
 	if err != nil {
 		return "", err
 	}
-	return conf.AuthCodeURL(state), nil
+	return conf.AuthCodeURL(params.State,
+		oauth2.S256ChallengeOption(params.CodeVerifier),
+		oauth2.SetAuthURLParam("nonce", params.Nonce),
+	), nil
 }
 
 // idTokenClaims is the subset of Google ID token claims psina consumes.
@@ -96,6 +116,7 @@ type idTokenClaims struct {
 	jwt.Claims
 	Email         string `json:"email"`
 	EmailVerified bool   `json:"email_verified"`
+	Nonce         string `json:"nonce"`
 }
 
 // ExchangeCode swaps the authorization code for tokens and extracts the user
@@ -105,14 +126,17 @@ type idTokenClaims struct {
 // the token arrives straight from Google's token endpoint over TLS on a
 // client-secret-authenticated request, so per OIDC Core §3.1.3.7 the TLS
 // server validation may be used to validate the issuer in place of checking
-// the token signature. Issuer, audience, and expiry are still checked.
-func (p *Provider) ExchangeCode(ctx context.Context, code, redirectURI string) (*oauth.UserInfo, error) {
-	conf, err := p.oauthConfig(redirectURI)
+// the token signature. Issuer, audience, expiry, and nonce are still checked.
+func (p *Provider) ExchangeCode(ctx context.Context, code string, params oauth.AuthParams) (*oauth.UserInfo, error) {
+	if err := requireParams(params); err != nil {
+		return nil, err
+	}
+	conf, err := p.oauthConfig(params.RedirectURI)
 	if err != nil {
 		return nil, err
 	}
 
-	token, err := conf.Exchange(ctx, code)
+	token, err := conf.Exchange(ctx, code, oauth2.VerifierOption(params.CodeVerifier))
 	if err != nil {
 		return nil, fmt.Errorf("google: exchange code: %w", err)
 	}
@@ -144,6 +168,9 @@ func (p *Provider) ExchangeCode(ctx context.Context, code, redirectURI string) (
 	}
 	if claims.Subject == "" {
 		return nil, fmt.Errorf("%w: id_token has no sub", oauth.ErrInvalidToken)
+	}
+	if subtle.ConstantTimeCompare([]byte(claims.Nonce), []byte(params.Nonce)) != 1 {
+		return nil, fmt.Errorf("%w: id_token nonce mismatch", oauth.ErrInvalidToken)
 	}
 
 	return &oauth.UserInfo{

@@ -43,11 +43,19 @@ type WalletIdentity struct {
 // Challenge is a single-use, expiring nonce. It backs wallet sign-in (the
 // message the wallet signs, bound to Chain+Address) and OAuth CSRF state (Nonce
 // as the state value, with Chain/Address empty). Consumed via delete-before-use.
+// The OAuth fields stay server-side and are empty for wallet challenges.
 type Challenge struct {
-	Nonce     string // random, primary key
-	Message   string // full text the client signs, or OAuth state payload
-	Chain     string // wallet chain binding; empty for OAuth state
-	Address   string // wallet address binding; empty for OAuth state
-	ExpiresAt time.Time
-	CreatedAt time.Time
+	Nonce   string // random, primary key
+	Message string // full text the client signs, or OAuth state payload
+	Chain   string // wallet chain binding; empty for OAuth state
+	Address string // wallet address binding; empty for OAuth state
+	// CodeVerifier is the PKCE verifier sent on code exchange.
+	CodeVerifier string
+	// OAuthNonce is the OIDC nonce the ID token must echo.
+	OAuthNonce string
+	// BindingHash is the hex SHA-256 of the browser-binding secret that only
+	// the browser which started the flow holds (login CSRF defence).
+	BindingHash string
+	ExpiresAt   time.Time
+	CreatedAt   time.Time
 }

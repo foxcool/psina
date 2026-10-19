@@ -643,13 +643,14 @@ func oauthBindingCookieName(state string) string {
 // RPC from the provider-redirected navigation itself must still get the
 // cookie. The path limits it to the callback RPC, the only reader.
 func (h *Handler) setOAuthBindingCookie(header http.Header, state, binding string, ttl time.Duration) {
+	// #nosec G124 -- Secure is driven by cookieConfig, as for token cookies; dev needs http
 	cookie := &http.Cookie{
 		Name:     oauthBindingCookieName(state),
 		Value:    binding,
 		Domain:   h.cookieConfig.Domain,
 		Path:     authv1connect.AuthServiceOAuthCallbackProcedure,
 		MaxAge:   int(ttl.Seconds()),
-		Secure:   h.cookieConfig.Secure, // #nosec G124 -- driven by cookieConfig, as for token cookies
+		Secure:   h.cookieConfig.Secure,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 	}
@@ -658,13 +659,14 @@ func (h *Handler) setOAuthBindingCookie(header http.Header, state, binding strin
 
 // clearOAuthBindingCookie expires the binding cookie of a finished flow.
 func (h *Handler) clearOAuthBindingCookie(header http.Header, state string) {
+	// #nosec G124 -- empty-value clear; Secure mirrors cookieConfig used when set
 	cookie := &http.Cookie{
 		Name:     oauthBindingCookieName(state),
 		Value:    "",
 		Domain:   h.cookieConfig.Domain,
 		Path:     authv1connect.AuthServiceOAuthCallbackProcedure,
 		MaxAge:   -1,
-		Secure:   h.cookieConfig.Secure, // #nosec G124 -- empty-value clear
+		Secure:   h.cookieConfig.Secure,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 	}

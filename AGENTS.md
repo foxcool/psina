@@ -11,7 +11,7 @@ Name origin: "psina" (рус. "псина") = "doggy" — a guard dog that knows
 
 ## Current Status
 
-**v0.3 in progress** — v0.2 shipped local auth, personal access tokens, standalone deploy (cookies, ES256, health probes, table prefix), gateway e2e tests, security CI. Since then: user roles (opaque strings in JWT/Verify), OAuth RPC contract, oauth_identities/auth_challenges stores, Google OIDC provider with PKCE (S256) and nonce, OAuth service layer + RPCs with browser-bound state (Google wired in cmd/psina). Next: GitHub provider, then wallet auth (SIWE).
+**v0.5 in progress** — released: v0.2 local auth, personal access tokens, standalone deploy (cookies, ES256, health probes, table prefix), gateway e2e tests, security CI, user roles; v0.3 packages moved to the module root; v0.4 atomic refresh rotation with reuse leeway. Unreleased in main: OAuth RPCs, oauth_identities/auth_challenges stores, Google OIDC provider with PKCE (S256) and nonce, browser-bound state (Google wired in cmd/psina). Next: GitHub provider, then wallet auth (SIWE).
 
 ## Directory Map
 

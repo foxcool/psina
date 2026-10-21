@@ -231,7 +231,7 @@ siblings minted within the leeway.
 - [ ] Use persistent RSA key (`PSINA_JWT_PRIVATEKEYPATH`)
 - [ ] Use PostgreSQL (`PSINA_DB_URL`)
 - [ ] Enable TLS termination (reverse proxy)
-- [ ] Set up rate limiting (v0.2)
+- [ ] Set up rate limiting at the gateway (built-in limits are on the roadmap)
 - [ ] Configure audit logging
 
 ## Gateway Integration
@@ -315,11 +315,13 @@ See [docs/architecture.md](docs/architecture.md) for details.
 | Version | Features | Status |
 |---------|----------|--------|
 | v0.1 | Local auth, JWT, PostgreSQL | ✅ Released |
-| v0.2 | Personal access tokens, standalone (cookies, ES256, health probes, table prefix), gateway e2e, security CI | ✅ Released |
-| v0.3 | OAuth sign-in (Google, GitHub), user roles | 🚧 In progress |
-| v0.4 | Web3 wallet auth (SIWE) | 📋 Planned |
-| v0.5 | Rate limiting, Prometheus metrics, audit logging | 📋 Planned |
-| v0.6 | Passkeys (WebAuthn), TOTP 2FA | 📋 Planned |
+| v0.2 | Personal access tokens, standalone (cookies, ES256, health probes, table prefix), gateway e2e, security CI, user roles | ✅ Released |
+| v0.3 | Packages moved to the module root (breaking import paths), typed provider errors | ✅ Released |
+| v0.4 | Atomic refresh rotation with a duplicate-refresh leeway | ✅ Released |
+| v0.5 | OAuth sign-in: Google (PKCE, OIDC nonce, browser-bound state), GitHub | 🚧 In progress |
+| v0.6 | Web3 wallet auth (SIWE) | 📋 Planned |
+| v0.7 | Rate limiting, Prometheus metrics, audit logging | 📋 Planned |
+| v0.8 | Passkeys (WebAuthn), TOTP 2FA | 📋 Planned |
 | v1.0 | Stable API | 📋 Planned |
 
 ## License

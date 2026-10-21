@@ -17,19 +17,28 @@ Based on arc42 template + C4 model.
 
 - Reusable authentication
 - Embed in monolith or deploy as separate service
-- Multiple auth providers (local, passkeys, Web3 wallets)
+- Multiple auth providers (local, OAuth/OIDC, Web3 wallets, passkeys)
 - Easy integration with API gateways (Traefik, KrakenD)
 - Open source (MIT license)
 
 **Functional Requirements:**
 
+Implemented:
+
 - User registration and login (username/password)
-- JWT token issuance with refresh token flow
+- JWT token issuance with refresh token rotation and reuse detection
 - Personal access tokens for machine clients
+- User roles as opaque strings in the JWT and Verify response
+- OAuth 2.0 / OIDC sign-in with PKCE and browser-bound state (Google)
 - JWKS endpoint for gateway validation
-- WebAuthn/Passkeys support (v0.2)
-- Ethereum wallet signature auth (v0.3)
 - Traefik ForwardAuth integration
+
+Planned (release order in the [README roadmap](../README.md#roadmap)):
+
+- GitHub OAuth sign-in
+- Web3 wallet signature auth (SIWE, EIP-4361)
+- Rate limiting, metrics, audit logging
+- WebAuthn/Passkeys, TOTP 2FA
 
 **Non-functional Requirements:**
 
@@ -61,16 +70,17 @@ Based on arc42 template + C4 model.
 
 ### 2.1 Technical
 
-- **Language**: Go 1.24+
+- **Language**: Go 1.26+
 - **Database**: PostgreSQL 17+ (primary), in-memory store (dev/testing)
 - **Protocol**: Connect RPC (gRPC + HTTP/JSON on same port)
 - **Container**: Docker, single binary
 
 ### 2.2 Standards Compliance
 
-- OAuth 2.0 (RFC 6749)
+- OAuth 2.0 (RFC 6749), PKCE (RFC 7636), OAuth 2.0 Security BCP (RFC 9700)
+- OpenID Connect Core 1.0
 - JWT (RFC 7519), JWK (RFC 7517)
-- WebAuthn Level 2 (W3C)
+- Planned: Sign-In with Ethereum (EIP-4361), WebAuthn Level 2 (W3C)
 - OWASP Authentication Cheat Sheet
 
 ---
@@ -186,7 +196,7 @@ func (app *Service) DeleteUser(ctx context.Context, targetUserID string) error {
 | Aspect        | Choice          | Rationale                                |
 | ------------- | --------------- | ---------------------------------------- |
 | RPC           | Connect RPC     | gRPC + HTTP/JSON, same port, no proxy    |
-| JWT signing   | RS256           | Asymmetric, gateways validate w/o secret |
+| JWT signing   | RS256 / ES256   | Asymmetric, gateways validate w/o secret |
 | Password hash | Argon2id        | Current best practice                    |
 | Protobuf      | buf (local)     | OpenAPI 3.1 via connect-openapi          |
 | Schema        | Atlas           | Declarative, type-safe HCL              |

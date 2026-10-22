@@ -29,13 +29,12 @@ Implemented:
 - JWT token issuance with refresh token rotation and reuse detection
 - Personal access tokens for machine clients
 - User roles as opaque strings in the JWT and Verify response
-- OAuth 2.0 / OIDC sign-in with PKCE and browser-bound state (Google)
+- OAuth 2.0 / OIDC sign-in with PKCE and browser-bound state (Google, GitHub)
 - JWKS endpoint for gateway validation
 - Traefik ForwardAuth integration
 
 Planned (release order in the [README roadmap](../README.md#roadmap)):
 
-- GitHub OAuth sign-in
 - Web3 wallet signature auth (SIWE, EIP-4361)
 - Rate limiting, metrics, audit logging
 - WebAuthn/Passkeys, TOTP 2FA

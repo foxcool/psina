@@ -21,6 +21,7 @@ import (
 	"github.com/foxcool/psina/auth"
 	"github.com/foxcool/psina/provider/local"
 	"github.com/foxcool/psina/provider/oauth"
+	"github.com/foxcool/psina/provider/oauth/github"
 	"github.com/foxcool/psina/provider/oauth/google"
 	"github.com/foxcool/psina/store/memory"
 	"github.com/foxcool/psina/store/postgres"
@@ -446,6 +447,17 @@ func createOAuthProviders(config *Config) ([]oauth.Provider, error) {
 	var providers []oauth.Provider
 	if g := config.OAuth.Google; g.ClientID != "" {
 		p, err := google.New(google.Config{
+			ClientID:     g.ClientID,
+			ClientSecret: g.ClientSecret,
+			RedirectURIs: g.RedirectURIs,
+		})
+		if err != nil {
+			return nil, err
+		}
+		providers = append(providers, p)
+	}
+	if g := config.OAuth.GitHub; g.ClientID != "" {
+		p, err := github.New(github.Config{
 			ClientID:     g.ClientID,
 			ClientSecret: g.ClientSecret,
 			RedirectURIs: g.RedirectURIs,

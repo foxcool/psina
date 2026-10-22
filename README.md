@@ -146,6 +146,9 @@ Environment variables (prefix `PSINA_`):
 | `PSINA_OAUTH_GOOGLE_CLIENTID` | _(empty)_ | Google OAuth client id; set to enable Google sign-in |
 | `PSINA_OAUTH_GOOGLE_CLIENTSECRET` | _(empty)_ | Google OAuth client secret |
 | `PSINA_OAUTH_GOOGLE_REDIRECTURIS` | _(empty)_ | Allowed redirect URIs, comma-separated (exact match) |
+| `PSINA_OAUTH_GITHUB_CLIENTID` | _(empty)_ | GitHub OAuth app client id; set to enable GitHub sign-in |
+| `PSINA_OAUTH_GITHUB_CLIENTSECRET` | _(empty)_ | GitHub OAuth app client secret |
+| `PSINA_OAUTH_GITHUB_REDIRECTURIS` | _(empty)_ | Allowed redirect URIs, comma-separated (exact match) |
 | `PSINA_OAUTH_AUTOLINKEMAIL` | `true` | Link a first OAuth sign-in to an existing passwordless account with the same verified email; accounts with a password are never linked |
 | `PSINA_LOGGER_LEVEL` | `info` | Log level: debug, info, warn, error |
 | `PSINA_LOGGER_FORMAT` | `json` | Log format: json, text |
@@ -177,6 +180,10 @@ oauth:
   autoLinkEmail: true
   google:
     clientID: "...apps.googleusercontent.com"
+    clientSecret: "..."
+    redirectURIs: ["https://app.example.com/oauth/callback"]
+  github:
+    clientID: "..."
     clientSecret: "..."
     redirectURIs: ["https://app.example.com/oauth/callback"]
 logger:

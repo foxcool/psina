@@ -3,25 +3,53 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestLoadConfig_OAuthGoogleFromEnv(t *testing.T) {
-	t.Setenv("PSINA_OAUTH_GOOGLE_CLIENTID", "client")
-	t.Setenv("PSINA_OAUTH_GOOGLE_CLIENTSECRET", "secret")
-	t.Setenv("PSINA_OAUTH_GOOGLE_REDIRECTURIS", "https://a.example/cb, https://b.example/cb,")
+func TestLoadConfig_OAuthFromEnv(t *testing.T) {
+	tests := []struct {
+		name   string
+		client func(*Config) OAuthClientConfig
+	}{
+		{"google", func(c *Config) OAuthClientConfig { return c.OAuth.Google }},
+		{"github", func(c *Config) OAuthClientConfig { return c.OAuth.GitHub }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prefix := "PSINA_OAUTH_" + strings.ToUpper(tt.name) + "_"
+			t.Setenv(prefix+"CLIENTID", "client")
+			t.Setenv(prefix+"CLIENTSECRET", "secret")
+			t.Setenv(prefix+"REDIRECTURIS", "https://a.example/cb, https://b.example/cb,")
+
+			config, err := loadConfig(nil)
+			require.NoError(t, err)
+			assert.Equal(t, []string{"https://a.example/cb", "https://b.example/cb"}, tt.client(config).RedirectURIs)
+			assert.True(t, config.OAuth.AutoLinkEmail, "auto-link defaults to on")
+
+			providers, err := createOAuthProviders(config)
+			require.NoError(t, err)
+			require.Len(t, providers, 1)
+			assert.Equal(t, tt.name, providers[0].ProviderName())
+		})
+	}
+}
+
+func TestLoadConfig_OAuthBothProviders(t *testing.T) {
+	for _, name := range []string{"GOOGLE", "GITHUB"} {
+		t.Setenv("PSINA_OAUTH_"+name+"_CLIENTID", "client")
+		t.Setenv("PSINA_OAUTH_"+name+"_CLIENTSECRET", "secret")
+		t.Setenv("PSINA_OAUTH_"+name+"_REDIRECTURIS", "https://a.example/cb")
+	}
 
 	config, err := loadConfig(nil)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"https://a.example/cb", "https://b.example/cb"}, config.OAuth.Google.RedirectURIs)
-	assert.True(t, config.OAuth.AutoLinkEmail, "auto-link defaults to on")
-
 	providers, err := createOAuthProviders(config)
 	require.NoError(t, err)
-	assert.Len(t, providers, 1)
+	assert.Len(t, providers, 2)
 }
 
 func TestLoadConfig_OAuthDisabledByDefault(t *testing.T) {
@@ -32,7 +60,7 @@ func TestLoadConfig_OAuthDisabledByDefault(t *testing.T) {
 	assert.Empty(t, providers)
 }
 
-func TestValidateConfig_OAuthGoogleIncomplete(t *testing.T) {
+func TestValidateConfig_OAuthIncomplete(t *testing.T) {
 	tests := []struct {
 		name             string
 		clientID, secret string
@@ -43,13 +71,18 @@ func TestValidateConfig_OAuthGoogleIncomplete(t *testing.T) {
 		{"secret without id", "", "secret", []string{"https://a.example/cb"}},
 	}
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+		client := OAuthClientConfig{ClientID: tt.clientID, ClientSecret: tt.secret, RedirectURIs: tt.redirectURIs}
+		t.Run("google "+tt.name, func(t *testing.T) {
 			c := &Config{}
 			c.JWT.Algorithm = "RS256"
-			c.OAuth.Google.ClientID = tt.clientID
-			c.OAuth.Google.ClientSecret = tt.secret
-			c.OAuth.Google.RedirectURIs = tt.redirectURIs
+			c.OAuth.Google = client
 			assert.ErrorContains(t, validateConfig(c), "oauth.google")
+		})
+		t.Run("github "+tt.name, func(t *testing.T) {
+			c := &Config{}
+			c.JWT.Algorithm = "RS256"
+			c.OAuth.GitHub = client
+			assert.ErrorContains(t, validateConfig(c), "oauth.github")
 		})
 	}
 }
@@ -71,6 +104,10 @@ oauth:
     clientID: client
     clientSecret: secret
     redirectURIs: ["https://a.example/cb"]
+  github:
+    clientID: gh-client
+    clientSecret: gh-secret
+    redirectURIs: ["https://b.example/cb"]
 `), 0o600))
 
 	config, err := loadConfig([]string{"-c", path})
@@ -80,6 +117,8 @@ oauth:
 	assert.Equal(t, "lax", config.Cookie.SameSite)
 	assert.False(t, config.OAuth.AutoLinkEmail, "a safety toggle set in YAML must not be ignored")
 	assert.Equal(t, []string{"https://a.example/cb"}, config.OAuth.Google.RedirectURIs)
+	assert.Equal(t, "gh-client", config.OAuth.GitHub.ClientID)
+	assert.Equal(t, []string{"https://b.example/cb"}, config.OAuth.GitHub.RedirectURIs)
 }
 
 func TestLoadConfig_OAuthGoogleBlankRedirectURIs(t *testing.T) {

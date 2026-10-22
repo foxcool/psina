@@ -49,13 +49,17 @@ type Config struct {
 		TouchInterval time.Duration `koanf:"touchinterval"` // Min interval between last-used updates; -1 = every verify (default: 1m)
 	} `koanf:"pat"`
 	OAuth struct {
-		AutoLinkEmail bool `koanf:"autolinkemail"` // Link a first sign-in to a passwordless account with the same verified email (default: true)
-		Google        struct {
-			ClientID     string   `koanf:"clientid"`
-			ClientSecret string   `koanf:"clientsecret"`
-			RedirectURIs []string `koanf:"redirecturis"` // Exact-match whitelist; comma-separated in env
-		} `koanf:"google"`
+		AutoLinkEmail bool              `koanf:"autolinkemail"` // Link a first sign-in to a passwordless account with the same verified email (default: true)
+		Google        OAuthClientConfig `koanf:"google"`
+		GitHub        OAuthClientConfig `koanf:"github"`
 	} `koanf:"oauth"`
+}
+
+// OAuthClientConfig holds one OAuth provider's client registration.
+type OAuthClientConfig struct {
+	ClientID     string   `koanf:"clientid"`
+	ClientSecret string   `koanf:"clientsecret"`
+	RedirectURIs []string `koanf:"redirecturis"` // Exact-match whitelist; comma-separated in env
 }
 
 func loadConfig(args []string) (*Config, error) {
@@ -133,6 +137,7 @@ func loadConfig(args []string) (*Config, error) {
 	}
 
 	config.OAuth.Google.RedirectURIs = splitList(config.OAuth.Google.RedirectURIs)
+	config.OAuth.GitHub.RedirectURIs = splitList(config.OAuth.GitHub.RedirectURIs)
 
 	// Validate
 	if err := validateConfig(&config); err != nil {
@@ -168,15 +173,25 @@ func validateConfig(c *Config) error {
 		return fmt.Errorf("cookie.domain is required when cookies are enabled")
 	}
 
-	// Google is enabled by its client id; a half-configured client is a typo,
-	// not a request to run without it.
-	g := c.OAuth.Google
-	if g.ClientID != "" || g.ClientSecret != "" || len(g.RedirectURIs) > 0 {
-		if g.ClientID == "" || g.ClientSecret == "" || len(g.RedirectURIs) == 0 {
-			return fmt.Errorf("oauth.google needs clientid, clientsecret and redirecturis together")
-		}
+	if err := validateOAuthClient("google", c.OAuth.Google); err != nil {
+		return err
+	}
+	if err := validateOAuthClient("github", c.OAuth.GitHub); err != nil {
+		return err
 	}
 
+	return nil
+}
+
+// validateOAuthClient rejects a half-configured provider. A provider is
+// enabled by its client id; a partial config is a typo, not a request to run
+// without it.
+func validateOAuthClient(name string, o OAuthClientConfig) error {
+	if o.ClientID != "" || o.ClientSecret != "" || len(o.RedirectURIs) > 0 {
+		if o.ClientID == "" || o.ClientSecret == "" || len(o.RedirectURIs) == 0 {
+			return fmt.Errorf("oauth.%s needs clientid, clientsecret and redirecturis together", name)
+		}
+	}
 	return nil
 }
 

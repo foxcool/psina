@@ -129,7 +129,7 @@ Environment variables (prefix `PSINA_`):
 |----------|---------|-------------|
 | `PSINA_SERVER_PORT` | `8080` | Server port |
 | `PSINA_DB_URL` | _(empty)_ | PostgreSQL DSN (empty = in-memory) |
-| `PSINA_DB_TABLE_PREFIX` | _(empty)_ | Table name prefix for shared DB |
+| `PSINA_DB_TABLEPREFIX` | _(empty)_ | Table name prefix for shared DB |
 | `PSINA_JWT_PRIVATEKEYPATH` | _(empty)_ | Private key file path |
 | `PSINA_JWT_PRIVATEKEY` | _(empty)_ | Private key PEM (alternative to path) |
 | `PSINA_JWT_ALGORITHM` | `RS256` | JWT algorithm: `RS256` or `ES256` |

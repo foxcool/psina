@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -29,6 +30,7 @@ func testParams() oauth.AuthParams {
 		State:        "state-xyz",
 		RedirectURI:  testRedirect,
 		CodeVerifier: testVerifier,
+		Nonce:        "nonce-abc", // the service always sends one; GitHub must ignore it
 	}
 }
 
@@ -93,15 +95,23 @@ func TestProvider_AuthCodeURL(t *testing.T) {
 	assert.True(t, errors.Is(err, oauth.ErrRedirectURINotAllowed), "expected ErrRedirectURINotAllowed, got: %v", err)
 }
 
-func TestProvider_NonceNotRequired(t *testing.T) {
-	p, err := New(testConfig())
-	require.NoError(t, err)
+func TestProvider_NonceIgnored(t *testing.T) {
+	for _, nonce := range []string{"nonce-abc", ""} {
+		t.Run("nonce="+nonce, func(t *testing.T) {
+			p := fakeGitHub(t, fakeResponses{})
+			params := testParams()
+			params.Nonce = nonce
 
-	got, err := p.AuthCodeURL(testParams())
-	require.NoError(t, err)
-	u, err := url.Parse(got)
-	require.NoError(t, err)
-	assert.False(t, u.Query().Has("nonce"))
+			got, err := p.AuthCodeURL(params)
+			require.NoError(t, err)
+			u, err := url.Parse(got)
+			require.NoError(t, err)
+			assert.False(t, u.Query().Has("nonce"), "GitHub has no OIDC; the nonce must not leak into the URL")
+
+			_, err = p.ExchangeCode(context.Background(), "auth-code", params)
+			assert.NoError(t, err)
+		})
+	}
 }
 
 func TestProvider_MissingCodeVerifier(t *testing.T) {
@@ -164,7 +174,11 @@ func fakeGitHub(t *testing.T, r fakeResponses) *Provider {
 		}
 	}
 	mux.HandleFunc("GET /api/user", api(r.userStatus, r.userBody))
-	mux.HandleFunc("GET /api/user/emails", api(r.emailsStatus, r.emailsBody))
+	emails := api(r.emailsStatus, r.emailsBody)
+	mux.HandleFunc("GET /api/user/emails", func(w http.ResponseWriter, req *http.Request) {
+		assert.Equal(t, strconv.Itoa(emailsPerPage), req.URL.Query().Get("per_page"), "default page of 30 may miss the primary")
+		emails(w, req)
+	})
 
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)

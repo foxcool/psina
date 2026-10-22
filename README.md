@@ -325,7 +325,7 @@ See [docs/architecture.md](docs/architecture.md) for details.
 | v0.2 | Personal access tokens, standalone (cookies, ES256, health probes, table prefix), gateway e2e, security CI, user roles | ✅ Released |
 | v0.3 | Packages moved to the module root (breaking import paths), typed provider errors | ✅ Released |
 | v0.4 | Atomic refresh rotation with a duplicate-refresh leeway | ✅ Released |
-| v0.5 | OAuth sign-in: Google (PKCE, OIDC nonce, browser-bound state), GitHub | 🚧 In progress |
+| v0.5 | OAuth sign-in: Google (PKCE, OIDC nonce, browser-bound state), GitHub | ✅ Released |
 | v0.6 | Web3 wallet auth (SIWE) | 📋 Planned |
 | v0.7 | Rate limiting, Prometheus metrics, audit logging | 📋 Planned |
 | v0.8 | Passkeys (WebAuthn), TOTP 2FA | 📋 Planned |

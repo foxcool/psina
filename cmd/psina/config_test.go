@@ -3,6 +3,8 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -128,4 +130,42 @@ func TestLoadConfig_OAuthGoogleBlankRedirectURIs(t *testing.T) {
 
 	_, err := loadConfig(nil)
 	assert.ErrorContains(t, err, "oauth.google")
+}
+
+// Every PSINA_* name in the docs and deploy files must reach a Config field;
+// koanf drops an unknown one silently and the server runs on its default.
+func TestDocumentedEnvNamesMapToConfig(t *testing.T) {
+	keys := map[string]bool{}
+	collectKoanfKeys(reflect.TypeOf(Config{}), "", keys)
+
+	// Compose interpolation variables, not read by psina.
+	notConfig := map[string]bool{"PSINA_DOMAIN": true}
+
+	name := regexp.MustCompile(`PSINA_[A-Z_]+`)
+	for _, file := range []string{"../../README.md", "../../deploy/compose.yaml", "../../deploy/secrets.env.example"} {
+		data, err := os.ReadFile(file)
+		require.NoError(t, err)
+		for _, env := range name.FindAllString(string(data), -1) {
+			if notConfig[env] {
+				continue
+			}
+			key := strings.ReplaceAll(strings.ToLower(strings.TrimPrefix(env, "PSINA_")), "_", ".")
+			assert.True(t, keys[key], "%s: %s maps to %q, which is not a config key", file, env, key)
+		}
+	}
+}
+
+func collectKoanfKeys(t reflect.Type, prefix string, out map[string]bool) {
+	for i := range t.NumField() {
+		f := t.Field(i)
+		tag := f.Tag.Get("koanf")
+		if tag == "" {
+			continue
+		}
+		if f.Type.Kind() == reflect.Struct {
+			collectKoanfKeys(f.Type, prefix+tag+".", out)
+			continue
+		}
+		out[prefix+tag] = true
+	}
 }

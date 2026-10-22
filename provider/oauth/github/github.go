@@ -21,9 +21,13 @@ import (
 
 const (
 	apiURL = "https://api.github.com"
+	// apiVersion pins the REST response shapes the decoders rely on.
+	apiVersion = "2022-11-28"
 	// maxAPIResponse caps how much of a REST response is read; /user and
 	// /user/emails are a few KB.
 	maxAPIResponse = 1 << 20
+	// emailsPerPage is GitHub's largest page size for /user/emails.
+	emailsPerPage = 100
 )
 
 // Config configures the GitHub provider.
@@ -49,7 +53,7 @@ func New(cfg Config) (*Provider, error) {
 }
 
 // newWithEndpoint allows tests to point the provider at fake OAuth and API servers.
-func newWithEndpoint(cfg Config, endpoint oauth2.Endpoint, apiURL string) (*Provider, error) {
+func newWithEndpoint(cfg Config, endpoint oauth2.Endpoint, baseURL string) (*Provider, error) {
 	if cfg.ClientID == "" {
 		return nil, fmt.Errorf("github: client id is required")
 	}
@@ -59,7 +63,7 @@ func newWithEndpoint(cfg Config, endpoint oauth2.Endpoint, apiURL string) (*Prov
 	if len(cfg.RedirectURIs) == 0 {
 		return nil, fmt.Errorf("github: at least one redirect uri is required")
 	}
-	return &Provider{cfg: cfg, endpoint: endpoint, apiURL: apiURL}, nil
+	return &Provider{cfg: cfg, endpoint: endpoint, apiURL: baseURL}, nil
 }
 
 // ProviderName returns the provider type identifier.
@@ -144,8 +148,11 @@ func (p *Provider) ExchangeCode(ctx context.Context, code string, params oauth.A
 		return nil, fmt.Errorf("%w: /user has no id", oauth.ErrInvalidToken)
 	}
 
+	// The list is paginated and the primary is not guaranteed to come first.
+	// shortcut: first page only, follow the Link header if an account ever
+	// exceeds it (personal-ssoj).
 	var emails []apiEmail
-	if err := p.getJSON(ctx, client, "/user/emails", &emails); err != nil {
+	if err := p.getJSON(ctx, client, "/user/emails?per_page="+strconv.Itoa(emailsPerPage), &emails); err != nil {
 		return nil, err
 	}
 
@@ -164,7 +171,7 @@ func (p *Provider) getJSON(ctx context.Context, client *http.Client, path string
 		return fmt.Errorf("github: build %s request: %w", path, err)
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	req.Header.Set("X-GitHub-Api-Version", apiVersion)
 
 	resp, err := client.Do(req)
 	if err != nil {

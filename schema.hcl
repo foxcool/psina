@@ -11,9 +11,10 @@ table "users" {
     null = false
   }
 
+  // NULL for users without an email (wallet sign-in); the unique index skips NULLs.
   column "email" {
     type = varchar(255)
-    null = false
+    null = true
   }
 
   // Opaque role strings emitted in JWT claims and Verify responses.
@@ -43,6 +44,7 @@ table "users" {
   index "idx_users_email" {
     columns = [column.email]
     unique  = true
+    where   = "email IS NOT NULL"
   }
 }
 

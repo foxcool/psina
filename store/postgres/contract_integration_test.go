@@ -25,3 +25,7 @@ func TestContract_RefreshRotation(t *testing.T) {
 func TestContract_Challenges(t *testing.T) {
 	storetest.Challenges(t, func(t *testing.T) auth.ChallengeStore { return getTestStore(t) })
 }
+
+func TestContract_Users(t *testing.T) {
+	storetest.Users(t, func(t *testing.T) auth.UserStore { return getTestStore(t) })
+}

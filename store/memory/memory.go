@@ -54,7 +54,9 @@ func (s *Store) Create(ctx context.Context, user *entity.User) error {
 	if _, exists := s.users[user.ID]; exists {
 		return fmt.Errorf("%w: %s", store.ErrUserExists, user.ID)
 	}
-	if _, exists := s.usersByEmail[user.Email]; exists {
+	// Email-less users (wallet sign-in) are not indexed by email, matching
+	// the partial unique index in postgres.
+	if _, exists := s.usersByEmail[user.Email]; exists && user.Email != "" {
 		return fmt.Errorf("%w: %s", store.ErrUserExists, user.Email)
 	}
 
@@ -69,7 +71,9 @@ func (s *Store) Create(ctx context.Context, user *entity.User) error {
 
 	// Store user
 	s.users[user.ID] = user
-	s.usersByEmail[user.Email] = user
+	if user.Email != "" {
+		s.usersByEmail[user.Email] = user
+	}
 
 	return nil
 }

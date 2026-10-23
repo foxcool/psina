@@ -157,7 +157,14 @@ func (s *Store) Create(ctx context.Context, user *entity.User) error {
 		VALUES ($1, $2, $3, $4, $5)
 	`, s.tableUsers)
 
-	_, err := s.pool.Exec(ctx, query, user.ID, user.Email, roles, user.CreatedAt, user.UpdatedAt)
+	// An empty email is stored as NULL so the partial unique index lets many
+	// email-less users (wallet sign-in) coexist.
+	var email *string
+	if user.Email != "" {
+		email = &user.Email
+	}
+
+	_, err := s.pool.Exec(ctx, query, user.ID, email, roles, user.CreatedAt, user.UpdatedAt)
 	if err != nil {
 		if isDuplicateKeyError(err) {
 			return fmt.Errorf("%w: %s", store.ErrUserExists, user.Email)
@@ -176,8 +183,7 @@ func (s *Store) GetByID(ctx context.Context, id string) (*entity.User, error) {
 		WHERE id = $1
 	`, s.tableUsers)
 
-	user := &entity.User{}
-	err := s.pool.QueryRow(ctx, query, id).Scan(&user.ID, &user.Email, &user.Roles, &user.CreatedAt, &user.UpdatedAt)
+	user, err := scanUser(s.pool.QueryRow(ctx, query, id))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, fmt.Errorf("%w: %s", store.ErrUserNotFound, id)
@@ -190,14 +196,18 @@ func (s *Store) GetByID(ctx context.Context, id string) (*entity.User, error) {
 
 // GetByEmail retrieves a user by email address.
 func (s *Store) GetByEmail(ctx context.Context, email string) (*entity.User, error) {
+	// Email-less users are stored as NULL; an empty lookup must never match one.
+	if email == "" {
+		return nil, fmt.Errorf("%w: empty email", store.ErrUserNotFound)
+	}
+
 	query := fmt.Sprintf(`
 		SELECT id, email, roles, created_at, updated_at
 		FROM %s
 		WHERE email = $1
 	`, s.tableUsers)
 
-	user := &entity.User{}
-	err := s.pool.QueryRow(ctx, query, email).Scan(&user.ID, &user.Email, &user.Roles, &user.CreatedAt, &user.UpdatedAt)
+	user, err := scanUser(s.pool.QueryRow(ctx, query, email))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, fmt.Errorf("%w: %s", store.ErrUserNotFound, email)
@@ -205,6 +215,20 @@ func (s *Store) GetByEmail(ctx context.Context, email string) (*entity.User, err
 		return nil, fmt.Errorf("query user: %w", err)
 	}
 
+	return user, nil
+}
+
+// scanUser reads id, email, roles, created_at, updated_at; a NULL email
+// becomes "".
+func scanUser(row pgx.Row) (*entity.User, error) {
+	user := &entity.User{}
+	var email *string
+	if err := row.Scan(&user.ID, &email, &user.Roles, &user.CreatedAt, &user.UpdatedAt); err != nil {
+		return nil, err
+	}
+	if email != nil {
+		user.Email = *email
+	}
 	return user, nil
 }
 

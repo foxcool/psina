@@ -216,6 +216,60 @@ table "oauth_identities" {
   }
 }
 
+// Links users to blockchain wallets. A user may hold several wallets; a
+// (chain, address) pair belongs to exactly one user.
+table "wallet_identities" {
+  schema = schema.public
+
+  column "id" {
+    type    = uuid
+    null    = false
+    default = sql("gen_random_uuid()")
+  }
+
+  column "user_id" {
+    type = uuid
+    null = false
+  }
+
+  // Chain identifier from the WalletProvider (e.g. "ethereum").
+  column "chain" {
+    type = varchar(50)
+    null = false
+  }
+
+  // Normalized by the provider (EIP-55 checksum for EVM); compared exactly.
+  column "address" {
+    type = varchar(255)
+    null = false
+  }
+
+  column "created_at" {
+    type    = timestamptz
+    null    = false
+    default = sql("now()")
+  }
+
+  primary_key {
+    columns = [column.id]
+  }
+
+  foreign_key "fk_user" {
+    columns     = [column.user_id]
+    ref_columns = [table.users.column.id]
+    on_delete   = CASCADE
+  }
+
+  index "idx_wallet_identities_chain_address" {
+    columns = [column.chain, column.address]
+    unique  = true
+  }
+
+  index "idx_wallet_identities_user_id" {
+    columns = [column.user_id]
+  }
+}
+
 // Single-use, expiring nonces: wallet sign-in challenges and OAuth CSRF state.
 // No user FK — challenges are issued before the user is known.
 table "auth_challenges" {

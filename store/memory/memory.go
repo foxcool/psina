@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -16,30 +17,38 @@ type oauthKey struct {
 	externalID string
 }
 
+// walletKey identifies a wallet identity by its natural unique key.
+type walletKey struct {
+	chain   string
+	address string
+}
+
 // Store is an in-memory implementation of UserStore, TokenStore,
-// CredentialStore, OAuthIdentityStore, and ChallengeStore.
+// CredentialStore, OAuthIdentityStore, WalletIdentityStore, and ChallengeStore.
 // Suitable for testing and embedded use cases. NOT for production.
 type Store struct {
-	mu              sync.RWMutex
-	users           map[string]*entity.User                // userID -> User
-	usersByEmail    map[string]*entity.User                // email -> User
-	refreshTokens   map[string]*entity.RefreshToken        // hash -> RefreshToken
-	pats            map[string]*entity.PersonalAccessToken // hash -> PAT
-	passwordHashes  map[string]string                      // userID -> passwordHash
-	oauthIdentities map[oauthKey]*entity.OAuthIdentity
-	challenges      map[string]*entity.Challenge // nonce -> Challenge
+	mu               sync.RWMutex
+	users            map[string]*entity.User                // userID -> User
+	usersByEmail     map[string]*entity.User                // email -> User
+	refreshTokens    map[string]*entity.RefreshToken        // hash -> RefreshToken
+	pats             map[string]*entity.PersonalAccessToken // hash -> PAT
+	passwordHashes   map[string]string                      // userID -> passwordHash
+	oauthIdentities  map[oauthKey]*entity.OAuthIdentity
+	walletIdentities map[walletKey]*entity.WalletIdentity
+	challenges       map[string]*entity.Challenge // nonce -> Challenge
 }
 
 // New creates a new in-memory store.
 func New() *Store {
 	return &Store{
-		users:           make(map[string]*entity.User),
-		usersByEmail:    make(map[string]*entity.User),
-		refreshTokens:   make(map[string]*entity.RefreshToken),
-		pats:            make(map[string]*entity.PersonalAccessToken),
-		passwordHashes:  make(map[string]string),
-		oauthIdentities: make(map[oauthKey]*entity.OAuthIdentity),
-		challenges:      make(map[string]*entity.Challenge),
+		users:            make(map[string]*entity.User),
+		usersByEmail:     make(map[string]*entity.User),
+		refreshTokens:    make(map[string]*entity.RefreshToken),
+		pats:             make(map[string]*entity.PersonalAccessToken),
+		passwordHashes:   make(map[string]string),
+		oauthIdentities:  make(map[oauthKey]*entity.OAuthIdentity),
+		walletIdentities: make(map[walletKey]*entity.WalletIdentity),
+		challenges:       make(map[string]*entity.Challenge),
 	}
 }
 
@@ -117,6 +126,13 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	delete(s.usersByEmail, user.Email)
 	delete(s.users, id)
 	delete(s.passwordHashes, id)
+	// Mirrors the postgres ON DELETE CASCADE: an orphaned link would lock the
+	// wallet out, since its (chain, address) stays taken.
+	for key, identity := range s.walletIdentities {
+		if identity.UserID == id {
+			delete(s.walletIdentities, key)
+		}
+	}
 
 	return nil
 }
@@ -352,6 +368,58 @@ func (s *Store) ListOAuthIdentities(ctx context.Context, userID string) ([]*enti
 			out = append(out, &c)
 		}
 	}
+
+	return out, nil
+}
+
+// --- WalletIdentityStore implementation ---
+
+// SaveWalletIdentity persists a new wallet identity.
+func (s *Store) SaveWalletIdentity(ctx context.Context, identity *entity.WalletIdentity) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	key := walletKey{identity.Chain, identity.Address}
+	if _, exists := s.walletIdentities[key]; exists {
+		return fmt.Errorf("%w: %s/%s", store.ErrWalletIdentityExists, identity.Chain, identity.Address)
+	}
+	if identity.CreatedAt.IsZero() {
+		identity.CreatedAt = time.Now()
+	}
+	stored := *identity
+	s.walletIdentities[key] = &stored
+
+	return nil
+}
+
+// GetWalletIdentity retrieves an identity by chain and normalized address.
+func (s *Store) GetWalletIdentity(ctx context.Context, chain, address string) (*entity.WalletIdentity, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	identity, exists := s.walletIdentities[walletKey{chain, address}]
+	if !exists {
+		return nil, fmt.Errorf("%w: %s/%s", store.ErrWalletIdentityNotFound, chain, address)
+	}
+
+	out := *identity
+	return &out, nil
+}
+
+// ListWalletIdentities returns all wallet identities linked to a user (as
+// copies), newest first like the postgres store.
+func (s *Store) ListWalletIdentities(ctx context.Context, userID string) ([]*entity.WalletIdentity, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var out []*entity.WalletIdentity
+	for _, identity := range s.walletIdentities {
+		if identity.UserID == userID {
+			c := *identity
+			out = append(out, &c)
+		}
+	}
+	slices.SortFunc(out, func(a, b *entity.WalletIdentity) int { return b.CreatedAt.Compare(a.CreatedAt) })
 
 	return out, nil
 }

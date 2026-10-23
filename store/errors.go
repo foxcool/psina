@@ -32,6 +32,10 @@ var (
 	// ErrWalletIdentityNotFound indicates no wallet identity matches the lookup.
 	ErrWalletIdentityNotFound = errors.New("wallet identity not found")
 
+	// ErrWalletIdentityExists indicates the (chain, address) pair is already
+	// linked to a user.
+	ErrWalletIdentityExists = errors.New("wallet identity already exists")
+
 	// ErrChallengeNotFound indicates no challenge exists for the given nonce.
 	ErrChallengeNotFound = errors.New("challenge not found")
 

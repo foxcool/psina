@@ -22,3 +22,7 @@ func TestContract_Challenges(t *testing.T) {
 func TestContract_Users(t *testing.T) {
 	storetest.Users(t, func(t *testing.T) auth.UserStore { return memory.New() })
 }
+
+func TestContract_WalletIdentities(t *testing.T) {
+	storetest.WalletIdentities(t, func(t *testing.T) storetest.WalletStore { return memory.New() })
+}

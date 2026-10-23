@@ -31,7 +31,7 @@ const DefaultQueryTimeout = "5000" // 5 seconds in milliseconds
 const DefaultTablePrefix = ""
 
 // Store implements UserStore, TokenStore, CredentialStore, OAuthIdentityStore,
-// and ChallengeStore using PostgreSQL.
+// WalletIdentityStore, and ChallengeStore using PostgreSQL.
 type Store struct {
 	pool        *pgxpool.Pool
 	tablePrefix string
@@ -42,6 +42,7 @@ type Store struct {
 	tableRefreshTokens    string
 	tablePATs             string
 	tableOAuthIdentities  string
+	tableWalletIdentities string
 	tableChallenges       string
 }
 
@@ -115,6 +116,7 @@ func (s *Store) initTableNames() {
 	s.tableRefreshTokens = s.tablePrefix + "refresh_tokens"
 	s.tablePATs = s.tablePrefix + "personal_access_tokens"
 	s.tableOAuthIdentities = s.tablePrefix + "oauth_identities"
+	s.tableWalletIdentities = s.tablePrefix + "wallet_identities"
 	s.tableChallenges = s.tablePrefix + "auth_challenges"
 }
 
@@ -572,6 +574,83 @@ func (s *Store) ListOAuthIdentities(ctx context.Context, userID string) ([]*enti
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate oauth identities: %w", err)
+	}
+
+	return out, nil
+}
+
+// --- WalletIdentityStore implementation ---
+
+// SaveWalletIdentity persists a new wallet identity.
+func (s *Store) SaveWalletIdentity(ctx context.Context, identity *entity.WalletIdentity) error {
+	if identity.CreatedAt.IsZero() {
+		identity.CreatedAt = time.Now()
+	}
+
+	query := fmt.Sprintf(`
+		INSERT INTO %s (id, user_id, chain, address, created_at)
+		VALUES ($1, $2, $3, $4, $5)
+	`, s.tableWalletIdentities)
+
+	_, err := s.pool.Exec(ctx, query,
+		identity.ID, identity.UserID, identity.Chain, identity.Address, identity.CreatedAt)
+	if err != nil {
+		if isDuplicateKeyError(err) {
+			return fmt.Errorf("%w: %s/%s", store.ErrWalletIdentityExists, identity.Chain, identity.Address)
+		}
+		return fmt.Errorf("insert wallet identity: %w", err)
+	}
+
+	return nil
+}
+
+// GetWalletIdentity retrieves an identity by chain and normalized address.
+func (s *Store) GetWalletIdentity(ctx context.Context, chain, address string) (*entity.WalletIdentity, error) {
+	query := fmt.Sprintf(`
+		SELECT id, user_id, chain, address, created_at
+		FROM %s
+		WHERE chain = $1 AND address = $2
+	`, s.tableWalletIdentities)
+
+	identity := &entity.WalletIdentity{}
+	err := s.pool.QueryRow(ctx, query, chain, address).Scan(
+		&identity.ID, &identity.UserID, &identity.Chain, &identity.Address, &identity.CreatedAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("%w: %s/%s", store.ErrWalletIdentityNotFound, chain, address)
+		}
+		return nil, fmt.Errorf("query wallet identity: %w", err)
+	}
+
+	return identity, nil
+}
+
+// ListWalletIdentities returns all wallet identities linked to a user.
+func (s *Store) ListWalletIdentities(ctx context.Context, userID string) ([]*entity.WalletIdentity, error) {
+	query := fmt.Sprintf(`
+		SELECT id, user_id, chain, address, created_at
+		FROM %s
+		WHERE user_id = $1
+		ORDER BY created_at DESC
+	`, s.tableWalletIdentities)
+
+	rows, err := s.pool.Query(ctx, query, userID)
+	if err != nil {
+		return nil, fmt.Errorf("query wallet identities: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*entity.WalletIdentity
+	for rows.Next() {
+		identity := &entity.WalletIdentity{}
+		if err := rows.Scan(
+			&identity.ID, &identity.UserID, &identity.Chain, &identity.Address, &identity.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan wallet identity: %w", err)
+		}
+		out = append(out, identity)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate wallet identities: %w", err)
 	}
 
 	return out, nil

@@ -152,7 +152,7 @@ func (h *Handler) Refresh(
 		}
 		// Only a rejected token ends the client's session; a storage failure
 		// answered as 401 would log the user out on a DB blip.
-		if errors.Is(err, ErrTokenReuse) || errors.Is(err, ErrTokenExpired) || errors.Is(err, ErrInvalidCredentials) {
+		if errors.Is(err, ErrInvalidCredentials) {
 			return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("invalid refresh token"))
 		}
 		return nil, internalError(ctx, "refresh failed", err)

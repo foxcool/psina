@@ -72,6 +72,16 @@ func TestNormalizeEmail(t *testing.T) {
 			wantErr: nil,
 		},
 		{
+			name:    "nul byte",
+			email:   "a\x00@example.com",
+			wantErr: auth.ErrInvalidEmail,
+		},
+		{
+			name:    "control character",
+			email:   "a\nb@example.com",
+			wantErr: auth.ErrInvalidEmail,
+		},
+		{
 			name:    "uppercase",
 			email:   "User@Example.COM",
 			want:    "user@example.com",

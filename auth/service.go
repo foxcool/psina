@@ -63,8 +63,10 @@ func (e *TokenReuseError) Error() string {
 	return "refresh token reuse detected"
 }
 
+// Is matches ErrTokenReuse, and ErrInvalidCredentials like every other
+// rejection, so callers need one sentinel to tell rejections from outages.
 func (e *TokenReuseError) Is(target error) bool {
-	return target == ErrTokenReuse
+	return target == ErrTokenReuse || target == ErrInvalidCredentials
 }
 
 // Service orchestrates authentication operations.
@@ -284,7 +286,9 @@ func (s *Service) Login(ctx context.Context, email, password string) (*LoginResu
 	}, nil
 }
 
-// Refresh exchanges a refresh token for a new token pair.
+// Refresh exchanges a refresh token for a new token pair. Every rejection of
+// the token wraps ErrInvalidCredentials; any other error is an infrastructure
+// failure.
 func (s *Service) Refresh(ctx context.Context, refreshToken string) (*entity.TokenPair, error) {
 	hash := token.HashToken(refreshToken)
 	now := s.now()
@@ -297,7 +301,7 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*entity.Tok
 	case errors.Is(err, store.ErrTokenNotFound):
 		return nil, fmt.Errorf("%w: %w", ErrInvalidCredentials, err)
 	case errors.Is(err, store.ErrTokenExpired):
-		return nil, ErrTokenExpired
+		return nil, fmt.Errorf("%w: %w", ErrInvalidCredentials, ErrTokenExpired)
 	case errors.Is(err, store.ErrTokenRevoked):
 		dup, err := s.isDuplicateRefresh(ctx, rt, now)
 		if err != nil {

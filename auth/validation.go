@@ -3,6 +3,7 @@ package auth
 import (
 	"errors"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -35,12 +36,18 @@ func ValidatePassword(password string) error {
 
 // NormalizeEmail normalizes and validates email address.
 // Applies: trim whitespace, lowercase.
-// Validates: contains @ and ., minimum length.
+// Validates: contains @ and ., minimum length, no control characters.
 func NormalizeEmail(email string) (string, error) {
 	email = strings.TrimSpace(email)
 	email = strings.ToLower(email)
 
 	if len(email) < 5 {
+		return "", ErrInvalidEmail
+	}
+	// No legitimate address carries control characters. NUL in particular
+	// would reach Postgres, which rejects it in text: a storage failure
+	// (500 + ERROR log) instead of a rejected credential.
+	if strings.IndexFunc(email, unicode.IsControl) >= 0 {
 		return "", ErrInvalidEmail
 	}
 	if !strings.Contains(email, "@") {

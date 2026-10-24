@@ -48,6 +48,12 @@ const (
 	// AuthServiceOAuthCallbackProcedure is the fully-qualified name of the AuthService's OAuthCallback
 	// RPC.
 	AuthServiceOAuthCallbackProcedure = "/auth.v1.AuthService/OAuthCallback"
+	// AuthServiceGetChallengeProcedure is the fully-qualified name of the AuthService's GetChallenge
+	// RPC.
+	AuthServiceGetChallengeProcedure = "/auth.v1.AuthService/GetChallenge"
+	// AuthServiceAuthenticateWalletProcedure is the fully-qualified name of the AuthService's
+	// AuthenticateWallet RPC.
+	AuthServiceAuthenticateWalletProcedure = "/auth.v1.AuthService/AuthenticateWallet"
 	// AuthServiceCreatePersonalAccessTokenProcedure is the fully-qualified name of the AuthService's
 	// CreatePersonalAccessToken RPC.
 	AuthServiceCreatePersonalAccessTokenProcedure = "/auth.v1.AuthService/CreatePersonalAccessToken"
@@ -72,6 +78,13 @@ type AuthServiceClient interface {
 	// psina tokens, creating the user on first sign-in.
 	GetOAuthURL(context.Context, *connect.Request[v1.GetOAuthURLRequest]) (*connect.Response[v1.GetOAuthURLResponse], error)
 	OAuthCallback(context.Context, *connect.Request[v1.OAuthCallbackRequest]) (*connect.Response[v1.OAuthCallbackResponse], error)
+	// Wallet sign-in. GetChallenge returns the message the wallet must sign
+	// (SIWE / EIP-4361 for EVM chains), bound to the chain and address and
+	// valid once for a few minutes. AuthenticateWallet checks the signature and
+	// issues psina tokens, creating the user on first sign-in. Wallet users
+	// have no email.
+	GetChallenge(context.Context, *connect.Request[v1.GetChallengeRequest]) (*connect.Response[v1.GetChallengeResponse], error)
+	AuthenticateWallet(context.Context, *connect.Request[v1.AuthenticateWalletRequest]) (*connect.Response[v1.AuthenticateWalletResponse], error)
 	// Personal access tokens. The caller is identified by the Authorization
 	// header; requests never carry a user_id. Only session (JWT) access tokens
 	// are accepted here — a PAT cannot manage PATs.
@@ -133,6 +146,18 @@ func NewAuthServiceClient(httpClient connect.HTTPClient, baseURL string, opts ..
 			connect.WithSchema(authServiceMethods.ByName("OAuthCallback")),
 			connect.WithClientOptions(opts...),
 		),
+		getChallenge: connect.NewClient[v1.GetChallengeRequest, v1.GetChallengeResponse](
+			httpClient,
+			baseURL+AuthServiceGetChallengeProcedure,
+			connect.WithSchema(authServiceMethods.ByName("GetChallenge")),
+			connect.WithClientOptions(opts...),
+		),
+		authenticateWallet: connect.NewClient[v1.AuthenticateWalletRequest, v1.AuthenticateWalletResponse](
+			httpClient,
+			baseURL+AuthServiceAuthenticateWalletProcedure,
+			connect.WithSchema(authServiceMethods.ByName("AuthenticateWallet")),
+			connect.WithClientOptions(opts...),
+		),
 		createPersonalAccessToken: connect.NewClient[v1.CreatePersonalAccessTokenRequest, v1.CreatePersonalAccessTokenResponse](
 			httpClient,
 			baseURL+AuthServiceCreatePersonalAccessTokenProcedure,
@@ -163,6 +188,8 @@ type authServiceClient struct {
 	verify                    *connect.Client[v1.VerifyRequest, v1.VerifyResponse]
 	getOAuthURL               *connect.Client[v1.GetOAuthURLRequest, v1.GetOAuthURLResponse]
 	oAuthCallback             *connect.Client[v1.OAuthCallbackRequest, v1.OAuthCallbackResponse]
+	getChallenge              *connect.Client[v1.GetChallengeRequest, v1.GetChallengeResponse]
+	authenticateWallet        *connect.Client[v1.AuthenticateWalletRequest, v1.AuthenticateWalletResponse]
 	createPersonalAccessToken *connect.Client[v1.CreatePersonalAccessTokenRequest, v1.CreatePersonalAccessTokenResponse]
 	listPersonalAccessTokens  *connect.Client[v1.ListPersonalAccessTokensRequest, v1.ListPersonalAccessTokensResponse]
 	revokePersonalAccessToken *connect.Client[v1.RevokePersonalAccessTokenRequest, v1.RevokePersonalAccessTokenResponse]
@@ -203,6 +230,16 @@ func (c *authServiceClient) OAuthCallback(ctx context.Context, req *connect.Requ
 	return c.oAuthCallback.CallUnary(ctx, req)
 }
 
+// GetChallenge calls auth.v1.AuthService.GetChallenge.
+func (c *authServiceClient) GetChallenge(ctx context.Context, req *connect.Request[v1.GetChallengeRequest]) (*connect.Response[v1.GetChallengeResponse], error) {
+	return c.getChallenge.CallUnary(ctx, req)
+}
+
+// AuthenticateWallet calls auth.v1.AuthService.AuthenticateWallet.
+func (c *authServiceClient) AuthenticateWallet(ctx context.Context, req *connect.Request[v1.AuthenticateWalletRequest]) (*connect.Response[v1.AuthenticateWalletResponse], error) {
+	return c.authenticateWallet.CallUnary(ctx, req)
+}
+
 // CreatePersonalAccessToken calls auth.v1.AuthService.CreatePersonalAccessToken.
 func (c *authServiceClient) CreatePersonalAccessToken(ctx context.Context, req *connect.Request[v1.CreatePersonalAccessTokenRequest]) (*connect.Response[v1.CreatePersonalAccessTokenResponse], error) {
 	return c.createPersonalAccessToken.CallUnary(ctx, req)
@@ -231,6 +268,13 @@ type AuthServiceHandler interface {
 	// psina tokens, creating the user on first sign-in.
 	GetOAuthURL(context.Context, *connect.Request[v1.GetOAuthURLRequest]) (*connect.Response[v1.GetOAuthURLResponse], error)
 	OAuthCallback(context.Context, *connect.Request[v1.OAuthCallbackRequest]) (*connect.Response[v1.OAuthCallbackResponse], error)
+	// Wallet sign-in. GetChallenge returns the message the wallet must sign
+	// (SIWE / EIP-4361 for EVM chains), bound to the chain and address and
+	// valid once for a few minutes. AuthenticateWallet checks the signature and
+	// issues psina tokens, creating the user on first sign-in. Wallet users
+	// have no email.
+	GetChallenge(context.Context, *connect.Request[v1.GetChallengeRequest]) (*connect.Response[v1.GetChallengeResponse], error)
+	AuthenticateWallet(context.Context, *connect.Request[v1.AuthenticateWalletRequest]) (*connect.Response[v1.AuthenticateWalletResponse], error)
 	// Personal access tokens. The caller is identified by the Authorization
 	// header; requests never carry a user_id. Only session (JWT) access tokens
 	// are accepted here — a PAT cannot manage PATs.
@@ -288,6 +332,18 @@ func NewAuthServiceHandler(svc AuthServiceHandler, opts ...connect.HandlerOption
 		connect.WithSchema(authServiceMethods.ByName("OAuthCallback")),
 		connect.WithHandlerOptions(opts...),
 	)
+	authServiceGetChallengeHandler := connect.NewUnaryHandler(
+		AuthServiceGetChallengeProcedure,
+		svc.GetChallenge,
+		connect.WithSchema(authServiceMethods.ByName("GetChallenge")),
+		connect.WithHandlerOptions(opts...),
+	)
+	authServiceAuthenticateWalletHandler := connect.NewUnaryHandler(
+		AuthServiceAuthenticateWalletProcedure,
+		svc.AuthenticateWallet,
+		connect.WithSchema(authServiceMethods.ByName("AuthenticateWallet")),
+		connect.WithHandlerOptions(opts...),
+	)
 	authServiceCreatePersonalAccessTokenHandler := connect.NewUnaryHandler(
 		AuthServiceCreatePersonalAccessTokenProcedure,
 		svc.CreatePersonalAccessToken,
@@ -322,6 +378,10 @@ func NewAuthServiceHandler(svc AuthServiceHandler, opts ...connect.HandlerOption
 			authServiceGetOAuthURLHandler.ServeHTTP(w, r)
 		case AuthServiceOAuthCallbackProcedure:
 			authServiceOAuthCallbackHandler.ServeHTTP(w, r)
+		case AuthServiceGetChallengeProcedure:
+			authServiceGetChallengeHandler.ServeHTTP(w, r)
+		case AuthServiceAuthenticateWalletProcedure:
+			authServiceAuthenticateWalletHandler.ServeHTTP(w, r)
 		case AuthServiceCreatePersonalAccessTokenProcedure:
 			authServiceCreatePersonalAccessTokenHandler.ServeHTTP(w, r)
 		case AuthServiceListPersonalAccessTokensProcedure:
@@ -363,6 +423,14 @@ func (UnimplementedAuthServiceHandler) GetOAuthURL(context.Context, *connect.Req
 
 func (UnimplementedAuthServiceHandler) OAuthCallback(context.Context, *connect.Request[v1.OAuthCallbackRequest]) (*connect.Response[v1.OAuthCallbackResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.AuthService.OAuthCallback is not implemented"))
+}
+
+func (UnimplementedAuthServiceHandler) GetChallenge(context.Context, *connect.Request[v1.GetChallengeRequest]) (*connect.Response[v1.GetChallengeResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.AuthService.GetChallenge is not implemented"))
+}
+
+func (UnimplementedAuthServiceHandler) AuthenticateWallet(context.Context, *connect.Request[v1.AuthenticateWalletRequest]) (*connect.Response[v1.AuthenticateWalletResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("auth.v1.AuthService.AuthenticateWallet is not implemented"))
 }
 
 func (UnimplementedAuthServiceHandler) CreatePersonalAccessToken(context.Context, *connect.Request[v1.CreatePersonalAccessTokenRequest]) (*connect.Response[v1.CreatePersonalAccessTokenResponse], error) {

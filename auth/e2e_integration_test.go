@@ -15,6 +15,9 @@ import (
 	"github.com/foxcool/psina/auth"
 	"github.com/foxcool/psina/entity"
 	"github.com/foxcool/psina/provider/local"
+	"github.com/foxcool/psina/provider/wallet"
+	"github.com/foxcool/psina/provider/wallet/evm"
+	"github.com/foxcool/psina/provider/wallet/evm/evmtest"
 	"github.com/foxcool/psina/store/postgres"
 	"github.com/foxcool/psina/testutil"
 	"github.com/foxcool/psina/token"
@@ -300,4 +303,59 @@ func TestE2E_EmailValidation(t *testing.T) {
 	_, err := service.Register(ctx, "notanemail", "password123")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "email")
+}
+
+// TestE2E_WalletSignIn runs wallet sign-in on postgres: concurrent first
+// sign-ins with one wallet end up as one email-less user, and the session
+// refreshes and verifies like any other.
+func TestE2E_WalletSignIn(t *testing.T) {
+	ctx := context.Background()
+	store := postgres.New(testDB.Pool)
+	service := getTestService(t, auth.WithWallet(
+		wallet.NewDispatcher(evm.New("ethereum", 1)), store, store,
+		auth.WalletConfig{Domain: "app.example.com", URI: "https://app.example.com"},
+	))
+	signer, err := evmtest.NewSigner(evmtest.Key0)
+	require.NoError(t, err)
+
+	const n = 8
+	reqs := make([]auth.WalletAuthRequest, n)
+	for i := range reqs {
+		ch, err := service.GetChallenge(ctx, "ethereum", signer.Address)
+		require.NoError(t, err)
+		reqs[i] = auth.WalletAuthRequest{Chain: "ethereum", Address: signer.Address, Nonce: ch.Nonce, Signature: signer.Sign(ch.Message)}
+	}
+
+	results := make([]*auth.WalletAuthResult, n)
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Go(func() { results[i], errs[i] = service.AuthenticateWallet(ctx, reqs[i]) })
+	}
+	wg.Wait()
+
+	newUsers := 0
+	for i := range n {
+		require.NoError(t, errs[i])
+		assert.Equal(t, results[0].UserID, results[i].UserID, "every sign-in lands on one user")
+		if results[i].IsNewUser {
+			newUsers++
+		}
+	}
+	assert.Equal(t, 1, newUsers)
+
+	var users int
+	require.NoError(t, testDB.Pool.QueryRow(ctx, "SELECT count(*) FROM users WHERE email IS NULL").Scan(&users))
+	assert.Equal(t, 1, users, "losers of the race leave no user behind")
+
+	// Replaying a used challenge fails.
+	_, err = service.AuthenticateWallet(ctx, reqs[0])
+	assert.ErrorIs(t, err, auth.ErrWalletChallengeInvalid)
+
+	pair, err := service.Refresh(ctx, results[0].TokenPair.RefreshToken)
+	require.NoError(t, err)
+	claims, err := service.Verify(ctx, pair.AccessToken)
+	require.NoError(t, err)
+	assert.Equal(t, results[0].UserID, claims.UserID)
+	assert.Empty(t, claims.Email)
 }

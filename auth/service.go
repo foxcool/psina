@@ -10,6 +10,7 @@ import (
 
 	"github.com/foxcool/psina/entity"
 	"github.com/foxcool/psina/provider/oauth"
+	"github.com/foxcool/psina/provider/wallet"
 	"github.com/foxcool/psina/store"
 	"github.com/foxcool/psina/token"
 	"github.com/go-jose/go-jose/v4"
@@ -88,6 +89,12 @@ type Service struct {
 	challenges      ChallengeStore
 	credentials     CredentialStore
 	oauthConfig     OAuthConfig
+
+	// Wallet sign-in is optional; nil walletProviders means it is disabled.
+	walletProviders  *wallet.Dispatcher
+	walletIdentities WalletIdentityStore
+	walletChallenges ChallengeStore
+	walletConfig     WalletConfig
 
 	refreshReuseLeeway time.Duration
 	now                func() time.Time

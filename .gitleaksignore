@@ -1,0 +1,4 @@
+# Public anvil/hardhat dev keys in the wallet test signer, committed before
+# the inline gitleaks:allow markers were added (see evmtest/signer.go).
+2ab644a0a5d43374b582c06b166e32a3b7133916:provider/wallet/evm/evmtest/signer.go:generic-api-key:19
+2ab644a0a5d43374b582c06b166e32a3b7133916:provider/wallet/evm/evmtest/signer.go:generic-api-key:20

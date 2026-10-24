@@ -104,7 +104,7 @@ func (h *Handler) Login(
 		if errors.Is(err, ErrInvalidCredentials) {
 			return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("invalid credentials"))
 		}
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, internalError(ctx, "login failed", err)
 	}
 
 	resp := connect.NewResponse(&authv1.LoginResponse{
@@ -150,7 +150,12 @@ func (h *Handler) Refresh(
 				"user_agent", req.Header().Get("User-Agent"),
 			)
 		}
-		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("invalid refresh token"))
+		// Only a rejected token ends the client's session; a storage failure
+		// answered as 401 would log the user out on a DB blip.
+		if errors.Is(err, ErrTokenReuse) || errors.Is(err, ErrTokenExpired) || errors.Is(err, ErrInvalidCredentials) {
+			return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("invalid refresh token"))
+		}
+		return nil, internalError(ctx, "refresh failed", err)
 	}
 
 	resp := connect.NewResponse(&authv1.RefreshResponse{
@@ -225,7 +230,7 @@ func (h *Handler) Verify(
 
 	claims, err := h.service.Verify(ctx, accessToken)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("invalid token"))
+		return nil, verifyErrorToConnect(ctx, err)
 	}
 
 	// Return response with headers for gateway
@@ -319,6 +324,23 @@ func (h *Handler) OAuthCallback(
 	return resp, nil
 }
 
+// verifyErrorToConnect maps a Service.Verify error: a rejected credential is
+// Unauthenticated, anything else is an outage the gateway must not read as
+// "log the user out".
+func verifyErrorToConnect(ctx context.Context, err error) *connect.Error {
+	if errors.Is(err, ErrInvalidCredentials) {
+		return connect.NewError(connect.CodeUnauthenticated, errors.New("invalid token"))
+	}
+	return internalError(ctx, "verify failed", err)
+}
+
+// internalError logs err and returns CodeInternal without its text: wrapped
+// storage errors carry driver detail a client must not see.
+func internalError(ctx context.Context, msg string, err error) *connect.Error {
+	slog.ErrorContext(ctx, msg, "error", err)
+	return connect.NewError(connect.CodeInternal, errors.New("internal error"))
+}
+
 // errOAuthStateOrCode is the one message for a rejected state and a rejected
 // code, so a client cannot tell which check failed.
 var errOAuthStateOrCode = errors.New("invalid oauth state or code")
@@ -348,8 +370,7 @@ func oauthErrorToConnect(ctx context.Context, err error) *connect.Error {
 	case errors.Is(err, ErrOAuthAccountHasPassword):
 		return connect.NewError(connect.CodeFailedPrecondition, ErrOAuthAccountHasPassword)
 	default:
-		slog.ErrorContext(ctx, "oauth sign-in failed", "error", err)
-		return connect.NewError(connect.CodeInternal, errors.New("internal error"))
+		return internalError(ctx, "oauth sign-in failed", err)
 	}
 }
 
@@ -421,8 +442,7 @@ func walletErrorToConnect(ctx context.Context, err error) *connect.Error {
 	case errors.Is(err, ErrWalletChallengeInvalid):
 		return connect.NewError(connect.CodeUnauthenticated, ErrWalletChallengeInvalid)
 	default:
-		slog.ErrorContext(ctx, "wallet sign-in failed", "error", err)
-		return connect.NewError(connect.CodeInternal, errors.New("internal error"))
+		return internalError(ctx, "wallet sign-in failed", err)
 	}
 }
 
@@ -530,7 +550,7 @@ func (h *Handler) authenticateSession(ctx context.Context, header http.Header) (
 
 	claims, err := h.service.Verify(ctx, accessToken)
 	if err != nil {
-		return "", connect.NewError(connect.CodeUnauthenticated, errors.New("invalid token"))
+		return "", verifyErrorToConnect(ctx, err)
 	}
 
 	return claims.UserID, nil

@@ -2,9 +2,11 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 	authv1 "github.com/foxcool/psina/api/auth/v1"
@@ -515,6 +517,95 @@ func TestHandler_Verify(t *testing.T) {
 		require.ErrorAs(t, err, &connectErr)
 		assert.Equal(t, connect.CodeUnauthenticated, connectErr.Code())
 	})
+}
+
+// errStorage stands in for a driver error whose text must not reach clients.
+var errStorage = errors.New("pgx: connection refused")
+
+// brokenStore fails the lookups behind Refresh and PAT verification.
+type brokenStore struct{ *memory.Store }
+
+func (brokenStore) RotateRefreshToken(context.Context, string, time.Time) (*entity.RefreshToken, error) {
+	return nil, errStorage
+}
+
+func (brokenStore) GetPAT(context.Context, string) (*entity.PersonalAccessToken, error) {
+	return nil, errStorage
+}
+
+// TestHandler_StorageFailureIsInternal checks that a storage outage is not
+// reported as a rejected credential: a 401 would log clients out on a DB blip.
+func TestHandler_StorageFailureIsInternal(t *testing.T) {
+	broken := brokenStore{Store: memory.New()}
+	issuer, err := token.New()
+	require.NoError(t, err)
+	provider := &mockProvider{
+		authenticateFn: func(context.Context, *entity.AuthRequest) (*entity.Identity, error) {
+			return nil, fmt.Errorf("get user: %w", errStorage)
+		},
+	}
+	handler := NewHandler(NewService(broken, broken, issuer, []Provider{provider}, WithPAT(broken, PATConfig{})))
+	ctx := context.Background()
+
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{"login", func() error {
+			_, err := handler.Login(ctx, connect.NewRequest(&authv1.LoginRequest{
+				Email: "down@example.com", Password: "SecurePassword123!",
+			}))
+			return err
+		}},
+		{"refresh", func() error {
+			_, err := handler.Refresh(ctx, connect.NewRequest(&authv1.RefreshRequest{RefreshToken: "some-token"}))
+			return err
+		}},
+		{"verify pat", func() error {
+			req := connect.NewRequest(&authv1.VerifyRequest{})
+			req.Header().Set("Authorization", "Bearer "+token.PATPrefix+"whatever")
+			_, err := handler.Verify(ctx, req)
+			return err
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var connectErr *connect.Error
+			require.ErrorAs(t, tc.call(), &connectErr)
+			assert.Equal(t, connect.CodeInternal, connectErr.Code())
+			assert.NotContains(t, connectErr.Message(), "pgx")
+		})
+	}
+}
+
+// TestHandler_RejectedCredentialIsUnauthenticated pins the 401 side of the
+// split: rejected credentials keep reporting Unauthenticated.
+func TestHandler_RejectedCredentialIsUnauthenticated(t *testing.T) {
+	handler, _, _ := setupTestHandler(t)
+	ctx := context.Background()
+
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{"refresh unknown token", func() error {
+			_, err := handler.Refresh(ctx, connect.NewRequest(&authv1.RefreshRequest{RefreshToken: "unknown-token"}))
+			return err
+		}},
+		{"verify unknown pat", func() error {
+			req := connect.NewRequest(&authv1.VerifyRequest{})
+			req.Header().Set("Authorization", "Bearer "+token.PATPrefix+"unknown")
+			_, err := handler.Verify(ctx, req)
+			return err
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var connectErr *connect.Error
+			require.ErrorAs(t, tc.call(), &connectErr)
+			assert.Equal(t, connect.CodeUnauthenticated, connectErr.Code())
+		})
+	}
 }
 
 // TestGetClientIP tests IP extraction from headers.

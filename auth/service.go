@@ -257,8 +257,12 @@ func (s *Service) Login(ctx context.Context, email, password string) (*LoginResu
 		Password: password,
 	}
 	identity, err := s.localProvider.Authenticate(ctx, req)
-	if err != nil {
+	if errors.Is(err, ErrInvalidCredentials) {
 		return nil, ErrInvalidCredentials
+	}
+	if err != nil {
+		// A storage failure is not a wrong password: keep it out of the 401 path.
+		return nil, fmt.Errorf("authenticate: %w", err)
 	}
 
 	// Load the user to pick up roles for the JWT
@@ -290,6 +294,8 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*entity.Tok
 	rt, err := s.tokenStore.RotateRefreshToken(ctx, hash, now)
 	switch {
 	case err == nil:
+	case errors.Is(err, store.ErrTokenNotFound):
+		return nil, fmt.Errorf("%w: %w", ErrInvalidCredentials, err)
 	case errors.Is(err, store.ErrTokenExpired):
 		return nil, ErrTokenExpired
 	case errors.Is(err, store.ErrTokenRevoked):
@@ -309,6 +315,9 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*entity.Tok
 	}
 
 	user, err := s.userStore.GetByID(ctx, rt.UserID)
+	if errors.Is(err, store.ErrUserNotFound) {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidCredentials, err)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("get user: %w", err)
 	}
@@ -384,11 +393,17 @@ func (s *Service) Logout(ctx context.Context, refreshToken string) error {
 
 // Verify validates a credential and returns claims. It accepts both short-lived
 // access JWTs and opaque personal access tokens (distinguished by prefix).
+// Every rejection of the credential wraps ErrInvalidCredentials; any other
+// error is an infrastructure failure, not a bad token.
 func (s *Service) Verify(ctx context.Context, accessToken string) (*entity.Claims, error) {
 	if strings.HasPrefix(accessToken, token.PATPrefix) {
 		return s.verifyPAT(ctx, accessToken)
 	}
-	return s.issuer.ParseToken(accessToken)
+	claims, err := s.issuer.ParseToken(accessToken)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidCredentials, err)
+	}
+	return claims, nil
 }
 
 // verifyPAT validates an opaque personal access token via DB lookup.
@@ -398,12 +413,15 @@ func (s *Service) verifyPAT(ctx context.Context, accessToken string) (*entity.Cl
 	}
 
 	pat, err := s.patStore.GetPAT(ctx, token.HashToken(accessToken))
+	if errors.Is(err, store.ErrTokenNotFound) {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidCredentials, err)
+	}
 	if err != nil {
-		return nil, ErrInvalidCredentials
+		return nil, fmt.Errorf("get pat: %w", err)
 	}
 
 	if pat.ExpiresAt != nil && time.Now().After(*pat.ExpiresAt) {
-		return nil, ErrTokenExpired
+		return nil, fmt.Errorf("%w: %w", ErrInvalidCredentials, ErrTokenExpired)
 	}
 
 	user, err := s.userStore.GetByID(ctx, pat.UserID)

@@ -214,7 +214,7 @@ func TestService_Login_InvalidCredentials(t *testing.T) {
 
 	provider := &mockProvider{
 		authenticateFn: func(ctx context.Context, req *entity.AuthRequest) (*entity.Identity, error) {
-			return nil, errors.New("invalid credentials")
+			return nil, ErrInvalidCredentials
 		},
 	}
 
@@ -499,8 +499,8 @@ func TestService_Refresh_NotFound(t *testing.T) {
 	ctx := context.Background()
 
 	_, err := service.Refresh(ctx, "nonexistent-token")
-	assert.Error(t, err)
-	assert.True(t, errors.Is(err, store.ErrTokenNotFound))
+	assert.ErrorIs(t, err, store.ErrTokenNotFound)
+	assert.ErrorIs(t, err, ErrInvalidCredentials)
 }
 
 func TestService_Logout(t *testing.T) {

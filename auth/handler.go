@@ -353,6 +353,79 @@ func oauthErrorToConnect(ctx context.Context, err error) *connect.Error {
 	}
 }
 
+// GetChallenge issues the message a wallet must sign to sign in.
+func (h *Handler) GetChallenge(
+	ctx context.Context,
+	req *connect.Request[authv1.GetChallengeRequest],
+) (*connect.Response[authv1.GetChallengeResponse], error) {
+	if req.Msg.Chain == "" || req.Msg.Address == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("chain and address are required"))
+	}
+
+	result, err := h.service.GetChallenge(ctx, req.Msg.Chain, req.Msg.Address)
+	if err != nil {
+		return nil, walletErrorToConnect(ctx, err)
+	}
+
+	return connect.NewResponse(&authv1.GetChallengeResponse{
+		Nonce:     result.Nonce,
+		Message:   result.Message,
+		ExpiresAt: result.ExpiresAt.Unix(),
+	}), nil
+}
+
+// AuthenticateWallet verifies a signed challenge and issues a session like Login.
+func (h *Handler) AuthenticateWallet(
+	ctx context.Context,
+	req *connect.Request[authv1.AuthenticateWalletRequest],
+) (*connect.Response[authv1.AuthenticateWalletResponse], error) {
+	msg := req.Msg
+	if msg.Chain == "" || msg.Address == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("chain and address are required"))
+	}
+
+	result, err := h.service.AuthenticateWallet(ctx, WalletAuthRequest{
+		Chain:     msg.Chain,
+		Address:   msg.Address,
+		Nonce:     msg.Nonce,
+		Signature: msg.Signature,
+	})
+	if err != nil {
+		return nil, walletErrorToConnect(ctx, err)
+	}
+
+	resp := connect.NewResponse(&authv1.AuthenticateWalletResponse{
+		UserId:       result.UserID,
+		Email:        result.Email,
+		AccessToken:  result.TokenPair.AccessToken,
+		RefreshToken: result.TokenPair.RefreshToken,
+		ExpiresIn:    result.TokenPair.ExpiresIn,
+		IsNewUser:    result.IsNewUser,
+	})
+	if h.cookieConfig.Enabled {
+		h.setTokenCookies(resp.Header(), result.TokenPair.AccessToken, result.TokenPair.RefreshToken)
+	}
+	return resp, nil
+}
+
+// walletErrorToConnect maps wallet service errors to connect codes. Unexpected
+// errors are logged and reach the client without storage detail.
+func walletErrorToConnect(ctx context.Context, err error) *connect.Error {
+	switch {
+	case errors.Is(err, ErrWalletDisabled):
+		return connect.NewError(connect.CodeUnimplemented, ErrWalletDisabled)
+	case errors.Is(err, ErrWalletChainUnsupported):
+		return connect.NewError(connect.CodeInvalidArgument, ErrWalletChainUnsupported)
+	case errors.Is(err, ErrWalletAddressInvalid):
+		return connect.NewError(connect.CodeInvalidArgument, ErrWalletAddressInvalid)
+	case errors.Is(err, ErrWalletChallengeInvalid):
+		return connect.NewError(connect.CodeUnauthenticated, ErrWalletChallengeInvalid)
+	default:
+		slog.ErrorContext(ctx, "wallet sign-in failed", "error", err)
+		return connect.NewError(connect.CodeInternal, errors.New("internal error"))
+	}
+}
+
 // CreatePersonalAccessToken mints a PAT for the authenticated caller.
 func (h *Handler) CreatePersonalAccessToken(
 	ctx context.Context,

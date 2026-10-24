@@ -18,6 +18,14 @@ service AuthService {
   rpc GetOAuthURL(GetOAuthURLRequest) returns (GetOAuthURLResponse);
   rpc OAuthCallback(OAuthCallbackRequest) returns (OAuthCallbackResponse);
 
+  // Wallet sign-in. GetChallenge returns the message the wallet must sign
+  // (SIWE / EIP-4361 for EVM chains), bound to the chain and address and
+  // valid once for a few minutes. AuthenticateWallet checks the signature and
+  // issues psina tokens, creating the user on first sign-in. Wallet users
+  // have no email.
+  rpc GetChallenge(GetChallengeRequest) returns (GetChallengeResponse);
+  rpc AuthenticateWallet(AuthenticateWalletRequest) returns (AuthenticateWalletResponse);
+
   // Personal access tokens. The caller is identified by the Authorization
   // header; requests never carry a user_id. Only session (JWT) access tokens
   // are accepted here — a PAT cannot manage PATs.
@@ -112,6 +120,33 @@ message OAuthCallbackRequest {
 message OAuthCallbackResponse {
   string user_id = 1;
   string email = 2;
+  string access_token = 3;
+  string refresh_token = 4;
+  int64 expires_in = 5;     // seconds
+  bool is_new_user = 6;     // true when this sign-in created the account
+}
+
+message GetChallengeRequest {
+  string chain = 1;         // chain identifier, e.g. "ethereum", "polygon"
+  string address = 2;       // wallet address; any case, normalized server-side
+}
+
+message GetChallengeResponse {
+  string nonce = 1;         // pass back to AuthenticateWallet
+  string message = 2;       // exact text to sign (personal_sign for EVM)
+  int64 expires_at = 3;     // unix seconds
+}
+
+message AuthenticateWalletRequest {
+  string chain = 1;         // same values as in GetChallenge
+  string address = 2;
+  string nonce = 3;         // GetChallengeResponse.nonce
+  string signature = 4;     // signature of GetChallengeResponse.message; 0x-hex for EVM
+}
+
+message AuthenticateWalletResponse {
+  string user_id = 1;
+  string email = 2;         // empty for accounts created by wallet sign-in
   string access_token = 3;
   string refresh_token = 4;
   int64 expires_in = 5;     // seconds

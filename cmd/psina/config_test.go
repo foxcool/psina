@@ -5,9 +5,13 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/foxcool/psina/auth"
+	"github.com/foxcool/psina/provider/wallet"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -167,5 +171,90 @@ func collectKoanfKeys(t reflect.Type, prefix string, out map[string]bool) {
 			continue
 		}
 		out[prefix+tag] = true
+	}
+}
+
+func TestLoadConfig_Wallet(t *testing.T) {
+	t.Run("disabled by default", func(t *testing.T) {
+		config, err := loadConfig(nil)
+		require.NoError(t, err)
+		d, err := createWalletDispatcher(config)
+		require.NoError(t, err)
+		assert.Nil(t, d)
+	})
+
+	t.Run("enabled from env with the default chain", func(t *testing.T) {
+		t.Setenv("PSINA_WALLET_DOMAIN", "app.example.com")
+		t.Setenv("PSINA_WALLET_URI", "https://app.example.com")
+
+		config, err := loadConfig(nil)
+		require.NoError(t, err)
+		assert.Equal(t, auth.DefaultWalletChallengeTTL, config.Wallet.ChallengeTTL)
+		d, err := createWalletDispatcher(config)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"ethereum"}, d.Chains())
+	})
+
+	t.Run("chains from env", func(t *testing.T) {
+		t.Setenv("PSINA_WALLET_DOMAIN", "app.example.com")
+		t.Setenv("PSINA_WALLET_URI", "https://app.example.com")
+		t.Setenv("PSINA_WALLET_EVMCHAINS", "ethereum=1, polygon=137,")
+
+		config, err := loadConfig(nil)
+		require.NoError(t, err)
+		d, err := createWalletDispatcher(config)
+		require.NoError(t, err)
+		chains := d.Chains()
+		sort.Strings(chains)
+		assert.Equal(t, []string{"ethereum", "polygon"}, chains)
+
+		p, err := d.Provider("polygon")
+		require.NoError(t, err)
+		assert.Contains(t, p.BuildMessage("0x0", "n0nce123", wallet.MessageOpts{}), "Chain ID: 137")
+	})
+}
+
+func TestValidateWallet(t *testing.T) {
+	valid := func() *Config {
+		c := &Config{}
+		c.Wallet.Domain = "app.example.com"
+		c.Wallet.URI = "https://app.example.com"
+		c.Wallet.EVMChains = []string{"ethereum=1"}
+		return c
+	}
+
+	tests := []struct {
+		name    string
+		mutate  func(c *Config)
+		wantErr string
+	}{
+		{"valid", func(*Config) {}, ""},
+		{"disabled skips the rest", func(c *Config) { c.Wallet.Domain, c.Wallet.URI, c.Wallet.Statement = "", "", "a\nb" }, ""},
+		{"disabled still checks chains", func(c *Config) { c.Wallet.Domain, c.Wallet.URI, c.Wallet.EVMChains = "", "", []string{"ethereum"} }, "not name=chainID"},
+		{"domain without uri", func(c *Config) { c.Wallet.URI = "" }, "domain and uri together"},
+		{"uri without domain", func(c *Config) { c.Wallet.Domain = "" }, "domain and uri together"},
+		{"line break in statement", func(c *Config) { c.Wallet.Statement = "hi\nURI: https://evil.example" }, "single-line"},
+		{"carriage return in uri", func(c *Config) { c.Wallet.URI += "\r" }, "single-line"},
+		{"negative ttl", func(c *Config) { c.Wallet.ChallengeTTL = -time.Second }, "must not be negative"},
+		{"no chains", func(c *Config) { c.Wallet.EVMChains = nil }, "evmchains is empty"},
+		{"chain without id", func(c *Config) { c.Wallet.EVMChains = []string{"ethereum"} }, "not name=chainID"},
+		{"chain id not a number", func(c *Config) { c.Wallet.EVMChains = []string{"ethereum=one"} }, "not name=chainID"},
+		{"chain id zero", func(c *Config) { c.Wallet.EVMChains = []string{"ethereum=0"} }, "not name=chainID"},
+		{"empty name", func(c *Config) { c.Wallet.EVMChains = []string{"=1"} }, "not name=chainID"},
+		{"duplicate chain", func(c *Config) { c.Wallet.EVMChains = []string{"ethereum=1", "ethereum=5"} }, "duplicate chain"},
+		{"duplicate chain id", func(c *Config) { c.Wallet.EVMChains = []string{"ethereum=1", "mainnet=1"} }, "duplicate chain id"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := valid()
+			tt.mutate(c)
+			err := validateWallet(c)
+			if tt.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
 	}
 }

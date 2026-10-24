@@ -23,6 +23,8 @@ import (
 	"github.com/foxcool/psina/provider/oauth"
 	"github.com/foxcool/psina/provider/oauth/github"
 	"github.com/foxcool/psina/provider/oauth/google"
+	"github.com/foxcool/psina/provider/wallet"
+	"github.com/foxcool/psina/provider/wallet/evm"
 	"github.com/foxcool/psina/store/memory"
 	"github.com/foxcool/psina/store/postgres"
 	"github.com/foxcool/psina/token"
@@ -76,6 +78,7 @@ func run() error {
 	var patStore auth.PATStore
 	var oauthIdentityStore auth.OAuthIdentityStore
 	var challengeStore auth.ChallengeStore
+	var walletIdentityStore auth.WalletIdentityStore
 	var cleanup func()
 	var dbPing func(context.Context) error
 
@@ -98,6 +101,7 @@ func run() error {
 		patStore = pgStore
 		oauthIdentityStore = pgStore
 		challengeStore = pgStore
+		walletIdentityStore = pgStore
 	} else {
 		// Development: use in-memory store
 		slog.Warn("using in-memory store (data will not persist)")
@@ -112,6 +116,7 @@ func run() error {
 		patStore = memStore
 		oauthIdentityStore = memStore
 		challengeStore = memStore
+		walletIdentityStore = memStore
 	}
 	defer cleanup()
 
@@ -142,6 +147,16 @@ func run() error {
 		serviceOpts = append(serviceOpts, auth.WithOAuth(oauthProviders, oauthIdentityStore, challengeStore, credStore,
 			auth.OAuthConfig{DisableAutoLinkEmail: !config.OAuth.AutoLinkEmail}))
 		slog.Info("oauth sign-in enabled", "providers", len(oauthProviders), "auto_link_email", config.OAuth.AutoLinkEmail)
+	}
+	walletProviders, err := createWalletDispatcher(config)
+	if err != nil {
+		return fmt.Errorf("create wallet providers: %w", err)
+	}
+	if walletProviders != nil {
+		w := config.Wallet
+		serviceOpts = append(serviceOpts, auth.WithWallet(walletProviders, walletIdentityStore, challengeStore,
+			auth.WalletConfig{Domain: w.Domain, URI: w.URI, Statement: w.Statement, ChallengeTTL: w.ChallengeTTL}))
+		slog.Info("wallet sign-in enabled", "domain", w.Domain, "chains", walletProviders.Chains())
 	}
 	service := auth.NewService(tokenStore, userStore, issuer, []auth.Provider{provider}, serviceOpts...)
 
@@ -468,4 +483,21 @@ func createOAuthProviders(config *Config) ([]oauth.Provider, error) {
 		providers = append(providers, p)
 	}
 	return providers, nil
+}
+
+// createWalletDispatcher builds one EVM provider per configured chain, or
+// returns nil when wallet sign-in is disabled (no domain).
+func createWalletDispatcher(config *Config) (*wallet.Dispatcher, error) {
+	if config.Wallet.Domain == "" {
+		return nil, nil
+	}
+	chains, err := parseEVMChains(config.Wallet.EVMChains)
+	if err != nil {
+		return nil, err
+	}
+	providers := make([]wallet.WalletProvider, 0, len(chains))
+	for _, c := range chains {
+		providers = append(providers, evm.New(c.Name, c.ID))
+	}
+	return wallet.NewDispatcher(providers...), nil
 }

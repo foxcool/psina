@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -53,6 +54,19 @@ type Config struct {
 		Google        OAuthClientConfig `koanf:"google"`
 		GitHub        OAuthClientConfig `koanf:"github"`
 	} `koanf:"oauth"`
+	Wallet struct {
+		Domain       string        `koanf:"domain"`       // SIWE domain; wallet sign-in is enabled when set
+		URI          string        `koanf:"uri"`          // SIWE URI; required with domain
+		Statement    string        `koanf:"statement"`    // Shown to the signer; optional
+		ChallengeTTL time.Duration `koanf:"challengettl"` // Time to sign (default: 5m)
+		EVMChains    []string      `koanf:"evmchains"`    // name=chainID pairs; comma-separated in env (default: ethereum=1)
+	} `koanf:"wallet"`
+}
+
+// evmChain is one parsed wallet.evmchains entry.
+type evmChain struct {
+	Name string
+	ID   int
 }
 
 // OAuthClientConfig holds one OAuth provider's client registration.
@@ -82,6 +96,8 @@ func loadConfig(args []string) (*Config, error) {
 		"pat.maxttl":               "0s",
 		"pat.touchinterval":        auth.DefaultPATTouchInterval.String(),
 		"oauth.autolinkemail":      true,
+		"wallet.challengettl":      auth.DefaultWalletChallengeTTL.String(),
+		"wallet.evmchains":         []string{"ethereum=1"},
 	}
 	if err := k.Load(confmap.Provider(defaults, "."), nil); err != nil {
 		return nil, fmt.Errorf("load defaults: %w", err)
@@ -138,6 +154,7 @@ func loadConfig(args []string) (*Config, error) {
 
 	config.OAuth.Google.RedirectURIs = splitList(config.OAuth.Google.RedirectURIs)
 	config.OAuth.GitHub.RedirectURIs = splitList(config.OAuth.GitHub.RedirectURIs)
+	config.Wallet.EVMChains = splitList(config.Wallet.EVMChains)
 
 	// Validate
 	if err := validateConfig(&config); err != nil {
@@ -180,7 +197,59 @@ func validateConfig(c *Config) error {
 		return err
 	}
 
+	return validateWallet(c)
+}
+
+// validateWallet rejects a half-configured wallet sign-in and values that
+// would corrupt the line-oriented message a wallet signs.
+func validateWallet(c *Config) error {
+	w := c.Wallet
+	// Chains are checked even while wallet sign-in is off: a typo there should
+	// not wait for the day the domain is set.
+	if _, err := parseEVMChains(w.EVMChains); err != nil {
+		return err
+	}
+	if w.Domain == "" && w.URI == "" {
+		return nil
+	}
+	if w.Domain == "" || w.URI == "" {
+		return fmt.Errorf("wallet needs domain and uri together")
+	}
+	if strings.ContainsAny(w.Domain+w.URI+w.Statement, "\r\n") {
+		return fmt.Errorf("wallet.domain, wallet.uri and wallet.statement must be single-line")
+	}
+	if w.ChallengeTTL < 0 {
+		return fmt.Errorf("wallet.challengettl must not be negative: %s", w.ChallengeTTL)
+	}
 	return nil
+}
+
+// parseEVMChains reads name=chainID pairs, e.g. "polygon=137". A chain id
+// may appear once: two names for one chain would give one wallet two users.
+func parseEVMChains(entries []string) ([]evmChain, error) {
+	if len(entries) == 0 {
+		return nil, fmt.Errorf("wallet.evmchains is empty")
+	}
+	chains := make([]evmChain, 0, len(entries))
+	seen := make(map[string]bool, len(entries))
+	seenID := make(map[int]bool, len(entries))
+	for _, entry := range entries {
+		name, rawID, ok := strings.Cut(entry, "=")
+		name = strings.TrimSpace(name)
+		id, err := strconv.Atoi(strings.TrimSpace(rawID))
+		if !ok || name == "" || err != nil || id <= 0 {
+			return nil, fmt.Errorf("wallet.evmchains: %q is not name=chainID", entry)
+		}
+		if seen[name] {
+			return nil, fmt.Errorf("wallet.evmchains: duplicate chain %q", name)
+		}
+		if seenID[id] {
+			return nil, fmt.Errorf("wallet.evmchains: duplicate chain id %d", id)
+		}
+		seen[name], seenID[id] = true, true
+		chains = append(chains, evmChain{Name: name, ID: id})
+	}
+	return chains, nil
 }
 
 // validateOAuthClient rejects a half-configured provider. A provider is

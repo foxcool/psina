@@ -152,6 +152,12 @@ oauth:
     clientID: ""
     clientSecret: ""
     redirectURIs: []
+wallet:
+  domain: ""         # SIWE domain; wallet sign-in is enabled when set
+  uri: ""            # SIWE URI; required with domain
+  statement: ""      # optional; domain, uri and statement must be single-line
+  challengeTTL: 5m
+  evmChains: [ethereum=1] # name=chainID; comma-separated in env
 ```
 
 ## HTTP Endpoints
@@ -167,6 +173,8 @@ POST /auth.v1.AuthService/ListPersonalAccessTokens   - List PATs (session JWT on
 POST /auth.v1.AuthService/RevokePersonalAccessToken  - Revoke PAT by UUID (session JWT only)
 POST /auth.v1.AuthService/GetOAuthURL                - Start OAuth sign-in (state + browser binding)
 POST /auth.v1.AuthService/OAuthCallback              - Finish OAuth sign-in + return tokens
+POST /auth.v1.AuthService/GetChallenge               - Start wallet sign-in (SIWE message to sign)
+POST /auth.v1.AuthService/AuthenticateWallet         - Finish wallet sign-in + return tokens
 GET  /.well-known/jwks.json                          - Public keys for gateway validation
 GET  /verify                                         - HTTP ForwardAuth endpoint
 GET  /healthz, /readyz                               - Liveness / readiness (checks DB)
@@ -205,7 +213,7 @@ DefaultQueryTimeout = 5000  // milliseconds
 
 - **New auth method** → implement `Provider` interface from `auth/ports.go`, place in `provider/<name>/`
 - **New wallet chain** → implement `wallet.WalletProvider` (`provider/wallet/provider.go`), register it with a `wallet.Dispatcher`, place in `provider/wallet/<chain>/`
-- **New storage backend** → implement `UserStore`/`TokenStore`/`CredentialStore`/`PATStore`, place in `store/<name>/`, run the `store/storetest` contracts against it. Optional stores: `OAuthIdentityStore` and `ChallengeStore` (OAuth; both backends implement them), `WalletIdentityStore` (wallet sign-in; both backends implement it).
+- **New storage backend** → implement `UserStore`/`TokenStore`/`CredentialStore`/`PATStore`, place in `store/<name>/`, run the `store/storetest` contracts against it. Optional stores: `OAuthIdentityStore` and `ChallengeStore` (OAuth; both backends implement them), `WalletIdentityStore` (wallet sign-in via `auth.WithWallet`; both backends implement it).
 - **Store errors** → return typed errors from `store/errors.go`; handler maps them to Connect codes via `errors.Is()`
 - **Schema changes** → edit `schema.hcl`, then `make schema-apply` — never write raw SQL migrations
 - **Proto changes** → edit `api/auth/v1/auth.proto`, then `make gen` — never edit the generated files in `api/auth/v1/` directly
@@ -229,7 +237,7 @@ if errors.Is(err, store.ErrUserNotFound) {
 
 Store errors: `ErrUserNotFound`, `ErrUserExists`, `ErrTokenNotFound`, `ErrTokenRevoked`,
 `ErrTokenExpired`, `ErrCredentialNotFound`.
-Service errors: `ErrInvalidCredentials`, `ErrTokenExpired`, `ErrPATDisabled`,
+Service errors: `ErrInvalidCredentials`, `ErrTokenExpired`, `ErrPATDisabled`, `ErrWalletChallengeInvalid`,
 `ErrPATLimitReached`, `ErrPATNameRequired`, `ErrPATNameTooLong`, `ErrPATExpiryInvalid`, etc.
 
 ## Code Style

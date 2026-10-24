@@ -115,6 +115,8 @@ curl http://localhost:8080/.well-known/jwks.json
 | `POST /auth.v1.AuthService/RevokePersonalAccessToken` | Revoke a PAT by id (session JWT required) |
 | `POST /auth.v1.AuthService/GetOAuthURL` | Start OAuth sign-in: provider URL, state, browser binding |
 | `POST /auth.v1.AuthService/OAuthCallback` | Finish OAuth sign-in, returns tokens |
+| `POST /auth.v1.AuthService/GetChallenge` | Start wallet sign-in: SIWE message to sign |
+| `POST /auth.v1.AuthService/AuthenticateWallet` | Finish wallet sign-in with the signature, returns tokens |
 | `GET /.well-known/jwks.json` | Public keys for JWT validation |
 | `GET /verify` | HTTP ForwardAuth endpoint (Traefik) |
 | `GET /healthz` | Liveness probe |
@@ -150,6 +152,11 @@ Environment variables (prefix `PSINA_`):
 | `PSINA_OAUTH_GITHUB_CLIENTSECRET` | _(empty)_ | GitHub OAuth app client secret |
 | `PSINA_OAUTH_GITHUB_REDIRECTURIS` | _(empty)_ | Allowed redirect URIs, comma-separated (exact match) |
 | `PSINA_OAUTH_AUTOLINKEMAIL` | `true` | Link a first OAuth sign-in to an existing passwordless account with the same verified email; accounts with a password are never linked |
+| `PSINA_WALLET_DOMAIN` | _(empty)_ | SIWE domain (e.g. `app.example.com`); set to enable wallet sign-in |
+| `PSINA_WALLET_URI` | _(empty)_ | SIWE URI (e.g. `https://app.example.com`); required with the domain |
+| `PSINA_WALLET_STATEMENT` | _(empty)_ | Text shown to the signer; optional, single line |
+| `PSINA_WALLET_CHALLENGETTL` | `5m` | Time the user has to sign |
+| `PSINA_WALLET_EVMCHAINS` | `ethereum=1` | EVM chains as `name=chainID`, comma-separated; the name is the `chain` request field |
 | `PSINA_LOGGER_LEVEL` | `info` | Log level: debug, info, warn, error |
 | `PSINA_LOGGER_FORMAT` | `json` | Log format: json, text |
 
@@ -186,6 +193,12 @@ oauth:
     clientID: "..."
     clientSecret: "..."
     redirectURIs: ["https://app.example.com/oauth/callback"]
+wallet:
+  domain: "app.example.com"
+  uri: "https://app.example.com"
+  statement: "Sign in to Example."
+  challengeTTL: 5m
+  evmChains: ["ethereum=1", "polygon=137"]
 logger:
   level: info
   format: json

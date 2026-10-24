@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -269,8 +270,14 @@ func run() error {
 
 		// Verify token
 		claims, err := service.Verify(r.Context(), accessToken)
-		if err != nil {
+		if errors.Is(err, auth.ErrInvalidCredentials) {
 			http.Error(w, "invalid token", http.StatusUnauthorized)
+			return
+		}
+		if err != nil {
+			// Not 401: the gateway would read an outage as "log the user out".
+			slog.ErrorContext(r.Context(), "verify failed", "error", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
 

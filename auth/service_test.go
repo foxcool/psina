@@ -214,7 +214,7 @@ func TestService_Login_InvalidCredentials(t *testing.T) {
 
 	provider := &mockProvider{
 		authenticateFn: func(ctx context.Context, req *entity.AuthRequest) (*entity.Identity, error) {
-			return nil, errors.New("invalid credentials")
+			return nil, ErrInvalidCredentials
 		},
 	}
 
@@ -278,6 +278,7 @@ func TestService_Refresh_TokenReuse(t *testing.T) {
 	// The whole family is revoked, including the legitimate successor
 	_, err = service.Refresh(ctx, second.RefreshToken)
 	assert.ErrorIs(t, err, ErrTokenReuse)
+	assert.ErrorIs(t, err, ErrInvalidCredentials)
 }
 
 // registerForRefresh creates the mock provider's user and returns its first refresh token.
@@ -399,6 +400,7 @@ func TestService_Refresh_ReuseLeeway(t *testing.T) {
 		clock.Advance(token.RefreshTokenTTL)
 		_, err := service.Refresh(ctx, r1)
 		assert.ErrorIs(t, err, ErrTokenExpired)
+		assert.ErrorIs(t, err, ErrInvalidCredentials)
 	})
 }
 
@@ -499,8 +501,8 @@ func TestService_Refresh_NotFound(t *testing.T) {
 	ctx := context.Background()
 
 	_, err := service.Refresh(ctx, "nonexistent-token")
-	assert.Error(t, err)
-	assert.True(t, errors.Is(err, store.ErrTokenNotFound))
+	assert.ErrorIs(t, err, store.ErrTokenNotFound)
+	assert.ErrorIs(t, err, ErrInvalidCredentials)
 }
 
 func TestService_Logout(t *testing.T) {

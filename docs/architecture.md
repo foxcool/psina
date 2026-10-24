@@ -30,12 +30,12 @@ Implemented:
 - Personal access tokens for machine clients
 - User roles as opaque strings in the JWT and Verify response
 - OAuth 2.0 / OIDC sign-in with PKCE and browser-bound state (Google, GitHub)
+- Web3 wallet sign-in with SIWE (EIP-4361) on EVM chains
 - JWKS endpoint for gateway validation
 - Traefik ForwardAuth integration
 
 Planned (release order in the [README roadmap](../README.md#roadmap)):
 
-- Web3 wallet signature auth (SIWE, EIP-4361)
 - Rate limiting, metrics, audit logging
 - WebAuthn/Passkeys, TOTP 2FA
 

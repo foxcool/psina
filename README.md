@@ -339,7 +339,7 @@ See [docs/architecture.md](docs/architecture.md) for details.
 | v0.3 | Packages moved to the module root (breaking import paths), typed provider errors | ✅ Released |
 | v0.4 | Atomic refresh rotation with a duplicate-refresh leeway | ✅ Released |
 | v0.5 | OAuth sign-in: Google (PKCE, OIDC nonce, browser-bound state), GitHub | ✅ Released |
-| v0.6 | Web3 wallet auth (SIWE) | 📋 Planned |
+| v0.6 | Web3 wallet auth: SIWE (EIP-4361) for EVM chains | ✅ Released |
 | v0.7 | Rate limiting, Prometheus metrics, audit logging | 📋 Planned |
 | v0.8 | Passkeys (WebAuthn), TOTP 2FA | 📋 Planned |
 | v1.0 | Stable API | 📋 Planned |

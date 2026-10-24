@@ -15,13 +15,16 @@ var ErrUnsupportedChain = errors.New("unsupported wallet chain")
 
 // MessageOpts parameterizes the message a wallet is asked to sign. Fields map
 // onto the SIWE (EIP-4361) message for EVM chains; other chains use the subset
-// that applies.
+// that applies. Chain-specific values (e.g. the EVM chain id) belong to the
+// provider, which serves one chain. Domain, URI and Statement come from
+// operator config and must not contain line breaks: they are written into a
+// line-oriented message the wallet shows to the signer.
 type MessageOpts struct {
 	Domain    string    // requesting domain, e.g. "app.example.com"
-	Statement string    // human-readable statement shown to the signer
-	ChainID   int       // chain id (EVM); 0 when not applicable
+	URI       string    // resource the sign-in is for, e.g. "https://app.example.com/login"
+	Statement string    // human-readable statement shown to the signer; optional
 	IssuedAt  time.Time // message issuance time
-	ExpiresAt time.Time // message expiry
+	ExpiresAt time.Time // message expiry; optional
 }
 
 // WalletProvider verifies wallet signatures for one chain family.

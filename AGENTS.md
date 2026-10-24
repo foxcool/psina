@@ -24,7 +24,7 @@ entity/              # domain types (User, Identity, TokenPair, PersonalAccessTo
 token/               # JWT issuer + PAT generation — pure crypto, no storage
 provider/local/      # username/password provider (Argon2id)
 provider/oauth/      # oauth.Provider iface + UserInfo; google/ — OIDC, github/ — REST API
-provider/wallet/     # chain-agnostic WalletProvider iface + Dispatcher (per-chain impls pending)
+provider/wallet/     # chain-agnostic WalletProvider iface + Dispatcher; evm/ — SIWE (EIP-4361), one per chain
 store/
   errors.go          # typed store errors: ErrUserNotFound, ErrTokenNotFound, etc.
   postgres/          # production store

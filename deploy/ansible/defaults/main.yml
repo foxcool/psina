@@ -9,6 +9,7 @@ psina_backup_dir: "/opt/backups"
 
 # Server
 psina_http_port: 8080
+psina_trusted_proxies: ""  # subnet of the proxy network, e.g. "172.18.0.0/16"; empty = client IP is Traefik's
 
 # Domain (used for Traefik routing)
 psina_platform_domain: "auth.example.com"

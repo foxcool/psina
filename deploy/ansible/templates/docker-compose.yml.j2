@@ -12,6 +12,9 @@ services:
     environment:
       PSINA_DB_URL: "postgres://{{ psina_db_user }}:{{ psina_db_password }}@postgres:5432/{{ psina_db_name }}?sslmode=disable"
       PSINA_SERVER_PORT: "{{ psina_http_port }}"
+{% if psina_trusted_proxies %}
+      PSINA_SERVER_TRUSTEDPROXIES: "{{ psina_trusted_proxies }}"
+{% endif %}
       PSINA_LOGGER_LEVEL: "{{ psina_log_level | lower }}"
       PSINA_COOKIE_ENABLED: "{{ psina_cookie_enabled | lower }}"
       PSINA_COOKIE_DOMAIN: "{{ psina_cookie_domain }}"

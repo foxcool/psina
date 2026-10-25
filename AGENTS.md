@@ -129,6 +129,7 @@ logger:
   format: json       # json, text
 server:
   port: 8080
+  trustedProxies: [] # CIDRs/IPs whose X-Forwarded-For is believed; empty = peer address
 db:
   url: ""            # empty = in-memory store
   tablePrefix: ""    # for shared databases

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -34,8 +35,9 @@ type CookieConfig struct {
 
 // Handler implements Connect RPC AuthServiceHandler.
 type Handler struct {
-	service      *Service
-	cookieConfig *CookieConfig
+	service        *Service
+	cookieConfig   *CookieConfig
+	trustedProxies []netip.Prefix
 }
 
 // HandlerOption configures the Handler.
@@ -146,7 +148,7 @@ func (h *Handler) Refresh(
 		if errors.As(err, &reuseErr) {
 			slog.Warn("token reuse detected",
 				"user_id", reuseErr.UserID,
-				"ip", getClientIP(req.Header()),
+				"ip", h.clientIP(req.Peer().Addr, req.Header()),
 				"user_agent", req.Header().Get("User-Agent"),
 			)
 		}
@@ -789,20 +791,4 @@ func (h *Handler) getCookieFromHeader(header http.Header, name string) string {
 		}
 	}
 	return ""
-}
-
-// getClientIP extracts client IP from headers.
-func getClientIP(headers interface{ Get(string) string }) string {
-	// Check forwarded headers (reverse proxy)
-	if ip := headers.Get("X-Forwarded-For"); ip != "" {
-		// X-Forwarded-For can contain multiple IPs, take the first
-		if idx := strings.Index(ip, ","); idx != -1 {
-			return strings.TrimSpace(ip[:idx])
-		}
-		return ip
-	}
-	if ip := headers.Get("X-Real-IP"); ip != "" {
-		return ip
-	}
-	return "unknown"
 }

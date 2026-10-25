@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net/netip"
 	"strconv"
 	"strings"
 	"time"
@@ -22,7 +23,8 @@ type Config struct {
 		Format string `koanf:"format"` // "json" or "text"
 	} `koanf:"logger"`
 	Server struct {
-		Port int `koanf:"port"`
+		Port           int      `koanf:"port"`
+		TrustedProxies []string `koanf:"trustedproxies"` // CIDRs or IPs whose X-Forwarded-For is believed; comma-separated in env (default: none)
 	} `koanf:"server"`
 	DB struct {
 		URL         string `koanf:"url"`
@@ -155,6 +157,7 @@ func loadConfig(args []string) (*Config, error) {
 	config.OAuth.Google.RedirectURIs = splitList(config.OAuth.Google.RedirectURIs)
 	config.OAuth.GitHub.RedirectURIs = splitList(config.OAuth.GitHub.RedirectURIs)
 	config.Wallet.EVMChains = splitList(config.Wallet.EVMChains)
+	config.Server.TrustedProxies = splitList(config.Server.TrustedProxies)
 
 	// Validate
 	if err := validateConfig(&config); err != nil {
@@ -171,6 +174,10 @@ func validateConfig(c *Config) error {
 		// OK
 	default:
 		return fmt.Errorf("unsupported JWT algorithm: %s (supported: RS256, ES256)", c.JWT.Algorithm)
+	}
+
+	if _, err := parseTrustedProxies(c.Server.TrustedProxies); err != nil {
+		return err
 	}
 
 	if c.Token.RefreshReuseLeeway < 0 {
@@ -262,6 +269,24 @@ func validateOAuthClient(name string, o OAuthClientConfig) error {
 		}
 	}
 	return nil
+}
+
+// parseTrustedProxies reads CIDRs; a bare IP is a single-host prefix.
+func parseTrustedProxies(entries []string) ([]netip.Prefix, error) {
+	prefixes := make([]netip.Prefix, 0, len(entries))
+	for _, e := range entries {
+		if p, err := netip.ParsePrefix(e); err == nil {
+			prefixes = append(prefixes, p.Masked())
+			continue
+		}
+		a, err := netip.ParseAddr(e)
+		if err != nil {
+			return nil, fmt.Errorf("server.trustedproxies: %q is not a CIDR or IP", e)
+		}
+		a = a.Unmap()
+		prefixes = append(prefixes, netip.PrefixFrom(a, a.BitLen()))
+	}
+	return prefixes, nil
 }
 
 // splitList normalizes a list setting: an env variable arrives as one

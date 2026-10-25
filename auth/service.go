@@ -528,7 +528,16 @@ func (s *Service) RevokePAT(ctx context.Context, userID, id string) error {
 	if s.patStore == nil {
 		return ErrPATDisabled
 	}
-	return s.patStore.DeletePAT(ctx, userID, id)
+	// IDs are UUIDs; anything else cannot exist, and passing it on would make
+	// Postgres fail the uuid cast (a 500) instead of answering not found.
+	// uuid.Parse also accepts spellings the stores do not: pgx refuses urn and
+	// braced forms, and the memory store compares ids as strings. Both get the
+	// canonical form.
+	parsed, err := uuid.Parse(id)
+	if err != nil {
+		return fmt.Errorf("%w: %s", store.ErrTokenNotFound, id)
+	}
+	return s.patStore.DeletePAT(ctx, userID, parsed.String())
 }
 
 // JWKS returns the JSON Web Key Set for public key verification.

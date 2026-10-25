@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/foxcool/psina/entity"
+	psinastore "github.com/foxcool/psina/store"
 	"github.com/foxcool/psina/store/memory"
 	"github.com/foxcool/psina/token"
 	"github.com/stretchr/testify/assert"
@@ -223,6 +224,39 @@ func TestService_ListAndRevokePAT(t *testing.T) {
 	pats, err = service.ListPATs(ctx, user.ID)
 	require.NoError(t, err)
 	assert.Len(t, pats, 1)
+}
+
+// A non-UUID id must be answered as not found before it reaches the store,
+// where Postgres would fail the uuid cast. The store's DeletePAT fails, so
+// not-found proves the store was never called.
+func TestService_RevokePAT_NonUUID(t *testing.T) {
+	memStore := memory.New()
+	issuer, err := token.New()
+	require.NoError(t, err)
+	broken := brokenStore{Store: memStore}
+	service := NewService(memStore, memStore, issuer, []Provider{&mockProvider{}}, WithPAT(broken, PATConfig{}))
+
+	err = service.RevokePAT(context.Background(), "u1", "not-a-uuid")
+	assert.ErrorIs(t, err, psinastore.ErrTokenNotFound)
+}
+
+// Non-canonical UUID spellings reach the store in canonical form: pgx refuses
+// urn and braced ids, and the memory store matches ids as strings.
+func TestService_RevokePAT_CanonicalID(t *testing.T) {
+	ctx := context.Background()
+	for _, spell := range []func(string) string{
+		func(id string) string { return "urn:uuid:" + id },
+		func(id string) string { return "{" + id + "}" },
+		func(id string) string { return strings.ReplaceAll(strings.ToUpper(id), "-", "") },
+	} {
+		service, store := setupTestService(t)
+		user := seedUser(t, store)
+		res, err := service.CreatePAT(ctx, user.ID, "ci", nil, nil)
+		require.NoError(t, err)
+
+		id := spell(res.Token.ID)
+		require.NoError(t, service.RevokePAT(ctx, user.ID, id), id)
+	}
 }
 
 func TestService_RevokePAT_WrongOwner(t *testing.T) {

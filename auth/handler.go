@@ -75,7 +75,7 @@ func (h *Handler) Register(
 		if errors.Is(err, ErrInvalidEmail) || errors.Is(err, ErrPasswordTooShort) || errors.Is(err, ErrPasswordTooLong) {
 			return nil, connect.NewError(connect.CodeInvalidArgument, err)
 		}
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, internalError(ctx, "register failed", err)
 	}
 
 	resp := connect.NewResponse(&authv1.RegisterResponse{
@@ -188,7 +188,11 @@ func (h *Handler) Logout(
 	}
 
 	if refreshToken != "" {
-		_ = h.service.Logout(ctx, refreshToken)
+		// Answering success here would leave the session alive while the user
+		// believes it ended; cookies stay so the client can retry.
+		if err := h.service.Logout(ctx, refreshToken); err != nil {
+			return nil, internalError(ctx, "logout failed", err)
+		}
 	}
 
 	resp := connect.NewResponse(&authv1.LogoutResponse{Success: true})
@@ -464,7 +468,7 @@ func (h *Handler) CreatePersonalAccessToken(
 
 	result, err := h.service.CreatePAT(ctx, userID, req.Msg.Name, req.Msg.Scopes, expiresAt)
 	if err != nil {
-		return nil, patErrorToConnect(err)
+		return nil, patErrorToConnect(ctx, "create pat", err)
 	}
 
 	return connect.NewResponse(&authv1.CreatePersonalAccessTokenResponse{
@@ -485,7 +489,7 @@ func (h *Handler) ListPersonalAccessTokens(
 
 	pats, err := h.service.ListPATs(ctx, userID)
 	if err != nil {
-		return nil, patErrorToConnect(err)
+		return nil, patErrorToConnect(ctx, "list pats", err)
 	}
 
 	resp := &authv1.ListPersonalAccessTokensResponse{
@@ -512,7 +516,7 @@ func (h *Handler) RevokePersonalAccessToken(
 		if errors.Is(err, store.ErrTokenNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, errors.New("token not found"))
 		}
-		return nil, patErrorToConnect(err)
+		return nil, patErrorToConnect(ctx, "revoke pat", err)
 	}
 
 	return connect.NewResponse(&authv1.RevokePersonalAccessTokenResponse{Success: true}), nil
@@ -556,8 +560,9 @@ func (h *Handler) authenticateSession(ctx context.Context, header http.Header) (
 	return claims.UserID, nil
 }
 
-// patErrorToConnect maps PAT service errors to connect codes.
-func patErrorToConnect(err error) *connect.Error {
+// patErrorToConnect maps PAT service errors to connect codes. Unexpected
+// errors are logged under op and reach the client without storage detail.
+func patErrorToConnect(ctx context.Context, op string, err error) *connect.Error {
 	switch {
 	case errors.Is(err, ErrPATDisabled):
 		return connect.NewError(connect.CodeUnimplemented, err)
@@ -566,7 +571,7 @@ func patErrorToConnect(err error) *connect.Error {
 	case errors.Is(err, ErrPATLimitReached):
 		return connect.NewError(connect.CodeResourceExhausted, err)
 	default:
-		return connect.NewError(connect.CodeInternal, err)
+		return internalError(ctx, op+" failed", err)
 	}
 }
 

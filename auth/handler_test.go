@@ -522,8 +522,22 @@ func TestHandler_Verify(t *testing.T) {
 // errStorage stands in for a driver error whose text must not reach clients.
 var errStorage = errors.New("pgx: connection refused")
 
-// brokenStore fails the lookups behind Refresh and PAT verification.
+// brokenStore fails storage calls with errStorage: RotateRefreshToken
+// (Refresh), GetRefreshToken (Logout), GetPAT (PAT verify), ListPATs (list and
+// create PAT) and DeletePAT (revoke PAT). Everything else is the memory store.
 type brokenStore struct{ *memory.Store }
+
+func (brokenStore) GetRefreshToken(context.Context, string) (*entity.RefreshToken, error) {
+	return nil, errStorage
+}
+
+func (brokenStore) ListPATs(context.Context, string) ([]*entity.PersonalAccessToken, error) {
+	return nil, errStorage
+}
+
+func (brokenStore) DeletePAT(context.Context, string, string) error {
+	return errStorage
+}
 
 func (brokenStore) RotateRefreshToken(context.Context, string, time.Time) (*entity.RefreshToken, error) {
 	return nil, errStorage
@@ -543,9 +557,17 @@ func TestHandler_StorageFailureIsInternal(t *testing.T) {
 		authenticateFn: func(context.Context, *entity.AuthRequest) (*entity.Identity, error) {
 			return nil, fmt.Errorf("get user: %w", errStorage)
 		},
+		registerFn: func(context.Context, *entity.RegisterRequest) (*entity.Identity, error) {
+			return nil, fmt.Errorf("create user: %w", errStorage)
+		},
 	}
 	handler := NewHandler(NewService(broken, broken, issuer, []Provider{provider}, WithPAT(broken, PATConfig{})))
 	ctx := context.Background()
+
+	// A session JWT needs no store, so the PAT RPCs get past authentication.
+	session, _, err := issuer.GenerateTokens("user-123", "down@example.com", nil)
+	require.NoError(t, err)
+	withSession := func(header http.Header) { header.Set("Authorization", "Bearer "+session.AccessToken) }
 
 	tests := []struct {
 		name string
@@ -565,6 +587,34 @@ func TestHandler_StorageFailureIsInternal(t *testing.T) {
 			req := connect.NewRequest(&authv1.VerifyRequest{})
 			req.Header().Set("Authorization", "Bearer "+token.PATPrefix+"whatever")
 			_, err := handler.Verify(ctx, req)
+			return err
+		}},
+		{"register", func() error {
+			_, err := handler.Register(ctx, connect.NewRequest(&authv1.RegisterRequest{
+				Email: "down@example.com", Password: "SecurePassword123!",
+			}))
+			return err
+		}},
+		{"logout", func() error {
+			_, err := handler.Logout(ctx, connect.NewRequest(&authv1.LogoutRequest{RefreshToken: "some-token"}))
+			return err
+		}},
+		{"create pat", func() error {
+			req := connect.NewRequest(&authv1.CreatePersonalAccessTokenRequest{Name: "ci"})
+			withSession(req.Header())
+			_, err := handler.CreatePersonalAccessToken(ctx, req)
+			return err
+		}},
+		{"list pats", func() error {
+			req := connect.NewRequest(&authv1.ListPersonalAccessTokensRequest{})
+			withSession(req.Header())
+			_, err := handler.ListPersonalAccessTokens(ctx, req)
+			return err
+		}},
+		{"revoke pat", func() error {
+			req := connect.NewRequest(&authv1.RevokePersonalAccessTokenRequest{Id: "0192d3a4-0000-7000-8000-000000000000"})
+			withSession(req.Header())
+			_, err := handler.RevokePersonalAccessToken(ctx, req)
 			return err
 		}},
 	}

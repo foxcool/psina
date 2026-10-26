@@ -79,7 +79,8 @@ Planned (release order in the [README roadmap](../README.md#roadmap)):
 - OAuth 2.0 (RFC 6749), PKCE (RFC 7636), OAuth 2.0 Security BCP (RFC 9700)
 - OpenID Connect Core 1.0
 - JWT (RFC 7519), JWK (RFC 7517)
-- Planned: Sign-In with Ethereum (EIP-4361), WebAuthn Level 2 (W3C)
+- Sign-In with Ethereum (EIP-4361)
+- Planned: WebAuthn Level 2 (W3C)
 - OWASP Authentication Cheat Sheet
 
 ---
@@ -246,5 +247,23 @@ scripts), as an alternative to short-lived JWTs:
 PAT support is optional: the feature is off unless `auth.WithPAT(store, cfg)`
 is passed to `auth.NewService` (the standalone server wires this from the
 `pat.*` config keys, enabled by default).
+
+### 4.5 Client IP Behind a Gateway
+
+Behind a gateway the connection peer is the gateway, not the client. The
+client address goes into the refresh-reuse log today and will key audit
+events and rate limiting:
+
+- **Default: the peer is the client.** `X-Forwarded-For` and `X-Real-IP` are
+  ignored: any client can write them.
+- **Trusted proxies**: when the peer is inside `server.trustedProxies`
+  (`auth.WithTrustedProxies`), `X-Forwarded-For` is walked right to left. Each
+  trusted proxy appends the address it received from, so the first untrusted
+  hop is the client; entries left of it are the client's own claims. Without
+  `X-Forwarded-For`, a trusted peer's `X-Real-IP` is used.
+- **What to trust**: addresses only the gateway can hold. In Docker that is
+  the subnet of a network only the gateway and psina join
+  (`deploy/examples/docker-compose-traefik.yaml`); a shared network's subnet
+  lets every container on it forge the client IP.
 
 ---

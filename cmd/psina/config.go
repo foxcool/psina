@@ -272,19 +272,25 @@ func validateOAuthClient(name string, o OAuthClientConfig) error {
 }
 
 // parseTrustedProxies reads CIDRs; a bare IP is a single-host prefix.
+// IPv4-mapped entries are unmapped: the addresses matched against them are, and
+// a 128-bit prefix never contains a 32-bit address.
 func parseTrustedProxies(entries []string) ([]netip.Prefix, error) {
 	prefixes := make([]netip.Prefix, 0, len(entries))
 	for _, e := range entries {
-		if p, err := netip.ParsePrefix(e); err == nil {
-			prefixes = append(prefixes, p.Masked())
-			continue
-		}
-		a, err := netip.ParseAddr(e)
+		p, err := netip.ParsePrefix(e)
 		if err != nil {
-			return nil, fmt.Errorf("server.trustedproxies: %q is not a CIDR or IP", e)
+			a, addrErr := netip.ParseAddr(e)
+			if addrErr != nil {
+				return nil, fmt.Errorf("server.trustedproxies: %q is not a CIDR or IP", e)
+			}
+			p = netip.PrefixFrom(a, a.BitLen())
 		}
-		a = a.Unmap()
-		prefixes = append(prefixes, netip.PrefixFrom(a, a.BitLen()))
+		p = p.Masked()
+		// Masking keeps the ::ffff: marker only when Bits() >= 96.
+		if a := p.Addr(); a.Is4In6() {
+			p = netip.PrefixFrom(a.Unmap(), p.Bits()-96)
+		}
+		prefixes = append(prefixes, p)
 	}
 	return prefixes, nil
 }

@@ -130,7 +130,7 @@ Environment variables (prefix `PSINA_`):
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PSINA_SERVER_PORT` | `8080` | Server port |
-| `PSINA_SERVER_TRUSTEDPROXIES` | _(empty)_ | Proxies (CIDRs or IPs, comma-separated) whose `X-Forwarded-For` is believed; empty = the client IP is the connection peer. Set to the reverse proxy's network, e.g. the Traefik Docker network subnet |
+| `PSINA_SERVER_TRUSTEDPROXIES` | _(empty)_ | Proxies (CIDRs or IPs, comma-separated) whose `X-Forwarded-For` is believed; empty = the client IP is the connection peer. Set to the subnet of a network only the reverse proxy and psina join; a shared subnet lets every host on it forge the client IP |
 | `PSINA_DB_URL` | _(empty)_ | PostgreSQL DSN (empty = in-memory) |
 | `PSINA_DB_TABLEPREFIX` | _(empty)_ | Table name prefix for shared DB |
 | `PSINA_JWT_PRIVATEKEYPATH` | _(empty)_ | Private key file path |
@@ -166,7 +166,7 @@ Or use config file (`-c config.yaml`):
 ```yaml
 server:
   port: 8080
-  trustedProxies: [172.18.0.0/16]  # reverse proxy network; empty = ignore X-Forwarded-For
+  trustedProxies: [172.30.250.0/29]  # network only the reverse proxy and psina join; empty = ignore X-Forwarded-For
 db:
   url: "postgres://user:pass@localhost:5432/psina?sslmode=disable"
   tablePrefix: "auth_"  # optional, for shared databases

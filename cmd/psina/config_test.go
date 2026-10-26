@@ -288,3 +288,27 @@ func TestLoadConfig_TrustedProxies(t *testing.T) {
 		require.ErrorContains(t, err, "server.trustedproxies")
 	})
 }
+
+func TestParseTrustedProxies(t *testing.T) {
+	tests := []struct {
+		entry string
+		want  string
+		peer  string // unmapped, as auth matches peers; must be trusted
+	}{
+		{entry: "10.0.0.7/8", want: "10.0.0.0/8", peer: "10.9.9.9"},
+		{entry: "fd00::1", want: "fd00::1/128", peer: "fd00::1"},
+		{entry: "::ffff:10.0.0.7", want: "10.0.0.7/32", peer: "10.0.0.7"},
+		{entry: "::ffff:10.1.0.0/112", want: "10.1.0.0/16", peer: "10.1.5.5"},
+		{entry: "::ffff:0:0/96", want: "0.0.0.0/0", peer: "198.51.100.9"},
+		{entry: "::ffff:0:0/80", want: "::/80", peer: "::1"}, // mask drops the marker
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.entry, func(t *testing.T) {
+			prefixes, err := parseTrustedProxies([]string{tt.entry})
+			require.NoError(t, err)
+			assert.Equal(t, []netip.Prefix{netip.MustParsePrefix(tt.want)}, prefixes)
+			assert.True(t, prefixes[0].Contains(netip.MustParseAddr(tt.peer)))
+		})
+	}
+}

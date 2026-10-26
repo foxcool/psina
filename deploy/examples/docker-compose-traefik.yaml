@@ -36,6 +36,9 @@ services:
       - "8081:8080"  # Traefik dashboard
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - default
+      - edge
 
   # psina authentication service
   psina:
@@ -48,10 +51,12 @@ services:
       PSINA_DB_URL: "postgres://psina:password@postgres:5432/psina?sslmode=disable"
       PSINA_SERVER_PORT: "8080"
       PSINA_LOGGER_LEVEL: "info"
-      # Believe X-Forwarded-For only from Traefik. Docker allocates compose
-      # networks from 172.16.0.0/12 by default; narrow this to the network's
-      # subnet (docker network inspect) in production.
-      PSINA_SERVER_TRUSTEDPROXIES: "172.16.0.0/12"
+      # The edge subnet, not default's: any container on default could write
+      # X-Forwarded-For itself.
+      PSINA_SERVER_TRUSTEDPROXIES: "172.30.250.0/29"
+    networks:
+      - default
+      - edge
     depends_on:
       postgres:
         condition: service_healthy
@@ -61,6 +66,7 @@ services:
       # Expose auth endpoints without authentication. Connect RPC methods live
       # under /auth.v1., public keys under /.well-known/jwks.json.
       - "traefik.enable=true"
+      - "traefik.docker.network=psina-edge"  # reach psina from a trusted address
       - "traefik.http.routers.psina.rule=PathPrefix(`/auth.v1.`) || PathPrefix(`/.well-known`)"
       - "traefik.http.routers.psina.entrypoints=web"
       - "traefik.http.services.psina.loadbalancer.server.port=8080"
@@ -115,3 +121,12 @@ services:
       - "traefik.http.middlewares.psina-auth.forwardauth.address=http://psina:8080/verify"
       - "traefik.http.middlewares.psina-auth.forwardauth.authRequestHeaders=Authorization"
       - "traefik.http.middlewares.psina-auth.forwardauth.authResponseHeaders=X-User-Id,X-User-Email,X-User-Roles"
+
+networks:
+  # Traefik and psina only: joining it is what makes a peer trusted. The host
+  # holds the gateway address, so host processes are trusted too.
+  edge:
+    name: psina-edge
+    ipam:
+      config:
+        - subnet: 172.30.250.0/29

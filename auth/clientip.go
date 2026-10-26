@@ -6,8 +6,7 @@ import (
 	"strings"
 )
 
-// unknownClientIP is reported when neither the peer nor a trusted header
-// yields a parseable address.
+// unknownClientIP is reported when the peer address does not parse.
 const unknownClientIP = "unknown"
 
 // WithTrustedProxies sets the proxies whose X-Forwarded-For and X-Real-IP

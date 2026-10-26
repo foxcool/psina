@@ -169,7 +169,14 @@ func run() error {
 		Secure:   config.Cookie.Secure,
 		SameSite: parseSameSite(config.Cookie.SameSite),
 	}
-	handler := auth.NewHandler(service, auth.WithCookieConfig(cookieConfig))
+	trustedProxies, err := parseTrustedProxies(config.Server.TrustedProxies)
+	if err != nil {
+		return err
+	}
+	if len(trustedProxies) == 0 {
+		slog.Info("no trusted proxies: client IP is the connection peer, X-Forwarded-For is ignored")
+	}
+	handler := auth.NewHandler(service, auth.WithCookieConfig(cookieConfig), auth.WithTrustedProxies(trustedProxies))
 
 	// Setup HTTP mux
 	mux := http.NewServeMux()

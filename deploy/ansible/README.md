@@ -20,6 +20,7 @@ ansible-galaxy collection install community.docker
 | `psina_image` | `ghcr.io/foxcool/psina:{{ psina_version }}` | Full image reference |
 | `psina_app_dir` | `/opt/psina` | Working directory on host |
 | `psina_http_port` | `8080` | Container HTTP port |
+| `psina_trusted_proxies` | `""` | CIDRs whose `X-Forwarded-For` psina believes; set to the `proxy` network subnet (`docker network inspect proxy -f '{{range .IPAM.Config}}{{.Subnet}}{{end}}'`), otherwise logs show Traefik's IP for every client |
 | `psina_platform_domain` | `auth.example.com` | Domain for Traefik routing |
 | `psina_db_user` | `psina` | PostgreSQL username |
 | `psina_db_password` | `psina_password` | PostgreSQL password |

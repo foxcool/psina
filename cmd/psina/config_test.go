@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -257,4 +258,33 @@ func TestValidateWallet(t *testing.T) {
 			assert.Contains(t, err.Error(), tt.wantErr)
 		})
 	}
+}
+
+func TestLoadConfig_TrustedProxies(t *testing.T) {
+	t.Run("none by default", func(t *testing.T) {
+		config, err := loadConfig(nil)
+		require.NoError(t, err)
+		assert.Empty(t, config.Server.TrustedProxies)
+	})
+
+	t.Run("from env", func(t *testing.T) {
+		t.Setenv("PSINA_SERVER_TRUSTEDPROXIES", "172.16.0.0/12, 10.0.0.7,fd00::/8")
+
+		config, err := loadConfig(nil)
+		require.NoError(t, err)
+		prefixes, err := parseTrustedProxies(config.Server.TrustedProxies)
+		require.NoError(t, err)
+		assert.Equal(t, []netip.Prefix{
+			netip.MustParsePrefix("172.16.0.0/12"),
+			netip.MustParsePrefix("10.0.0.7/32"),
+			netip.MustParsePrefix("fd00::/8"),
+		}, prefixes)
+	})
+
+	t.Run("invalid entry", func(t *testing.T) {
+		t.Setenv("PSINA_SERVER_TRUSTEDPROXIES", "traefik")
+
+		_, err := loadConfig(nil)
+		require.ErrorContains(t, err, "server.trustedproxies")
+	})
 }

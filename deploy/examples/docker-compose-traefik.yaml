@@ -48,6 +48,10 @@ services:
       PSINA_DB_URL: "postgres://psina:password@postgres:5432/psina?sslmode=disable"
       PSINA_SERVER_PORT: "8080"
       PSINA_LOGGER_LEVEL: "info"
+      # Believe X-Forwarded-For only from Traefik. Docker allocates compose
+      # networks from 172.16.0.0/12 by default; narrow this to the network's
+      # subnet (docker network inspect) in production.
+      PSINA_SERVER_TRUSTEDPROXIES: "172.16.0.0/12"
     depends_on:
       postgres:
         condition: service_healthy

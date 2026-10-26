@@ -658,43 +658,6 @@ func TestHandler_RejectedCredentialIsUnauthenticated(t *testing.T) {
 	}
 }
 
-// TestGetClientIP tests IP extraction from headers.
-func TestGetClientIP(t *testing.T) {
-	tests := []struct {
-		name     string
-		headers  http.Header
-		expected string
-	}{
-		{
-			name:     "X-Forwarded-For single IP",
-			headers:  http.Header{"X-Forwarded-For": []string{"1.2.3.4"}},
-			expected: "1.2.3.4",
-		},
-		{
-			name:     "X-Forwarded-For multiple IPs",
-			headers:  http.Header{"X-Forwarded-For": []string{"1.2.3.4, 5.6.7.8"}},
-			expected: "1.2.3.4",
-		},
-		{
-			name:     "X-Real-IP",
-			headers:  http.Header{"X-Real-Ip": []string{"9.0.0.1"}},
-			expected: "9.0.0.1",
-		},
-		{
-			name:     "no headers",
-			headers:  http.Header{},
-			expected: "unknown",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := getClientIP(tt.headers)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
 // TestHandler_LegacyScopedCookieEviction covers the stale-cookie bug: when a
 // Domain is configured, login/logout must also expire any legacy duplicate left
 // under a foreign scope — the host-only scope (Domain unset) or a broader parent

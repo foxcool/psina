@@ -6,6 +6,10 @@ COMPOSE=docker compose -p psina
 COMPOSE_FILE=deploy/compose.yaml
 # Path to the e2e gateway stand compose file
 E2E_COMPOSE=deploy/e2e/compose.yaml
+# Pinned lint tooling: the single place to bump. CI reads these two lines
+# (the lint job greps GOLANGCI_LINT_VERSION) and runs `make sec`.
+GOLANGCI_LINT_VERSION=v2.15.0
+GOSEC_VERSION=2.30.0
 
 .PHONY: gen buf-gen go-gen lint sec test test-unit test-integration test-e2e up down clean logs help schema-apply schema-diff
 
@@ -48,12 +52,12 @@ go-gen:
 
 # Run golangci-lint via Docker (matches CI, no local install needed)
 lint:
-	docker run --rm -v $(PWD):/app -w /app golangci/golangci-lint:latest golangci-lint run
+	docker run --rm -v $(PWD):/app -w /app golangci/golangci-lint:$(GOLANGCI_LINT_VERSION) golangci-lint run
 
-# Run gosec like the CI job (securego/gosec@master): golangci-lint does not
-# cover it, and a #nosec it cannot see only fails in CI.
+# Run gosec exactly as the CI job does (CI calls this target): golangci-lint
+# does not cover it, and a #nosec it cannot see only fails in CI.
 sec:
-	docker run --rm -v $(PWD):/app -w /app ghcr.io/securego/gosec:latest -quiet -exclude-generated ./...
+	docker run --rm -v $(PWD):/app -w /app ghcr.io/securego/gosec:$(GOSEC_VERSION) -quiet -exclude-generated ./...
 
 # Run all tests
 test: test-unit test-integration

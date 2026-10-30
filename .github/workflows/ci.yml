@@ -18,10 +18,14 @@ jobs:
         with:
           go-version: stable
 
+      - name: Read pinned golangci-lint version
+        id: lint-version
+        run: echo "version=$(sed -n 's/^GOLANGCI_LINT_VERSION=//p' Makefile)" >> "$GITHUB_OUTPUT"
+
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v8
         with:
-          version: latest
+          version: ${{ steps.lint-version.outputs.version }}
 
   unit-tests:
     name: Run unit tests
@@ -101,10 +105,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Same pinned image and flags as local runs; version lives in the Makefile.
       - name: Run gosec
-        uses: securego/gosec@master
-        with:
-          args: -exclude-generated ./...
+        run: make sec
 
   gitleaks:
     name: Scan for committed secrets

@@ -87,6 +87,7 @@ func NewWithECDSAKey(privateKey *ecdsa.PrivateKey) (*Issuer, error) {
 }
 
 // NewWithKey creates an Issuer with an existing RSA private key (production).
+//
 // Deprecated: Use NewWithRSAKey instead.
 func NewWithKey(privateKey *rsa.PrivateKey) (*Issuer, error) {
 	return NewWithRSAKey(privateKey)

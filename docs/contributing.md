@@ -74,7 +74,8 @@ make test-integration   # With real PostgreSQL
 ### 4. Run linter
 
 ```bash
-golangci-lint run
+make lint   # pinned golangci-lint, same as CI
+make sec    # pinned gosec, same as CI
 ```
 
 ### 5. Update documentation

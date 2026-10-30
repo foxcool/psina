@@ -40,7 +40,7 @@ func WalletIdentities(t *testing.T, newStore func(t *testing.T) WalletStore) {
 		return &entity.WalletIdentity{ID: uuid.New().String(), UserID: userID, Chain: chain, Address: addr}
 	}
 	chainsOf := func(list []*entity.WalletIdentity) []string {
-		var chains []string
+		chains := make([]string, 0, len(list))
 		for _, identity := range list {
 			chains = append(chains, identity.Chain)
 		}

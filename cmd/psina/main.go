@@ -344,18 +344,19 @@ func createTokenIssuer(config *Config) (*token.Issuer, error) {
 	var keyData []byte
 	var err error
 
-	if config.JWT.PrivateKey != "" {
+	switch {
+	case config.JWT.PrivateKey != "":
 		// Key provided directly in config
 		keyData = []byte(config.JWT.PrivateKey)
 		slog.Info("using jwt key from environment/config")
-	} else if config.JWT.PrivateKeyPath != "" {
+	case config.JWT.PrivateKeyPath != "":
 		// Load key from file
 		keyData, err = os.ReadFile(config.JWT.PrivateKeyPath)
 		if err != nil {
 			return nil, fmt.Errorf("read jwt key file: %w", err)
 		}
 		slog.Info("using jwt key from file", "path", config.JWT.PrivateKeyPath)
-	} else {
+	default:
 		// Development: generate ephemeral key
 		slog.Warn("no JWT key configured, generating ephemeral key (tokens will invalidate on restart)")
 		return token.NewWithAlgorithm(token.Algorithm(config.JWT.Algorithm))

@@ -249,11 +249,17 @@ Key variables:
 
 GitHub Actions workflow (`.github/workflows/ci.yml`):
 
-1. **golangci-lint** — static analysis
+1. **golangci-lint** — static analysis (config: `.golangci.yml`)
 2. **unit-tests** — fast feedback
 3. **integration-tests** — with real PostgreSQL
 4. **docker-build** — verify image builds (PR only)
 5. **docker-publish** — push to ghcr.io (tags only)
+
+### Lint tooling versions
+
+`GOLANGCI_LINT_VERSION` and `GOSEC_VERSION` in the `Makefile` are the only
+place to bump: `make lint` / `make sec` use them, the CI lint job reads the
+golangci-lint pin from there, and the CI gosec job runs `make sec`.
 
 ### Publishing a release
 

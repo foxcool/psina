@@ -16,7 +16,7 @@ Name origin: "psina" (рус. "псина") = "doggy" — a guard dog that knows
 ## Directory Map
 
 ```text
-cmd/psina/           # binary entrypoint + config (koanf, slog, graceful shutdown)
+cmd/psina/           # binary entrypoint + config (koanf, slog, graceful shutdown: drains in-flight requests before the DB pool closes)
 api/auth/v1/         # auth.proto — edit here, then make gen
                      # alongside it: generated Connect RPC code — DO NOT EDIT
 auth/                # service layer: service.go, handler.go, ports.go, validation.go
@@ -117,14 +117,18 @@ Direct equivalents (when `make` isn't available):
 go test -v -race ./...                   # unit tests
 go test -v -tags=integration ./...      # integration tests
 buf generate --template buf.gen.yaml    # proto generation
-go run ./cmd/psina/...                  # run dev server (in-memory store)
+PSINA_DEV=true go run ./cmd/psina/...   # run dev server (in-memory store, ephemeral key)
 ```
 
 ## Configuration
 
 Priority: defaults → config file (`-c config.yaml`) → environment variables (`PSINA_` prefix).
+File keys are case-insensitive; two spellings of one key are a load error. A
+section or key with no value (YAML null) keeps its defaults. Unknown
+`logger.level`/`logger.format` values are a startup error.
 
 ```yaml
+dev: false           # true allows the in-memory store and an ephemeral key; otherwise either refuses to start
 logger:
   level: info        # debug, info, warn, error
   format: json       # json, text
@@ -132,10 +136,10 @@ server:
   port: 8080
   trustedProxies: [] # CIDRs/IPs whose X-Forwarded-For is believed; empty = peer address
 db:
-  url: ""            # empty = in-memory store
+  url: ""            # empty = in-memory store (dev: true only)
   tablePrefix: ""    # for shared databases
 jwt:
-  privateKeyPath: "" # empty = ephemeral key (dev only!)
+  privateKeyPath: "" # empty (and no privateKey) = ephemeral key (dev: true only)
   algorithm: RS256   # RS256 or ES256
 token:
   refreshReuseLeeway: 10s # duplicate-refresh grace; 0s = strict reuse detection

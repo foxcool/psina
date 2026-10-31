@@ -21,7 +21,7 @@ psina_db_name: "psina"
 
 # JWT
 psina_jwt_algorithm: "RS256"
-psina_jwt_private_key: ""  # PEM content; empty = ephemeral key (dev only)
+psina_jwt_private_key: ""  # PEM content; required, psina refuses to start without a key
 
 # Cookie
 psina_cookie_enabled: true

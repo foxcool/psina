@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -315,32 +316,46 @@ func run() error {
 		IdleTimeout:  120 * time.Second,
 	}
 
-	// Graceful shutdown
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
-	go func() {
-		quit := make(chan os.Signal, 1)
-		signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-		sig := <-quit
-		slog.Info("received shutdown signal", "signal", sig.String())
-
-		shutdownCtx, shutdownCancel := context.WithTimeout(ctx, 30*time.Second)
-		defer shutdownCancel()
-
-		if err := server.Shutdown(shutdownCtx); err != nil {
-			slog.Error("shutdown error", "error", err)
-		}
-		cancel()
-	}()
-
-	// Start server
-	slog.Info("server listening", "addr", server.Addr)
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	ln, err := net.Listen("tcp", server.Addr)
+	if err != nil {
 		return fmt.Errorf("listen: %w", err)
+	}
+	slog.Info("server listening", "addr", server.Addr)
+	if err := serve(ctx, server, ln, shutdownTimeout); err != nil {
+		return err
 	}
 
 	slog.Info("server stopped")
+	return nil
+}
+
+// shutdownTimeout bounds the drain of in-flight requests after a signal.
+const shutdownTimeout = 30 * time.Second
+
+// serve runs server on ln until ctx is done, then drains in-flight requests.
+// It returns only after the drain: Serve itself returns ErrServerClosed as soon
+// as Shutdown starts, and run() closes the DB pool once serve returns, so a
+// request still running then (a refresh rotated, its successor not yet saved)
+// would fail half-done.
+func serve(ctx context.Context, server *http.Server, ln net.Listener, drainTimeout time.Duration) error {
+	served := make(chan error, 1)
+	go func() { served <- server.Serve(ln) }()
+
+	select {
+	case err := <-served:
+		return fmt.Errorf("serve: %w", err)
+	case <-ctx.Done():
+	}
+	slog.Info("shutting down", "cause", context.Cause(ctx))
+
+	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), drainTimeout)
+	defer cancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		return fmt.Errorf("shutdown: %w", err)
+	}
 	return nil
 }
 
@@ -451,20 +466,7 @@ func parseSameSite(s string) http.SameSite {
 }
 
 func setupLogger(config *Config) *slog.Logger {
-	var level slog.Level
-	switch config.Logger.Level {
-	case "debug":
-		level = slog.LevelDebug
-	case "info":
-		level = slog.LevelInfo
-	case "warn":
-		level = slog.LevelWarn
-	case "error":
-		level = slog.LevelError
-	default:
-		level = slog.LevelInfo
-	}
-
+	level, _ := parseLogLevel(config.Logger.Level) // validateConfig rejected an unknown level
 	return slog.New(newLogHandler(config, os.Stdout, level))
 }
 
@@ -477,7 +479,7 @@ func setupAuditLogger(config *Config, w io.Writer) *slog.Logger {
 
 func newLogHandler(config *Config, w io.Writer, level slog.Level) slog.Handler {
 	opts := &slog.HandlerOptions{Level: level}
-	if config.Logger.Format == "text" {
+	if strings.EqualFold(config.Logger.Format, "text") {
 		return slog.NewTextHandler(w, opts)
 	}
 	return slog.NewJSONHandler(w, opts)

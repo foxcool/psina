@@ -18,6 +18,7 @@ import (
 )
 
 func TestLoadConfig_OAuthFromEnv(t *testing.T) {
+	devEnv(t)
 	tests := []struct {
 		name   string
 		client func(*Config) OAuthClientConfig
@@ -46,6 +47,7 @@ func TestLoadConfig_OAuthFromEnv(t *testing.T) {
 }
 
 func TestLoadConfig_OAuthBothProviders(t *testing.T) {
+	devEnv(t)
 	for _, name := range []string{"GOOGLE", "GITHUB"} {
 		t.Setenv("PSINA_OAUTH_"+name+"_CLIENTID", "client")
 		t.Setenv("PSINA_OAUTH_"+name+"_CLIENTSECRET", "secret")
@@ -60,6 +62,7 @@ func TestLoadConfig_OAuthBothProviders(t *testing.T) {
 }
 
 func TestLoadConfig_OAuthDisabledByDefault(t *testing.T) {
+	devEnv(t)
 	config, err := loadConfig(nil)
 	require.NoError(t, err)
 	providers, err := createOAuthProviders(config)
@@ -80,13 +83,13 @@ func TestValidateConfig_OAuthIncomplete(t *testing.T) {
 	for _, tt := range tests {
 		client := OAuthClientConfig{ClientID: tt.clientID, ClientSecret: tt.secret, RedirectURIs: tt.redirectURIs}
 		t.Run("google "+tt.name, func(t *testing.T) {
-			c := &Config{}
+			c := &Config{Dev: true}
 			c.JWT.Algorithm = "RS256"
 			c.OAuth.Google = client
 			assert.ErrorContains(t, validateConfig(c), "oauth.google")
 		})
 		t.Run("github "+tt.name, func(t *testing.T) {
-			c := &Config{}
+			c := &Config{Dev: true}
 			c.JWT.Algorithm = "RS256"
 			c.OAuth.GitHub = client
 			assert.ErrorContains(t, validateConfig(c), "oauth.github")
@@ -97,6 +100,7 @@ func TestValidateConfig_OAuthIncomplete(t *testing.T) {
 // YAML keys are written in camelCase in the docs; they must win over the
 // lowercase defaults instead of sitting beside them.
 func TestLoadConfig_YAMLCamelCaseKeys(t *testing.T) {
+	devEnv(t)
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	require.NoError(t, os.WriteFile(path, []byte(`
 db:
@@ -129,6 +133,7 @@ oauth:
 }
 
 func TestLoadConfig_OAuthGoogleBlankRedirectURIs(t *testing.T) {
+	devEnv(t)
 	t.Setenv("PSINA_OAUTH_GOOGLE_CLIENTID", "client")
 	t.Setenv("PSINA_OAUTH_GOOGLE_CLIENTSECRET", "secret")
 	t.Setenv("PSINA_OAUTH_GOOGLE_REDIRECTURIS", " , ")
@@ -176,6 +181,7 @@ func collectKoanfKeys(t reflect.Type, prefix string, out map[string]bool) {
 }
 
 func TestLoadConfig_Wallet(t *testing.T) {
+	devEnv(t)
 	t.Run("disabled by default", func(t *testing.T) {
 		config, err := loadConfig(nil)
 		require.NoError(t, err)
@@ -261,6 +267,7 @@ func TestValidateWallet(t *testing.T) {
 }
 
 func TestLoadConfig_TrustedProxies(t *testing.T) {
+	devEnv(t)
 	t.Run("none by default", func(t *testing.T) {
 		config, err := loadConfig(nil)
 		require.NoError(t, err)
@@ -310,5 +317,121 @@ func TestParseTrustedProxies(t *testing.T) {
 			assert.Equal(t, []netip.Prefix{netip.MustParsePrefix(tt.want)}, prefixes)
 			assert.True(t, prefixes[0].Contains(netip.MustParseAddr(tt.peer)))
 		})
+	}
+}
+
+// devEnv allows the in-memory store and an ephemeral key, which tests that are
+// not about those fallbacks rely on.
+func devEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("PSINA_DEV", "true")
+}
+
+func writeConfig(t *testing.T, yaml string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(yaml), 0o600))
+	return path
+}
+
+// A deploy that lost its DB URL or signing key must not start: it would accept
+// sign-ups and sessions and lose them on the next restart.
+func TestLoadConfig_DevFallbacks(t *testing.T) {
+	tests := []struct {
+		name    string
+		env     map[string]string
+		wantErr string
+	}{
+		{"no db url refused", map[string]string{"PSINA_JWT_PRIVATEKEY": "pem"}, "db.url"},
+		{"no db url in dev mode", map[string]string{"PSINA_JWT_PRIVATEKEY": "pem", "PSINA_DEV": "true"}, ""},
+		{"no jwt key refused", map[string]string{"PSINA_DB_URL": "postgres://db/psina"}, "jwt"},
+		{"no jwt key in dev mode", map[string]string{"PSINA_DB_URL": "postgres://db/psina", "PSINA_DEV": "true"}, ""},
+		{"key from path", map[string]string{"PSINA_DB_URL": "postgres://db/psina", "PSINA_JWT_PRIVATEKEYPATH": "/keys/jwt.pem"}, ""},
+		{"dev explicitly off", map[string]string{"PSINA_DEV": "false"}, "db.url"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for k, v := range tt.env {
+				t.Setenv(k, v)
+			}
+			_, err := loadConfig(nil)
+			if tt.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			assert.ErrorContains(t, err, tt.wantErr)
+			assert.ErrorContains(t, err, "dev")
+		})
+	}
+}
+
+func TestValidateConfig_Logger(t *testing.T) {
+	tests := []struct {
+		level, format string
+		wantErr       string
+	}{
+		{"debug", "json", ""},
+		{"info", "text", ""},
+		{"warn", "json", ""},
+		{"error", "json", ""},
+		{"WARN", "TEXT", ""},
+		{"", "", ""}, // unset: info, json
+		{"warning", "json", "logger.level"},
+		{"trace", "json", "logger.level"},
+		{"info", "xml", "logger.format"},
+		{"info", "console", "logger.format"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.level+"/"+tt.format, func(t *testing.T) {
+			c := &Config{Dev: true}
+			c.JWT.Algorithm = "RS256"
+			c.Wallet.EVMChains = []string{"ethereum=1"}
+			c.Logger.Level, c.Logger.Format = tt.level, tt.format
+			err := validateConfig(c)
+			if tt.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			assert.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
+// YAML null (a section or key written with no value) means "not set": it must
+// not wipe the defaults beneath it, e.g. turn cookie.secure off.
+func TestLoadConfig_EmptySectionKeepsDefaults(t *testing.T) {
+	devEnv(t)
+	want, err := loadConfig(nil)
+	require.NoError(t, err)
+
+	for _, yaml := range []string{
+		"db:\n",
+		"db: {}\n",
+		"logger:\n",
+		"cookie:\n",
+		"pat:\n",
+		"token:\n",
+		"wallet:\n",
+		"oauth:\n",
+		"cookie:\n  secure:\n",
+	} {
+		t.Run(strings.TrimSpace(yaml), func(t *testing.T) {
+			got, err := loadConfig([]string{"-c", writeConfig(t, yaml)})
+			require.NoError(t, err)
+			assert.Equal(t, want, got)
+		})
+	}
+}
+
+// Keys are lowercased before merging, so two spellings of one key would race
+// on map order; refuse instead of picking one.
+func TestLoadConfig_CaseDuplicateKeys(t *testing.T) {
+	devEnv(t)
+	for _, yaml := range []string{
+		"db:\n  tablePrefix: a_\n  tableprefix: b_\n",
+		"DB:\n  url: postgres://a\ndb:\n  url: postgres://b\n",
+	} {
+		_, err := loadConfig([]string{"-c", writeConfig(t, yaml)})
+		assert.ErrorContains(t, err, "duplicate")
 	}
 }

@@ -397,13 +397,14 @@ func (s *Store) SavePAT(ctx context.Context, pat *entity.PersonalAccessToken) er
 	return patSaveError(pat, err)
 }
 
-// SavePATLimited persists a token unless the user already holds max that have
-// not expired at now. A conditional INSERT alone is not enough: under READ
-// COMMITTED two transactions both count before either commits. The user row is
-// locked first to serialise creates per user; FOR NO KEY UPDATE does not block
-// the foreign-key checks of other writers (they take FOR KEY SHARE). A missing
-// user matches no row to lock and is reported as store.ErrUserNotFound.
-func (s *Store) SavePATLimited(ctx context.Context, pat *entity.PersonalAccessToken, max int, now time.Time) error {
+// SavePATLimited persists a token unless the user already holds limit that have
+// not expired at now; the user's expired ones are deleted first. A conditional
+// INSERT alone is not enough: under READ COMMITTED two transactions both count
+// before either commits. The user row is locked first to serialise creates per
+// user; FOR NO KEY UPDATE does not block the foreign-key checks of other
+// writers (they take FOR KEY SHARE). A missing user matches no row to lock and
+// is reported as store.ErrUserNotFound.
+func (s *Store) SavePATLimited(ctx context.Context, pat *entity.PersonalAccessToken, limit int, now time.Time) error {
 	if pat.CreatedAt.IsZero() {
 		pat.CreatedAt = time.Now()
 	}
@@ -422,33 +423,44 @@ func (s *Store) SavePATLimited(ctx context.Context, pat *entity.PersonalAccessTo
 		_ = tx.Rollback(ctx)
 	}()
 
-	var locked string
-	lock := fmt.Sprintf(`SELECT id::text FROM %s WHERE id = $1 FOR NO KEY UPDATE`, s.tableUsers)
-	if err := tx.QueryRow(ctx, lock, pat.UserID).Scan(&locked); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return fmt.Errorf("%w: %s", store.ErrUserNotFound, pat.UserID)
-		}
-		return fmt.Errorf("lock user: %w", err)
+	if err := s.lockUser(ctx, tx, pat.UserID); err != nil {
+		return err
+	}
+
+	prune := fmt.Sprintf(`DELETE FROM %s WHERE user_id = $1 AND expires_at <= $2`, s.tablePATs)
+	if _, err := tx.Exec(ctx, prune, pat.UserID, now); err != nil {
+		return fmt.Errorf("prune expired pats: %w", err)
 	}
 
 	insert := fmt.Sprintf(`
 		INSERT INTO %[1]s (id, hash, user_id, name, scopes, expires_at, last_used_at, created_at)
 		SELECT $1, $2, $3, $4, $5, $6, $7, $8
-		WHERE (
-			SELECT count(*) FROM %[1]s
-			WHERE user_id = $3 AND (expires_at IS NULL OR expires_at > $9)
-		) < $10
+		WHERE (SELECT count(*) FROM %[1]s WHERE user_id = $3) < $9
 	`, s.tablePATs)
 	tag, err := tx.Exec(ctx, insert,
-		pat.ID, pat.Hash, pat.UserID, pat.Name, scopes, pat.ExpiresAt, pat.LastUsedAt, pat.CreatedAt, now, max)
+		pat.ID, pat.Hash, pat.UserID, pat.Name, scopes, pat.ExpiresAt, pat.LastUsedAt, pat.CreatedAt, limit)
 	if err != nil {
 		return patSaveError(pat, err)
+	}
+	// Commit also on a refusal: the prune is worth keeping.
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return store.ErrPATLimitReached
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit: %w", err)
+	return nil
+}
+
+// lockUser takes the user row lock that serialises PAT creates for the user.
+func (s *Store) lockUser(ctx context.Context, tx pgx.Tx, userID string) error {
+	var locked string
+	query := fmt.Sprintf(`SELECT id::text FROM %s WHERE id = $1 FOR NO KEY UPDATE`, s.tableUsers)
+	if err := tx.QueryRow(ctx, query, userID).Scan(&locked); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("%w: %s", store.ErrUserNotFound, userID)
+		}
+		return fmt.Errorf("lock user: %w", err)
 	}
 	return nil
 }

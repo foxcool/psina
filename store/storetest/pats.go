@@ -153,6 +153,13 @@ func PATs(t *testing.T, newStore NewBackend) {
 		require.NoError(t, saved("later", &future))
 		assert.ErrorIs(t, saved("third", nil), store.ErrPATLimitReached)
 
+		// The user's expired tokens are pruned; the live ones stay.
+		_, getErr := s.GetPAT(ctx, "expired")
+		assert.ErrorIs(t, getErr, store.ErrTokenNotFound)
+		list, listErr := s.ListPATs(ctx, userID)
+		require.NoError(t, listErr)
+		assert.Len(t, list, 2)
+
 		// The refused token is not stored, and another user has its own budget.
 		_, err := s.GetPAT(ctx, "third")
 		assert.ErrorIs(t, err, store.ErrTokenNotFound)

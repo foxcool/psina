@@ -296,9 +296,10 @@ func (s *Store) savePATLocked(pat *entity.PersonalAccessToken) error {
 	return nil
 }
 
-// SavePATLimited persists a token unless the user already holds max that are
-// not expired at now. The store mutex makes the count and insert atomic.
-func (s *Store) SavePATLimited(ctx context.Context, pat *entity.PersonalAccessToken, max int, now time.Time) error {
+// SavePATLimited persists a token unless the user already holds limit that are
+// not expired at now; the user's expired ones are dropped first. The store
+// mutex makes the prune, count and insert atomic.
+func (s *Store) SavePATLimited(ctx context.Context, pat *entity.PersonalAccessToken, limit int, now time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -306,12 +307,17 @@ func (s *Store) SavePATLimited(ctx context.Context, pat *entity.PersonalAccessTo
 		return err
 	}
 	live := 0
-	for _, existing := range s.pats {
-		if existing.UserID == pat.UserID && (existing.ExpiresAt == nil || existing.ExpiresAt.After(now)) {
-			live++
+	for hash, existing := range s.pats {
+		if existing.UserID != pat.UserID {
+			continue
 		}
+		if existing.ExpiresAt != nil && !existing.ExpiresAt.After(now) {
+			delete(s.pats, hash)
+			continue
+		}
+		live++
 	}
-	if live >= max {
+	if live >= limit {
 		return store.ErrPATLimitReached
 	}
 	return s.savePATLocked(pat)

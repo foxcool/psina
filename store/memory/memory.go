@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"sync"
 	"time"
@@ -78,10 +79,10 @@ func (s *Store) Create(ctx context.Context, user *entity.User) error {
 		user.UpdatedAt = now
 	}
 
-	// Store user
-	s.users[user.ID] = user
+	stored := copyUser(user)
+	s.users[user.ID] = stored
 	if user.Email != "" {
-		s.usersByEmail[user.Email] = user
+		s.usersByEmail[user.Email] = stored
 	}
 
 	return nil
@@ -97,7 +98,7 @@ func (s *Store) GetByID(ctx context.Context, id string) (*entity.User, error) {
 		return nil, fmt.Errorf("%w: %s", store.ErrUserNotFound, id)
 	}
 
-	return user, nil
+	return copyUser(user), nil
 }
 
 // GetByEmail retrieves a user by email address.
@@ -110,7 +111,24 @@ func (s *Store) GetByEmail(ctx context.Context, email string) (*entity.User, err
 		return nil, fmt.Errorf("%w: %s", store.ErrUserNotFound, email)
 	}
 
-	return user, nil
+	return copyUser(user), nil
+}
+
+// copyUser keeps callers from mutating a stored user (Roles included)
+// outside the mutex.
+func copyUser(user *entity.User) *entity.User {
+	cp := *user
+	cp.Roles = slices.Clone(user.Roles)
+	return &cp
+}
+
+// requireUser reports store.ErrUserNotFound for a write that references a
+// missing user, as the postgres foreign keys do. Callers hold the lock.
+func (s *Store) requireUser(userID string) error {
+	if _, exists := s.users[userID]; !exists {
+		return fmt.Errorf("%w: %s", store.ErrUserNotFound, userID)
+	}
+	return nil
 }
 
 // Delete removes a user by ID.
@@ -126,13 +144,12 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	delete(s.usersByEmail, user.Email)
 	delete(s.users, id)
 	delete(s.passwordHashes, id)
-	// Mirrors the postgres ON DELETE CASCADE: an orphaned link would lock the
-	// wallet out, since its (chain, address) stays taken.
-	for key, identity := range s.walletIdentities {
-		if identity.UserID == id {
-			delete(s.walletIdentities, key)
-		}
-	}
+	// Mirrors the postgres ON DELETE CASCADE. An orphaned identity link would
+	// lock the provider account or wallet out, since its natural key stays taken.
+	maps.DeleteFunc(s.refreshTokens, func(_ string, t *entity.RefreshToken) bool { return t.UserID == id })
+	maps.DeleteFunc(s.pats, func(_ string, p *entity.PersonalAccessToken) bool { return p.UserID == id })
+	maps.DeleteFunc(s.oauthIdentities, func(_ oauthKey, i *entity.OAuthIdentity) bool { return i.UserID == id })
+	maps.DeleteFunc(s.walletIdentities, func(_ walletKey, i *entity.WalletIdentity) bool { return i.UserID == id })
 
 	return nil
 }
@@ -161,6 +178,9 @@ func (s *Store) SaveRefreshToken(ctx context.Context, token *entity.RefreshToken
 		if root.EndedAt != nil {
 			return fmt.Errorf("%w: session ended", store.ErrTokenRevoked)
 		}
+	}
+	if err := s.requireUser(token.UserID); err != nil {
+		return err
 	}
 
 	s.refreshTokens[token.Hash] = snapshot(token)
@@ -255,6 +275,13 @@ func (s *Store) SavePAT(ctx context.Context, pat *entity.PersonalAccessToken) er
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if err := s.requireUser(pat.UserID); err != nil {
+		return err
+	}
+	// Overwriting would hand an existing token to another owner.
+	if _, exists := s.pats[pat.Hash]; exists {
+		return store.ErrPATExists
+	}
 	if pat.CreatedAt.IsZero() {
 		pat.CreatedAt = time.Now()
 	}
@@ -279,7 +306,8 @@ func (s *Store) GetPAT(ctx context.Context, hash string) (*entity.PersonalAccess
 	return &out, nil
 }
 
-// ListPATs returns all personal access tokens for a user (as copies).
+// ListPATs returns all personal access tokens for a user (as copies), newest
+// first like the postgres store.
 func (s *Store) ListPATs(ctx context.Context, userID string) ([]*entity.PersonalAccessToken, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -291,6 +319,7 @@ func (s *Store) ListPATs(ctx context.Context, userID string) ([]*entity.Personal
 			out = append(out, &c)
 		}
 	}
+	slices.SortFunc(out, func(a, b *entity.PersonalAccessToken) int { return b.CreatedAt.Compare(a.CreatedAt) })
 
 	return out, nil
 }
@@ -329,6 +358,9 @@ func (s *Store) SaveOAuthIdentity(ctx context.Context, identity *entity.OAuthIde
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if err := s.requireUser(identity.UserID); err != nil {
+		return err
+	}
 	key := oauthKey{identity.Provider, identity.ExternalID}
 	if _, exists := s.oauthIdentities[key]; exists {
 		return fmt.Errorf("%w: %s/%s", store.ErrOAuthIdentityExists, identity.Provider, identity.ExternalID)
@@ -356,7 +388,8 @@ func (s *Store) GetOAuthIdentity(ctx context.Context, provider, externalID strin
 	return &out, nil
 }
 
-// ListOAuthIdentities returns all OAuth identities linked to a user (as copies).
+// ListOAuthIdentities returns all OAuth identities linked to a user (as
+// copies), newest first like the postgres store.
 func (s *Store) ListOAuthIdentities(ctx context.Context, userID string) ([]*entity.OAuthIdentity, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -368,6 +401,7 @@ func (s *Store) ListOAuthIdentities(ctx context.Context, userID string) ([]*enti
 			out = append(out, &c)
 		}
 	}
+	slices.SortFunc(out, func(a, b *entity.OAuthIdentity) int { return b.CreatedAt.Compare(a.CreatedAt) })
 
 	return out, nil
 }
@@ -379,6 +413,9 @@ func (s *Store) SaveWalletIdentity(ctx context.Context, identity *entity.WalletI
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if err := s.requireUser(identity.UserID); err != nil {
+		return err
+	}
 	key := walletKey{identity.Chain, identity.Address}
 	if _, exists := s.walletIdentities[key]; exists {
 		return fmt.Errorf("%w: %s/%s", store.ErrWalletIdentityExists, identity.Chain, identity.Address)
@@ -488,9 +525,8 @@ func (s *Store) SavePasswordHash(ctx context.Context, userID, hash string) error
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Verify user exists
-	if _, exists := s.users[userID]; !exists {
-		return fmt.Errorf("%w: %s", store.ErrUserNotFound, userID)
+	if err := s.requireUser(userID); err != nil {
+		return err
 	}
 
 	s.passwordHashes[userID] = hash

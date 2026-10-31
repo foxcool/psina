@@ -252,6 +252,8 @@ func TestStore_NotFound(t *testing.T) {
 func TestStore_OAuthIdentities(t *testing.T) {
 	s := New()
 	ctx := context.Background()
+	require.NoError(t, s.Create(ctx, &entity.User{ID: "user-123"}))
+	require.NoError(t, s.Create(ctx, &entity.User{ID: "user-other"}))
 
 	identity := &entity.OAuthIdentity{
 		ID:         "oauth-1",

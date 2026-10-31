@@ -334,12 +334,6 @@ func TestStore_OAuthIdentities(t *testing.T) {
 	// Unknown lookup
 	_, err = s.GetOAuthIdentity(ctx, entity.ProviderTypeGoogle, "unknown")
 	assert.True(t, errors.Is(err, store.ErrOAuthIdentityNotFound), "expected ErrOAuthIdentityNotFound, got: %v", err)
-
-	// Deleting the user cascades to identities
-	require.NoError(t, s.Delete(ctx, user.ID))
-	list, err = s.ListOAuthIdentities(ctx, user.ID)
-	require.NoError(t, err)
-	assert.Empty(t, list)
 }
 
 func TestStore_ChallengeExpiry(t *testing.T) {

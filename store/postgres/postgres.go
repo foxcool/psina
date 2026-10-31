@@ -265,7 +265,7 @@ func (s *Store) SaveRefreshToken(ctx context.Context, token *entity.RefreshToken
 
 	if token.Parent == "" {
 		if _, err := s.pool.Exec(ctx, insert, args...); err != nil {
-			return fmt.Errorf("insert refresh token: %w", err)
+			return insertError("insert refresh token", token.UserID, err)
 		}
 		return nil
 	}
@@ -288,7 +288,7 @@ func (s *Store) SaveRefreshToken(ctx context.Context, token *entity.RefreshToken
 			return fmt.Errorf("%w: session ended", store.ErrTokenRevoked)
 		}
 		if _, err := tx.Exec(ctx, insert, args...); err != nil {
-			return fmt.Errorf("insert refresh token: %w", err)
+			return insertError("insert refresh token", token.UserID, err)
 		}
 		return nil
 	})
@@ -417,7 +417,10 @@ func (s *Store) SavePAT(ctx context.Context, pat *entity.PersonalAccessToken) er
 	_, err := s.pool.Exec(ctx, query,
 		pat.ID, pat.Hash, pat.UserID, pat.Name, scopes, pat.ExpiresAt, pat.LastUsedAt, pat.CreatedAt)
 	if err != nil {
-		return fmt.Errorf("insert pat: %w", err)
+		if isDuplicateKeyError(err) {
+			return fmt.Errorf("%w: %s", store.ErrPATExists, pat.ID)
+		}
+		return insertError("insert pat", pat.UserID, err)
 	}
 
 	return nil
@@ -521,7 +524,7 @@ func (s *Store) SaveOAuthIdentity(ctx context.Context, identity *entity.OAuthIde
 		if isDuplicateKeyError(err) {
 			return fmt.Errorf("%w: %s/%s", store.ErrOAuthIdentityExists, identity.Provider, identity.ExternalID)
 		}
-		return fmt.Errorf("insert oauth identity: %w", err)
+		return insertError("insert oauth identity", identity.UserID, err)
 	}
 
 	return nil
@@ -598,7 +601,7 @@ func (s *Store) SaveWalletIdentity(ctx context.Context, identity *entity.WalletI
 		if isDuplicateKeyError(err) {
 			return fmt.Errorf("%w: %s/%s", store.ErrWalletIdentityExists, identity.Chain, identity.Address)
 		}
-		return fmt.Errorf("insert wallet identity: %w", err)
+		return insertError("insert wallet identity", identity.UserID, err)
 	}
 
 	return nil
@@ -742,7 +745,7 @@ func (s *Store) SavePasswordHash(ctx context.Context, userID, hash string) error
 
 	_, err := s.pool.Exec(ctx, query, userID, hash)
 	if err != nil {
-		return fmt.Errorf("save password hash: %w", err)
+		return insertError("save password hash", userID, err)
 	}
 
 	return nil
@@ -766,6 +769,16 @@ func (s *Store) GetPasswordHash(ctx context.Context, userID string) (string, err
 	}
 
 	return hash, nil
+}
+
+// insertError wraps a failed write of a user-owned row. Every such table has
+// a foreign key to users, so a violation means the user does not exist.
+func insertError(op, userID string, err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == pqForeignKeyViolation {
+		return fmt.Errorf("%w: %s", store.ErrUserNotFound, userID)
+	}
+	return fmt.Errorf("%s: %w", op, err)
 }
 
 // isDuplicateKeyError checks if error is a unique constraint violation.

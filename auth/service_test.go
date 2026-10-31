@@ -78,11 +78,9 @@ func (c *fakeClock) Advance(d time.Duration) {
 }
 
 func TestService_Register(t *testing.T) {
-	service, _ := setupTestService(t)
-	ctx := context.Background()
+	service, store := setupTestService(t)
 
-	result, err := service.Register(ctx, "test@example.com", "SecurePassword123!")
-	require.NoError(t, err)
+	result := registerUser(t, store, "test@example.com", "SecurePassword123!", service)
 
 	assert.NotEmpty(t, result.UserID)
 	assert.Equal(t, "test@example.com", result.Email)

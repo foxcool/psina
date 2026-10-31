@@ -51,8 +51,9 @@ type UserStore interface {
     Create(ctx context.Context, user *entity.User) error
     GetByID(ctx context.Context, id string) (*entity.User, error)
     GetByEmail(ctx context.Context, email string) (*entity.User, error)
-    Delete(ctx context.Context, id string) error
+    Delete(ctx context.Context, id string) error  // also drops everything the user owns
 }
+// Every user-owned write (token, PAT, password, identity) for a missing user → ErrUserNotFound
 
 // TokenStore handles refresh tokens
 type TokenStore interface {
@@ -65,9 +66,9 @@ type TokenStore interface {
 
 // PATStore handles personal access tokens (opaque psn_ tokens)
 type PATStore interface {
-    SavePAT(ctx context.Context, pat *entity.PersonalAccessToken) error
+    SavePAT(ctx context.Context, pat *entity.PersonalAccessToken) error  // ErrPATExists on a duplicate hash
     GetPAT(ctx context.Context, hash string) (*entity.PersonalAccessToken, error)
-    ListPATs(ctx context.Context, userID string) ([]*entity.PersonalAccessToken, error)
+    ListPATs(ctx context.Context, userID string) ([]*entity.PersonalAccessToken, error)  // newest first
     DeletePAT(ctx context.Context, userID, id string) error  // by UUID, owner-scoped
     TouchPAT(ctx context.Context, hash string, t time.Time) error
 }
@@ -237,7 +238,7 @@ if errors.Is(err, store.ErrUserNotFound) {
 ```
 
 Store errors: `ErrUserNotFound`, `ErrUserExists`, `ErrTokenNotFound`, `ErrTokenRevoked`,
-`ErrTokenExpired`, `ErrCredentialNotFound`.
+`ErrTokenExpired`, `ErrPATExists`, `ErrCredentialNotFound`.
 Service errors: `ErrInvalidCredentials`, `ErrTokenExpired`, `ErrPATDisabled`, `ErrWalletChallengeInvalid`,
 `ErrPATLimitReached`, `ErrPATNameRequired`, `ErrPATNameTooLong`, `ErrPATExpiryInvalid`, etc.
 

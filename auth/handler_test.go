@@ -32,14 +32,18 @@ func newServiceWithProvider(t *testing.T, provider Provider, store *memory.Store
 	return NewService(store, store, issuer, []Provider{provider}, WithPAT(store, PATConfig{}))
 }
 
-// registerUser registers a user via the handler and pre-creates the user in the store.
-// The mock provider always returns "user-123" as UserID, so this pre-creates that user.
+// createMockUser stores the user the mock provider reports: it always returns
+// "user-123" without creating it, and the store refuses tokens for a missing user.
+func createMockUser(t *testing.T, store *memory.Store, email string) {
+	t.Helper()
+	_ = store.Create(context.Background(), &entity.User{ID: "user-123", Email: email})
+}
+
+// registerUser registers a user via the service after createMockUser.
 func registerUser(t *testing.T, store *memory.Store, email, password string, svc *Service) *RegisterResult {
 	t.Helper()
-	ctx := context.Background()
-	// Pre-create user so Refresh (which does GetByID) can find them
-	_ = store.Create(ctx, &entity.User{ID: "user-123", Email: email})
-	result, err := svc.Register(ctx, email, password)
+	createMockUser(t, store, email)
+	result, err := svc.Register(context.Background(), email, password)
 	require.NoError(t, err)
 	return result
 }
@@ -135,7 +139,8 @@ func setCookiesByName(header http.Header, name string) []*http.Cookie {
 // TestHandler_Register tests the Register RPC handler.
 func TestHandler_Register(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
-		handler, _, _ := setupTestHandler(t)
+		handler, _, store := setupTestHandler(t)
+		createMockUser(t, store, "test@example.com")
 		req := connect.NewRequest(&authv1.RegisterRequest{
 			Email:    "test@example.com",
 			Password: "SecurePassword123!",
@@ -151,7 +156,8 @@ func TestHandler_Register(t *testing.T) {
 	})
 
 	t.Run("success with cookie", func(t *testing.T) {
-		handler, _, _ := setupCookieHandler(t)
+		handler, _, store := setupCookieHandler(t)
+		createMockUser(t, store, "cookie@example.com")
 		req := connect.NewRequest(&authv1.RegisterRequest{
 			Email:    "cookie@example.com",
 			Password: "SecurePassword123!",
@@ -175,6 +181,7 @@ func TestHandler_Register(t *testing.T) {
 			},
 		}
 		store := newMemStore(t)
+		createMockUser(t, store, "dup@example.com")
 		svc := newServiceWithProvider(t, dupMock, store)
 		handler := NewHandler(svc)
 		ctx := context.Background()
@@ -369,11 +376,10 @@ func TestHandler_Refresh(t *testing.T) {
 // TestHandler_Logout tests the Logout RPC handler.
 func TestHandler_Logout(t *testing.T) {
 	t.Run("token in body", func(t *testing.T) {
-		handler, service, _ := setupTestHandler(t)
+		handler, service, store := setupTestHandler(t)
 		ctx := context.Background()
 
-		result, err := service.Register(ctx, "logout@example.com", "SecurePassword123!")
-		require.NoError(t, err)
+		result := registerUser(t, store, "logout@example.com", "SecurePassword123!", service)
 
 		req := connect.NewRequest(&authv1.LogoutRequest{
 			RefreshToken: result.TokenPair.RefreshToken,
@@ -384,11 +390,10 @@ func TestHandler_Logout(t *testing.T) {
 	})
 
 	t.Run("token in cookie when enabled", func(t *testing.T) {
-		handler, service, _ := setupCookieHandler(t)
+		handler, service, store := setupCookieHandler(t)
 		ctx := context.Background()
 
-		result, err := service.Register(ctx, "logoutcookie@example.com", "SecurePassword123!")
-		require.NoError(t, err)
+		result := registerUser(t, store, "logoutcookie@example.com", "SecurePassword123!", service)
 
 		req := connect.NewRequest(&authv1.LogoutRequest{})
 		req.Header().Set("Cookie", fmt.Sprintf("%s=%s", RefreshTokenCookie, result.TokenPair.RefreshToken))
@@ -407,11 +412,10 @@ func TestHandler_Logout(t *testing.T) {
 	})
 
 	t.Run("clears cookies when enabled", func(t *testing.T) {
-		handler, service, _ := setupCookieHandler(t)
+		handler, service, store := setupCookieHandler(t)
 		ctx := context.Background()
 
-		result, err := service.Register(ctx, "logoutclear@example.com", "SecurePassword123!")
-		require.NoError(t, err)
+		result := registerUser(t, store, "logoutclear@example.com", "SecurePassword123!", service)
 
 		req := connect.NewRequest(&authv1.LogoutRequest{
 			RefreshToken: result.TokenPair.RefreshToken,
@@ -432,11 +436,10 @@ func TestHandler_Logout(t *testing.T) {
 // TestHandler_Verify tests the Verify RPC handler.
 func TestHandler_Verify(t *testing.T) {
 	t.Run("valid bearer token", func(t *testing.T) {
-		handler, service, _ := setupTestHandler(t)
+		handler, service, store := setupTestHandler(t)
 		ctx := context.Background()
 
-		result, err := service.Register(ctx, "verify@example.com", "SecurePassword123!")
-		require.NoError(t, err)
+		result := registerUser(t, store, "verify@example.com", "SecurePassword123!", service)
 
 		req := connect.NewRequest(&authv1.VerifyRequest{})
 		req.Header().Set("Authorization", "Bearer "+result.TokenPair.AccessToken)
@@ -472,11 +475,10 @@ func TestHandler_Verify(t *testing.T) {
 	})
 
 	t.Run("token from cookie when enabled", func(t *testing.T) {
-		handler, service, _ := setupCookieHandler(t)
+		handler, service, store := setupCookieHandler(t)
 		ctx := context.Background()
 
-		result, err := service.Register(ctx, "verifycookie@example.com", "SecurePassword123!")
-		require.NoError(t, err)
+		result := registerUser(t, store, "verifycookie@example.com", "SecurePassword123!", service)
 
 		req := connect.NewRequest(&authv1.VerifyRequest{})
 		req.Header().Set("Cookie", fmt.Sprintf("%s=%s", AccessTokenCookie, result.TokenPair.AccessToken))

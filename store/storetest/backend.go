@@ -47,6 +47,9 @@ func UserOwnership(t *testing.T, newStore NewBackend) {
 	seed := func(t *testing.T, s Backend, userID string) string {
 		t.Helper()
 		patHash := "pat-" + userID
+		require.NoError(t, s.SaveWalletIdentity(ctx, &entity.WalletIdentity{
+			ID: uuid.New().String(), UserID: userID, Chain: "ethereum", Address: "addr-" + userID,
+		}))
 		require.NoError(t, s.SavePasswordHash(ctx, userID, "hash"))
 		require.NoError(t, s.SaveRefreshToken(ctx, &entity.RefreshToken{
 			Hash: "rt-" + userID, UserID: userID, ExpiresAt: now.Add(time.Hour),
@@ -82,6 +85,8 @@ func UserOwnership(t *testing.T, newStore NewBackend) {
 		identities, err := s.ListOAuthIdentities(ctx, userID)
 		require.NoError(t, err)
 		assert.Empty(t, identities)
+		_, err = s.GetWalletIdentity(ctx, "ethereum", "addr-"+userID)
+		assert.ErrorIs(t, err, store.ErrWalletIdentityNotFound)
 
 		// Another user's rows are untouched.
 		_, err = s.GetPasswordHash(ctx, other)
@@ -93,9 +98,11 @@ func UserOwnership(t *testing.T, newStore NewBackend) {
 		identities, err = s.ListOAuthIdentities(ctx, other)
 		require.NoError(t, err)
 		assert.Len(t, identities, 1)
+		_, err = s.GetWalletIdentity(ctx, "ethereum", "addr-"+other)
+		require.NoError(t, err)
 	})
 
-	t.Run("the provider account can sign in again after deletion", func(t *testing.T) {
+	t.Run("deletion frees the provider account for another user", func(t *testing.T) {
 		s := newStore(t)
 		userID := createUser(t, s)
 		seed(t, s, userID)

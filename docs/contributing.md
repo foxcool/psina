@@ -140,9 +140,9 @@ type CredentialStore interface {
 Steps:
 
 1. Create `store/yourstore/` directory
-2. Implement all three interfaces (or subset if applicable)
+2. Implement the ports from `auth/ports.go` it serves (the three above at least)
 3. Use typed errors from `store/errors.go`
-4. Run every `store/storetest` contract against it (see `store/memory/contract_test.go`)
+4. Run every `store/storetest` contract against it (see `store/memory/contract_test.go`; a database-backed store runs them under the `integration` build tag, like `store/postgres/contract_integration_test.go`)
 5. Update documentation
 
 Example: see `store/postgres/` and `store/memory/` for reference.

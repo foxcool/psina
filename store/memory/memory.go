@@ -145,7 +145,7 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	delete(s.users, id)
 	delete(s.passwordHashes, id)
 	// Mirrors the postgres ON DELETE CASCADE. An orphaned identity link would
-	// also lock the account out, since its natural key stays taken.
+	// lock the provider account or wallet out, since its natural key stays taken.
 	maps.DeleteFunc(s.refreshTokens, func(_ string, t *entity.RefreshToken) bool { return t.UserID == id })
 	maps.DeleteFunc(s.pats, func(_ string, p *entity.PersonalAccessToken) bool { return p.UserID == id })
 	maps.DeleteFunc(s.oauthIdentities, func(_ oauthKey, i *entity.OAuthIdentity) bool { return i.UserID == id })

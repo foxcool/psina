@@ -22,8 +22,9 @@ type Provider interface {
 	Register(ctx context.Context, req *entity.RegisterRequest) (*entity.Identity, error)
 }
 
-// UserStore handles user persistence. Every other store's rows belong to a
-// user: writing one for a missing user fails with store.ErrUserNotFound.
+// UserStore handles user persistence. Password hashes, refresh tokens, PATs,
+// OAuth and wallet identities belong to a user: writing one for a missing user
+// fails with store.ErrUserNotFound.
 type UserStore interface {
 	// Create persists a new user.
 	Create(ctx context.Context, user *entity.User) error
@@ -129,8 +130,8 @@ type ChallengeStore interface {
 	SaveChallenge(ctx context.Context, challenge *entity.Challenge) error
 
 	// GetChallenge retrieves a challenge by nonce. Returns
-	// store.ErrChallengeNotFound if absent; expiry is enforced by the caller
-	// (or the store, via store.ErrChallengeExpired).
+	// store.ErrChallengeNotFound if absent and store.ErrChallengeExpired once
+	// ExpiresAt has passed.
 	GetChallenge(ctx context.Context, nonce string) (*entity.Challenge, error)
 
 	// DeleteChallenge removes a challenge by nonce. Used to enforce single-use

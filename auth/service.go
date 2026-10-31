@@ -224,7 +224,7 @@ func (s *Service) Register(ctx context.Context, email, password string) (*Regist
 	// Issue tokens (new session, no parent; fresh users have no roles)
 	tokenPair, err := s.issueTokens(ctx, identity.UserID, identity.Email, nil, "")
 	if err != nil {
-		return nil, fmt.Errorf("issue tokens: %w", err)
+		return nil, &accountError{accountChange{userID: identity.UserID, created: true}, fmt.Errorf("issue tokens: %w", err)}
 	}
 
 	return &RegisterResult{
@@ -250,7 +250,7 @@ func (s *Service) Login(ctx context.Context, email, password string) (*LoginResu
 	// Normalize email (don't expose validation errors for security)
 	email, err := NormalizeEmail(email)
 	if err != nil {
-		return nil, ErrInvalidCredentials
+		return nil, &CredentialsError{Reason: ReasonMalformedCredentials}
 	}
 
 	// Authenticate with provider
@@ -260,6 +260,11 @@ func (s *Service) Login(ctx context.Context, email, password string) (*LoginResu
 	}
 	identity, err := s.localProvider.Authenticate(ctx, req)
 	if errors.Is(err, ErrInvalidCredentials) {
+		// Only the audit reason leaves the service, never a provider's own text.
+		var cerr *CredentialsError
+		if errors.As(err, &cerr) {
+			return nil, cerr
+		}
 		return nil, ErrInvalidCredentials
 	}
 	if err != nil {
@@ -270,13 +275,13 @@ func (s *Service) Login(ctx context.Context, email, password string) (*LoginResu
 	// Load the user to pick up roles for the JWT
 	user, err := s.userStore.GetByID(ctx, identity.UserID)
 	if err != nil {
-		return nil, fmt.Errorf("get user: %w", err)
+		return nil, &accountError{accountChange{userID: identity.UserID}, fmt.Errorf("get user: %w", err)}
 	}
 
 	// Issue tokens (new session, no parent)
 	tokenPair, err := s.issueTokens(ctx, identity.UserID, identity.Email, user.Roles, "")
 	if err != nil {
-		return nil, fmt.Errorf("issue tokens: %w", err)
+		return nil, &accountError{accountChange{userID: identity.UserID}, fmt.Errorf("issue tokens: %w", err)}
 	}
 
 	return &LoginResult{

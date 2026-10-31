@@ -33,10 +33,11 @@ Implemented:
 - Web3 wallet sign-in with SIWE (EIP-4361) on EVM chains
 - JWKS endpoint for gateway validation
 - Traefik ForwardAuth integration
+- Audit events for sign-ins as structured log records ([audit.md](audit.md))
 
 Planned (release order in the [README roadmap](../README.md#roadmap)):
 
-- Rate limiting, metrics, audit logging
+- Rate limiting, metrics, audit events for logout, refresh and PATs
 - WebAuthn/Passkeys, TOTP 2FA
 
 **Non-functional Requirements:**
@@ -251,8 +252,8 @@ is passed to `auth.NewService` (the standalone server wires this from the
 ### 4.5 Client IP Behind a Gateway
 
 Behind a gateway the connection peer is the gateway, not the client. The
-client address goes into the refresh-reuse log today and will key audit
-events and rate limiting:
+client address goes into audit events ([audit.md](audit.md)) and the
+refresh-reuse log, and will key rate limiting:
 
 - **Default: the peer is the client.** `X-Forwarded-For` and `X-Real-IP` are
   ignored: any client can write them.

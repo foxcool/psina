@@ -254,7 +254,7 @@ siblings minted within the leeway.
 - [ ] Use PostgreSQL (`PSINA_DB_URL`)
 - [ ] Enable TLS termination (reverse proxy)
 - [ ] Set up rate limiting at the gateway (built-in limits are on the roadmap)
-- [ ] Configure audit logging
+- [ ] Ship audit events (`audit=true` records on stdout) to a log collector — see [docs/audit.md](docs/audit.md)
 
 ## Gateway Integration
 

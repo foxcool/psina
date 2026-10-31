@@ -38,7 +38,7 @@ make up
 This starts:
 
 - PostgreSQL database
-- Atlas migration (schema applied automatically)
+- Atlas migrations (`migrations/` applied automatically)
 - psina-dev with Air live reload
 
 Watch logs:
@@ -77,7 +77,7 @@ Requires:
 Automatically:
 
 - Spins up PostgreSQL via testcontainers
-- Applies schema
+- Applies schema.hcl (store tests) and replays migrations/ (`TestMigrationsMatchSchema`)
 - Runs integration tests
 - Cleans up
 
@@ -153,7 +153,8 @@ psina/
 │   └── memory/             # Testing/dev store
 ├── testutil/               # Test helpers (testcontainers)
 ├── token/                  # JWT issuer (RS256, JWKS)
-└── schema.hcl              # Database schema (Atlas)
+├── migrations/             # Generated versioned migrations (Atlas)
+└── schema.hcl              # Database schema source (Atlas)
 ```
 
 ## Architecture
@@ -197,23 +198,76 @@ Runs `go generate ./...` for any code generation directives.
 
 ## Database Schema
 
-Using [Atlas](https://atlasgo.io/) for declarative schema management.
+[Atlas](https://atlasgo.io/), versioned. `schema.hcl` is the authoring
+surface; `migrations/` (SQL generated from it, plus `atlas.sum`) is what every
+instance runs. Never hand-write a migration and never apply `schema.hcl` to a
+database: a declarative apply diffs both ways, so deploying an older image
+would drop columns a newer one added, with their data.
 
-Schema defined in `schema.hcl`:
-
-```hcl
-table "users" {
-  column "id" { type = uuid }
-  column "email" { type = varchar(255) }
-  // ...
-}
-```
-
-Schema is applied automatically on `make up`. For manual operations:
+Change the schema:
 
 ```bash
-make schema-apply   # Re-apply schema to database
-make schema-diff    # Show pending changes without applying
+# 1. edit schema.hcl
+make migrate-diff name=add_users_locale   # writes migrations/<ts>_add_users_locale.sql
+make migrate-apply                        # apply to the dev database
+# 2. commit schema.hcl, the new file and atlas.sum together
+```
+
+`TestMigrationsMatchSchema` (`make test-integration`) replays `migrations/`
+into an empty database and fails unless it matches `schema.hcl`.
+
+Other targets (all run atlas in the compose `migrate` service):
+
+```bash
+make migrate-status   # applied / pending
+make migrate-drift    # read-only: database vs schema.hcl
+```
+
+Revisions are recorded in the `atlas` schema, apart from `public`, so
+`public` stays comparable with `schema.hcl`.
+
+### One-time baseline of an existing instance
+
+A database created by the old `atlas schema apply` already has the tables but
+no revision history, so `migrate apply` refuses it ("connected database is not
+clean"). Baseline it once, with the first release that ships `migrations/`
+(its `schema.hcl` equals the baseline migration). The database must be at the
+v0.6.0 schema: an older one shows drift in step 1, so deploy v0.6.0 with its old
+`schema apply` step first. Never pass `--allow-dirty` to skip this.
+
+1. Check that the database matches the baseline. The output must be
+   `Schemas are synced, no changes to be made.`; anything else is drift to
+   resolve first.
+
+   ```bash
+   make migrate-drift
+   # elsewhere, from the release image; dev-url is any empty scratch database:
+   atlas schema diff \
+     --from "postgres://USER:PASS@HOST:5432/DB?sslmode=disable&search_path=public" \
+     --to file:///schema.hcl \
+     --dev-url "postgres://USER:PASS@HOST:5432/atlas_dev?sslmode=disable&search_path=public"
+   ```
+
+2. Record the baseline as applied without running it:
+
+   ```bash
+   make migrate-baseline version=20261031173145
+   # elsewhere:
+   atlas migrate apply --url "postgres://USER:PASS@HOST:5432/DB?sslmode=disable" \
+     --dir file:///migrations --revisions-schema atlas --baseline 20261031173145
+   ```
+
+3. From now on deploy only with `migrate apply` (below). Do not run the old
+   `schema apply` against a baselined database: it drops the `atlas` schema,
+   and the next `migrate apply` refuses the database again (repeat 1–2).
+
+The migrate step every deploy runs:
+
+```bash
+atlas migrate apply \
+  --url "postgres://USER:PASS@HOST:5432/DB?sslmode=disable" \
+  --dir file:///migrations \
+  --revisions-schema atlas
 ```
 
 ## Docker Compose Profiles

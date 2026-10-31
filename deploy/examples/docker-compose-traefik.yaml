@@ -90,23 +90,21 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      # atlas_dev database is used by Atlas as a scratch space for schema diffing
-      test: ["CMD-SHELL", "pg_isready -U psina -d psina && (psql -U psina -d atlas_dev -c 'SELECT 1' > /dev/null 2>&1 || psql -U psina -c 'CREATE DATABASE atlas_dev WITH OWNER psina')"]
+      test: ["CMD-SHELL", "pg_isready -U psina -d psina"]
       interval: 5s
       timeout: 5s
       retries: 5
 
-  # Applies the declarative schema before psina starts
+  # Applies versioned migrations before psina starts
   migrate:
     image: arigaio/atlas:latest
     volumes:
-      - ../../schema.hcl:/schema.hcl:ro
+      - ../../migrations:/migrations:ro
     command: >
-      schema apply
+      migrate apply
       --url "postgres://psina:password@postgres:5432/psina?sslmode=disable"
-      --to "file:///schema.hcl"
-      --dev-url "postgres://psina:password@postgres:5432/atlas_dev?sslmode=disable"
-      --auto-approve
+      --dir "file:///migrations"
+      --revisions-schema atlas
     depends_on:
       postgres:
         condition: service_healthy

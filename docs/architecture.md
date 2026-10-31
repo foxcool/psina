@@ -200,7 +200,7 @@ func (app *Service) DeleteUser(ctx context.Context, targetUserID string) error {
 | JWT signing   | RS256 / ES256   | Asymmetric, gateways validate w/o secret |
 | Password hash | Argon2id        | Current best practice                    |
 | Protobuf      | buf (local)     | OpenAPI 3.1 via connect-openapi          |
-| Schema        | Atlas           | Declarative, type-safe HCL              |
+| Schema        | Atlas           | HCL source, generated versioned SQL      |
 
 ### 4.3 Why Connect RPC
 

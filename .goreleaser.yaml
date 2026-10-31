@@ -67,6 +67,7 @@ dockers:
     use: buildx
     extra_files:
       - schema.hcl
+      - migrations
     build_flag_templates:
       - "--platform=linux/amd64"
       - "--label=org.opencontainers.image.title={{ .ProjectName }}"
@@ -87,6 +88,7 @@ dockers:
     use: buildx
     extra_files:
       - schema.hcl
+      - migrations
     build_flag_templates:
       - "--platform=linux/arm64"
       - "--label=org.opencontainers.image.title={{ .ProjectName }}"

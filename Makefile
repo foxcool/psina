@@ -11,7 +11,7 @@ E2E_COMPOSE=deploy/e2e/compose.yaml
 GOLANGCI_LINT_VERSION=v2.15.0
 GOSEC_VERSION=2.30.0
 
-.PHONY: gen buf-gen go-gen lint sec test test-unit test-integration test-e2e up down clean logs help schema-apply schema-diff
+.PHONY: gen buf-gen go-gen lint sec test test-unit test-integration test-e2e up down clean logs help migrate-diff migrate-apply migrate-status migrate-baseline migrate-drift
 
 # Default target
 help:
@@ -25,8 +25,11 @@ help:
 	@echo "  test-unit         - Run unit tests only"
 	@echo "  test-integration  - Run integration tests (requires Atlas CLI)"
 	@echo "  test-e2e          - Run e2e gateway tests (Traefik + KrakenD stand)"
-	@echo "  schema-apply      - Apply schema to database (declarative)"
-	@echo "  schema-diff       - Show schema diff without applying"
+	@echo "  migrate-diff      - Generate a migration from schema.hcl (name=<what_changed>)"
+	@echo "  migrate-apply     - Apply pending migrations to the dev database"
+	@echo "  migrate-status    - Show applied and pending migrations"
+	@echo "  migrate-baseline  - Mark an existing database as at a version (version=<v>)"
+	@echo "  migrate-drift     - Show how the dev database differs from schema.hcl (read-only)"
 	@echo "  up                - Start development environment"
 	@echo "  down              - Stop and remove containers"
 	@echo "  clean             - Stop and remove containers + volumes"
@@ -93,19 +96,52 @@ test-e2e:
 	$(E2E_PROJECT) down -v --remove-orphans ; \
 	exit $$status
 
-# Atlas: apply schema declaratively (runs inside compose network)
-schema-apply:
-	@echo "Applying schema to database..."
-	$(COMPOSE) -f $(COMPOSE_FILE) --profile default run --rm migrate
+# Atlas: schema.hcl is the authoring surface, migrations/ is what instances
+# run (see AGENTS.md, Database). Every target runs atlas in the compose
+# migrate service against the compose postgres. Revisions live in the
+# separate "atlas" schema so public stays comparable with schema.hcl.
+MIGRATE=$(COMPOSE) -f $(COMPOSE_FILE) --profile default run --rm migrate
+# Only migrate-diff writes: the service mounts migrations/ read-only.
+MIGRATE_RW=$(COMPOSE) -f $(COMPOSE_FILE) --profile default run --rm -v "$(CURDIR)/migrations:/migrations-rw" migrate
+MIGRATE_DB_URL=postgres://psina:password@postgres:5432/psina?sslmode=disable
+MIGRATE_DEV_URL=postgres://psina:password@postgres:5432/atlas_dev?sslmode=disable
 
-# Atlas: show schema diff (runs inside compose network)
-schema-diff:
-	@echo "Showing schema diff..."
-	$(COMPOSE) -f $(COMPOSE_FILE) --profile default run --rm migrate \
-		schema diff \
-		--from "postgres://psina:password@postgres:5432/psina?sslmode=disable" \
+# Generate the next migration from schema.hcl: make migrate-diff name=add_x
+migrate-diff:
+	@test -n "$(name)" || (echo "usage: make migrate-diff name=<what_changed>"; exit 1)
+	$(MIGRATE_RW) migrate diff "$(name)" \
+		--dir "file:///migrations-rw" \
 		--to "file:///schema.hcl" \
-		--dev-url "postgres://psina:password@postgres:5432/atlas_dev?sslmode=disable"
+		--dev-url "$(MIGRATE_DEV_URL)"
+
+migrate-apply:
+	$(MIGRATE) migrate apply \
+		--url "$(MIGRATE_DB_URL)" \
+		--dir "file:///migrations" \
+		--revisions-schema atlas
+
+migrate-status:
+	$(MIGRATE) migrate status \
+		--url "$(MIGRATE_DB_URL)" \
+		--dir "file:///migrations" \
+		--revisions-schema atlas
+
+# Once per database that predates migrations/, after migrate-drift is empty:
+# records <version> as applied without running it.
+migrate-baseline:
+	@test -n "$(version)" || (echo "usage: make migrate-baseline version=<v>"; exit 1)
+	$(MIGRATE) migrate apply \
+		--url "$(MIGRATE_DB_URL)" \
+		--dir "file:///migrations" \
+		--revisions-schema atlas \
+		--baseline "$(version)"
+
+# Read-only: what the database lacks or has beyond schema.hcl.
+migrate-drift:
+	$(MIGRATE) schema diff \
+		--from "$(MIGRATE_DB_URL)&search_path=public" \
+		--to "file:///schema.hcl" \
+		--dev-url "$(MIGRATE_DEV_URL)&search_path=public"
 
 # Run default/development profile services in detached mode
 up:

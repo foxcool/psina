@@ -31,7 +31,8 @@ store/
   memory/            # dev/test in-memory store
   storetest/         # behavioural contract tests every backend runs
 testutil/            # testcontainers helpers for integration tests
-schema.hcl           # Atlas declarative schema — edit here, then make schema-apply
+schema.hcl           # Atlas schema — edit here, then make migrate-diff
+migrations/          # generated versioned migrations + atlas.sum — what instances run
 deploy/              # Docker Compose files
 docs/                # architecture, development, contributing, audit event catalog
 ```
@@ -104,8 +105,11 @@ make test-integration  # integration tests, requires Docker
 make test-e2e          # gateway e2e stand (Traefik + KrakenD), requires Docker
 
 make gen               # buf generate + go generate
-make schema-apply      # Atlas declarative apply (via Docker Compose)
-make schema-diff       # show diff without applying
+make migrate-diff name=<what_changed>  # generate a migration from schema.hcl
+make migrate-apply     # apply pending migrations to the dev database
+make migrate-status    # applied / pending migrations
+make migrate-drift     # read-only: dev database vs schema.hcl
+make migrate-baseline version=<v>  # once per pre-existing database, see Database
 
 make up                # start dev environment
 make down              # stop containers
@@ -222,7 +226,7 @@ DefaultQueryTimeout = 5000  // milliseconds
 - **New wallet chain** → implement `wallet.WalletProvider` (`provider/wallet/provider.go`), register it with a `wallet.Dispatcher`, place in `provider/wallet/<chain>/`
 - **New storage backend** → implement `UserStore`/`TokenStore`/`CredentialStore`/`PATStore`, place in `store/<name>/`, run the `store/storetest` contracts against it. Optional stores: `OAuthIdentityStore` and `ChallengeStore` (OAuth; both backends implement them), `WalletIdentityStore` (wallet sign-in via `auth.WithWallet`; both backends implement it).
 - **Store errors** → return typed errors from `store/errors.go`; handler maps them to Connect codes via `errors.Is()`
-- **Schema changes** → edit `schema.hcl`, then `make schema-apply` — never write raw SQL migrations
+- **Schema changes** → edit `schema.hcl`, then `make migrate-diff name=<what_changed>` and commit both — see Database
 - **Proto changes** → edit `api/auth/v1/auth.proto`, then `make gen` — never edit the generated files in `api/auth/v1/` directly
 - **Audit events** → emitted by `Handler` (it has the client IP), one slog record each with
   `audit=true`; catalog and field contract in `docs/audit.md` — update it with any new event,
@@ -232,6 +236,22 @@ DefaultQueryTimeout = 5000  // milliseconds
   app's job). psina has no role-management API and does not derive roles from email —
   assign them directly in the DB (`UPDATE users SET roles = '{admin}' WHERE email = ...`).
   Bootstrap the first admin this way.
+
+## Database
+
+- `schema.hcl` is the authoring surface; `migrations/` is what instances run
+  (`atlas migrate apply --revisions-schema atlas`, in the compose `migrate` service
+  and the release image). Revisions live in the separate `atlas` schema so `public`
+  stays comparable with `schema.hcl`.
+- Change the schema: edit `schema.hcl`, `make migrate-diff name=<what_changed>`,
+  commit the new file and `atlas.sum` together. `TestMigrationsMatchSchema`
+  (integration) fails when the two disagree.
+- Never hand-write or edit a migration (atlas.sum rejects it), and never apply
+  `schema.hcl` to a database that holds data (`atlas schema apply`): a declarative
+  apply diffs both ways, so an older image would drop columns a newer one added, with
+  their data. Throwaway test containers (`testutil`) are the only exception.
+- A database created before `migrations/` existed is baselined once — procedure in
+  `docs/development.md`, Database Schema.
 
 ## Error Handling
 

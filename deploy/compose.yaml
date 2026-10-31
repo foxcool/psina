@@ -50,7 +50,8 @@ services:
       - default
 
   # Database needed by the psina application for storing data
-  # Also hosts atlas_dev database used by Atlas for schema diffing (created via healthcheck)
+  # Also hosts atlas_dev, the scratch database make migrate-diff and
+  # migrate-drift need (created via healthcheck)
   postgres:
     image: postgres:17-alpine
     environment:
@@ -65,18 +66,20 @@ services:
       timeout: 5s
       retries: 5
 
-  # Applies schema migrations before the app starts
+  # Applies versioned migrations before the app starts. Never `schema apply`:
+  # it diffs both ways and would drop columns a newer image added.
+  # Read-only here; make migrate-diff mounts it writable at /migrations-rw.
   migrate:
     profiles: ["default", "dev", "test"]
     image: arigaio/atlas:latest
     volumes:
       - ../schema.hcl:/schema.hcl:ro
+      - ../migrations:/migrations:ro
     command: >
-      schema apply
+      migrate apply
       --url "postgres://psina:password@postgres:5432/psina?sslmode=disable"
-      --to "file:///schema.hcl"
-      --dev-url "postgres://psina:password@postgres:5432/atlas_dev?sslmode=disable"
-      --auto-approve
+      --dir "file:///migrations"
+      --revisions-schema atlas
     depends_on:
       postgres:
         condition: service_healthy

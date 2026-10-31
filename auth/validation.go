@@ -11,12 +11,12 @@ import (
 const (
 	MinPasswordLength = 8
 	MaxPasswordLength = 128
-
-	// MaxEmailLength is the RFC 5321 path limit (254 octets), which also fits
-	// the varchar(255) email columns; a longer value would fail the insert
-	// as a storage error instead of a rejected input.
-	MaxEmailLength = 254
 )
+
+// MaxEmailLength is the RFC 5321 path limit (254 octets), which also fits
+// the varchar(255) email columns; a longer value would fail the insert
+// as a storage error instead of a rejected input.
+const MaxEmailLength = 254
 
 // ErrPasswordTooShort is returned when password is shorter than MinPasswordLength.
 var ErrPasswordTooShort = errors.New("password must be at least 8 characters")

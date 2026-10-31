@@ -242,8 +242,9 @@ DefaultQueryTimeout = 5000  // milliseconds
   commit the new file and `atlas.sum` together. `TestMigrationsMatchSchema`
   (integration) fails when the two disagree.
 - Never hand-write or edit a migration (atlas.sum rejects it), and never apply
-  `schema.hcl` to a database (`atlas schema apply`): a declarative apply diffs both
-  ways, so an older image would drop columns a newer one added, with their data.
+  `schema.hcl` to a database that holds data (`atlas schema apply`): a declarative
+  apply diffs both ways, so an older image would drop columns a newer one added, with
+  their data. Throwaway test containers (`testutil`) are the only exception.
 - A database created before `migrations/` existed is baselined once — procedure in
   `docs/development.md`, Database Schema.
 

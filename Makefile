@@ -101,14 +101,16 @@ test-e2e:
 # migrate service against the compose postgres. Revisions live in the
 # separate "atlas" schema so public stays comparable with schema.hcl.
 MIGRATE=$(COMPOSE) -f $(COMPOSE_FILE) --profile default run --rm migrate
+# Only migrate-diff writes: the service mounts migrations/ read-only.
+MIGRATE_RW=$(COMPOSE) -f $(COMPOSE_FILE) --profile default run --rm -v "$(CURDIR)/migrations:/migrations-rw" migrate
 MIGRATE_DB_URL=postgres://psina:password@postgres:5432/psina?sslmode=disable
 MIGRATE_DEV_URL=postgres://psina:password@postgres:5432/atlas_dev?sslmode=disable
 
 # Generate the next migration from schema.hcl: make migrate-diff name=add_x
 migrate-diff:
 	@test -n "$(name)" || (echo "usage: make migrate-diff name=<what_changed>"; exit 1)
-	$(MIGRATE) migrate diff $(name) \
-		--dir "file:///migrations" \
+	$(MIGRATE_RW) migrate diff "$(name)" \
+		--dir "file:///migrations-rw" \
 		--to "file:///schema.hcl" \
 		--dev-url "$(MIGRATE_DEV_URL)"
 
@@ -132,7 +134,7 @@ migrate-baseline:
 		--url "$(MIGRATE_DB_URL)" \
 		--dir "file:///migrations" \
 		--revisions-schema atlas \
-		--baseline $(version)
+		--baseline "$(version)"
 
 # Read-only: what the database lacks or has beyond schema.hcl.
 migrate-drift:

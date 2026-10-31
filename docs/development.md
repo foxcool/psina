@@ -230,7 +230,10 @@ Revisions are recorded in the `atlas` schema, apart from `public`, so
 
 A database created by the old `atlas schema apply` already has the tables but
 no revision history, so `migrate apply` refuses it ("connected database is not
-clean"). Baseline it once, from the image that introduces `migrations/`:
+clean"). Baseline it once, with the first release that ships `migrations/`
+(its `schema.hcl` equals the baseline migration). The database must be at the
+v0.6.0 schema: an older one shows drift in step 1, so deploy v0.6.0 with its old
+`schema apply` step first. Never pass `--allow-dirty` to skip this.
 
 1. Check that the database matches the baseline. The output must be
    `Schemas are synced, no changes to be made.`; anything else is drift to
@@ -238,7 +241,7 @@ clean"). Baseline it once, from the image that introduces `migrations/`:
 
    ```bash
    make migrate-drift
-   # elsewhere, from the release image:
+   # elsewhere, from the release image; dev-url is any empty scratch database:
    atlas schema diff \
      --from "postgres://USER:PASS@HOST:5432/DB?sslmode=disable&search_path=public" \
      --to file:///schema.hcl \

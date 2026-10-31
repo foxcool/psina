@@ -66,13 +66,13 @@ services:
 
   # Applies versioned migrations before the app starts. Never `schema apply`:
   # it diffs both ways and would drop columns a newer image added.
-  # migrations/ is writable so make migrate-diff can write new files.
+  # Read-only here; make migrate-diff mounts it writable at /migrations-rw.
   migrate:
     profiles: ["default", "dev", "test"]
     image: arigaio/atlas:latest
     volumes:
       - ../schema.hcl:/schema.hcl:ro
-      - ../migrations:/migrations
+      - ../migrations:/migrations:ro
     command: >
       migrate apply
       --url "postgres://psina:password@postgres:5432/psina?sslmode=disable"

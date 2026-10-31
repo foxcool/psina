@@ -19,6 +19,10 @@ var (
 	// ErrTokenExpired indicates the refresh token exists but has expired.
 	ErrTokenExpired = errors.New("refresh token expired")
 
+	// ErrPATExists indicates a personal access token with the same hash is
+	// already stored.
+	ErrPATExists = errors.New("personal access token already exists")
+
 	// ErrCredentialNotFound indicates no credentials exist for the user.
 	ErrCredentialNotFound = errors.New("credential not found")
 

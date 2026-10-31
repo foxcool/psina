@@ -22,7 +22,8 @@ type Provider interface {
 	Register(ctx context.Context, req *entity.RegisterRequest) (*entity.Identity, error)
 }
 
-// UserStore handles user persistence.
+// UserStore handles user persistence. Every other store's rows belong to a
+// user: writing one for a missing user fails with store.ErrUserNotFound.
 type UserStore interface {
 	// Create persists a new user.
 	Create(ctx context.Context, user *entity.User) error
@@ -33,7 +34,8 @@ type UserStore interface {
 	// GetByEmail retrieves a user by email address.
 	GetByEmail(ctx context.Context, email string) (*entity.User, error)
 
-	// Delete removes a user by ID.
+	// Delete removes a user by ID together with everything it owns: password
+	// hash, refresh tokens, PATs, OAuth and wallet identities.
 	Delete(ctx context.Context, id string) error
 }
 
@@ -71,13 +73,15 @@ type TokenStore interface {
 
 // PATStore handles personal access token persistence.
 type PATStore interface {
-	// SavePAT persists a personal access token.
+	// SavePAT persists a personal access token. A hash already stored is
+	// refused with store.ErrPATExists.
 	SavePAT(ctx context.Context, pat *entity.PersonalAccessToken) error
 
 	// GetPAT retrieves a personal access token by its hash.
 	GetPAT(ctx context.Context, hash string) (*entity.PersonalAccessToken, error)
 
-	// ListPATs returns all personal access tokens for a user.
+	// ListPATs returns all personal access tokens for a user, newest
+	// (created_at DESC) first.
 	ListPATs(ctx context.Context, userID string) ([]*entity.PersonalAccessToken, error)
 
 	// DeletePAT removes a token by its UUID, scoped to its owner to prevent
@@ -98,7 +102,8 @@ type OAuthIdentityStore interface {
 	// Returns store.ErrOAuthIdentityNotFound if none matches.
 	GetOAuthIdentity(ctx context.Context, provider, externalID string) (*entity.OAuthIdentity, error)
 
-	// ListOAuthIdentities returns all OAuth identities linked to a user.
+	// ListOAuthIdentities returns all OAuth identities linked to a user,
+	// newest (created_at DESC) first.
 	ListOAuthIdentities(ctx context.Context, userID string) ([]*entity.OAuthIdentity, error)
 }
 
@@ -112,7 +117,8 @@ type WalletIdentityStore interface {
 	// Returns store.ErrWalletIdentityNotFound if none matches.
 	GetWalletIdentity(ctx context.Context, chain, address string) (*entity.WalletIdentity, error)
 
-	// ListWalletIdentities returns all wallet identities linked to a user.
+	// ListWalletIdentities returns all wallet identities linked to a user,
+	// newest (created_at DESC) first.
 	ListWalletIdentities(ctx context.Context, userID string) ([]*entity.WalletIdentity, error)
 }
 

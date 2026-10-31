@@ -13,9 +13,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Challenges checks the ChallengeStore round trip and single-use deletion.
-// Expiry is backend-specific (memory deletes on read, postgres on the next
-// save) and stays in each backend's own tests.
+// Challenges checks the ChallengeStore round trip, single-use deletion and
+// expiry. When an expired row is removed is backend-specific (memory deletes
+// on read, postgres on the next save) and stays in each backend's own tests.
 func Challenges(t *testing.T, newStore func(t *testing.T) auth.ChallengeStore) {
 	ctx := context.Background()
 
@@ -66,5 +66,16 @@ func Challenges(t *testing.T, newStore func(t *testing.T) auth.ChallengeStore) {
 
 		err = s.DeleteChallenge(ctx, "single-use")
 		assert.True(t, errors.Is(err, store.ErrChallengeNotFound), "deleting twice: expected ErrChallengeNotFound, got: %v", err)
+	})
+
+	t.Run("expired", func(t *testing.T) {
+		s := newStore(t)
+		require.NoError(t, s.SaveChallenge(ctx, &entity.Challenge{
+			Nonce:     "expired",
+			ExpiresAt: time.Now().Add(-time.Second),
+		}))
+
+		_, err := s.GetChallenge(ctx, "expired")
+		assert.ErrorIs(t, err, store.ErrChallengeExpired)
 	})
 }

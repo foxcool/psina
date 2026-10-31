@@ -142,7 +142,7 @@ Steps:
 1. Create `store/yourstore/` directory
 2. Implement all three interfaces (or subset if applicable)
 3. Use typed errors from `store/errors.go`
-4. Add integration tests with real database
+4. Run every `store/storetest` contract against it (see `store/memory/contract_test.go`)
 5. Update documentation
 
 Example: see `store/postgres/` and `store/memory/` for reference.

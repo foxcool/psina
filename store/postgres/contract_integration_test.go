@@ -33,3 +33,10 @@ func TestContract_Users(t *testing.T) {
 func TestContract_WalletIdentities(t *testing.T) {
 	storetest.WalletIdentities(t, func(t *testing.T) storetest.WalletStore { return getTestStore(t) })
 }
+
+func newBackend(t *testing.T) storetest.Backend { return getTestStore(t) }
+
+func TestContract_Credentials(t *testing.T)     { storetest.Credentials(t, newBackend) }
+func TestContract_PATs(t *testing.T)            { storetest.PATs(t, newBackend) }
+func TestContract_OAuthIdentities(t *testing.T) { storetest.OAuthIdentities(t, newBackend) }
+func TestContract_UserOwnership(t *testing.T)   { storetest.UserOwnership(t, newBackend) }

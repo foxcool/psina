@@ -26,8 +26,9 @@ var (
 	ErrInvalidCredentials    = errors.New("invalid credentials")
 	ErrUserExists            = errors.New("user already exists")
 	ErrTokenRevoked          = errors.New("refresh token revoked")
-	ErrTokenExpired          = errors.New("refresh token expired")
+	ErrTokenExpired          = errors.New("token expired") // refresh token or PAT
 	ErrTokenReuse            = errors.New("refresh token reuse detected")
+	ErrPATNotFound           = errors.New("personal access token not found")
 	ErrPATDisabled           = errors.New("personal access tokens are disabled")
 	ErrPATLimitReached       = errors.New("personal access token limit reached")
 	ErrPATNameRequired       = errors.New("personal access token name is required")
@@ -489,16 +490,6 @@ func (s *Service) CreatePAT(ctx context.Context, userID, name string, scopes []s
 		return nil, fmt.Errorf("%w: expiry is required (max ttl %s)", ErrPATExpiryInvalid, s.patConfig.MaxTTL)
 	}
 
-	if s.patConfig.MaxPerUser > 0 {
-		existing, err := s.patStore.ListPATs(ctx, userID)
-		if err != nil {
-			return nil, fmt.Errorf("list pats: %w", err)
-		}
-		if len(existing) >= s.patConfig.MaxPerUser {
-			return nil, ErrPATLimitReached
-		}
-	}
-
 	plaintext, hash, err := token.GeneratePAT()
 	if err != nil {
 		return nil, fmt.Errorf("generate pat: %w", err)
@@ -513,7 +504,17 @@ func (s *Service) CreatePAT(ctx context.Context, userID, name string, scopes []s
 		ExpiresAt: expiresAt,
 		CreatedAt: now,
 	}
-	if err := s.patStore.SavePAT(ctx, pat); err != nil {
+	// The cap is checked by the store, atomically with the insert: counting
+	// here first would let parallel creates all pass at limit-1.
+	if s.patConfig.MaxPerUser > 0 {
+		err = s.patStore.SavePATLimited(ctx, pat, s.patConfig.MaxPerUser, now)
+	} else {
+		err = s.patStore.SavePAT(ctx, pat)
+	}
+	if errors.Is(err, store.ErrPATLimitReached) {
+		return nil, ErrPATLimitReached
+	}
+	if err != nil {
 		return nil, fmt.Errorf("save pat: %w", err)
 	}
 
@@ -540,9 +541,13 @@ func (s *Service) RevokePAT(ctx context.Context, userID, id string) error {
 	// canonical form.
 	parsed, err := uuid.Parse(id)
 	if err != nil {
-		return fmt.Errorf("%w: %s", store.ErrTokenNotFound, id)
+		return fmt.Errorf("%w: %s", ErrPATNotFound, id)
 	}
-	return s.patStore.DeletePAT(ctx, userID, parsed.String())
+	err = s.patStore.DeletePAT(ctx, userID, parsed.String())
+	if errors.Is(err, store.ErrTokenNotFound) {
+		return fmt.Errorf("%w: %s", ErrPATNotFound, id)
+	}
+	return err
 }
 
 // JWKS returns the JSON Web Key Set for public key verification.

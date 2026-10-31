@@ -10,11 +10,14 @@ var (
 	// ErrUserExists indicates a user with the given email already exists.
 	ErrUserExists = errors.New("user already exists")
 
-	// ErrTokenNotFound indicates the requested refresh token does not exist.
-	ErrTokenNotFound = errors.New("refresh token not found")
+	// ErrTokenNotFound indicates the requested token does not exist. It covers
+	// both refresh tokens and personal access tokens (also a PAT that exists
+	// but belongs to another user, on delete).
+	ErrTokenNotFound = errors.New("token not found")
 
-	// ErrTokenRevoked indicates the refresh token was already revoked or rotated.
-	ErrTokenRevoked = errors.New("refresh token revoked")
+	// ErrTokenRevoked indicates the refresh token can no longer be used: it was
+	// revoked or rotated, or its family root is missing or its session ended.
+	ErrTokenRevoked = errors.New("refresh token revoked or session ended")
 
 	// ErrTokenExpired indicates the refresh token exists but has expired.
 	ErrTokenExpired = errors.New("refresh token expired")
@@ -22,6 +25,10 @@ var (
 	// ErrPATExists indicates a personal access token with the same hash is
 	// already stored.
 	ErrPATExists = errors.New("personal access token already exists")
+
+	// ErrPATLimitReached indicates the user already holds the maximum number of
+	// unexpired personal access tokens.
+	ErrPATLimitReached = errors.New("personal access token limit reached")
 
 	// ErrCredentialNotFound indicates no credentials exist for the user.
 	ErrCredentialNotFound = errors.New("credential not found")

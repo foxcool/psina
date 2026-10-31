@@ -79,7 +79,14 @@ type PATStore interface {
 	// refused with store.ErrPATExists.
 	SavePAT(ctx context.Context, pat *entity.PersonalAccessToken) error
 
-	// GetPAT retrieves a personal access token by its hash.
+	// SavePATLimited is SavePAT with a per-user cap: it refuses the token with
+	// store.ErrPATLimitReached when the user already holds max tokens that
+	// have not expired at now. The count and the insert are atomic per user,
+	// so parallel calls cannot overshoot max. Callers pass max > 0.
+	SavePATLimited(ctx context.Context, pat *entity.PersonalAccessToken, max int, now time.Time) error
+
+	// GetPAT retrieves a personal access token by its hash; a missing one is
+	// store.ErrTokenNotFound.
 	GetPAT(ctx context.Context, hash string) (*entity.PersonalAccessToken, error)
 
 	// ListPATs returns all personal access tokens for a user, newest
@@ -87,7 +94,7 @@ type PATStore interface {
 	ListPATs(ctx context.Context, userID string) ([]*entity.PersonalAccessToken, error)
 
 	// DeletePAT removes a token by its UUID, scoped to its owner to prevent
-	// cross-user deletion.
+	// cross-user deletion. No such token for this owner is store.ErrTokenNotFound.
 	DeletePAT(ctx context.Context, userID, id string) error
 
 	// TouchPAT records last-used time. Best-effort; callers may ignore the error.

@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/foxcool/psina/entity"
-	psinastore "github.com/foxcool/psina/store"
 	"github.com/foxcool/psina/store/memory"
 	"github.com/foxcool/psina/token"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -237,7 +237,17 @@ func TestService_RevokePAT_NonUUID(t *testing.T) {
 	service := NewService(memStore, memStore, issuer, []Provider{&mockProvider{}}, WithPAT(broken, PATConfig{}))
 
 	err = service.RevokePAT(context.Background(), "u1", "not-a-uuid")
-	assert.ErrorIs(t, err, psinastore.ErrTokenNotFound)
+	assert.ErrorIs(t, err, ErrPATNotFound)
+}
+
+// A well-formed id the owner does not have is the same not-found answer, so
+// the handler maps one sentinel whatever the store reports.
+func TestService_RevokePAT_Unknown(t *testing.T) {
+	service, store := setupTestService(t)
+	user := seedUser(t, store)
+
+	err := service.RevokePAT(context.Background(), user.ID, uuid.NewString())
+	assert.ErrorIs(t, err, ErrPATNotFound)
 }
 
 // Non-canonical UUID spellings reach the store in canonical form: pgx refuses

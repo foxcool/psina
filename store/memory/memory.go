@@ -278,6 +278,11 @@ func (s *Store) SavePAT(ctx context.Context, pat *entity.PersonalAccessToken) er
 	if err := s.requireUser(pat.UserID); err != nil {
 		return err
 	}
+	return s.savePATLocked(pat)
+}
+
+// savePATLocked stores pat; the caller holds s.mu and has checked the user.
+func (s *Store) savePATLocked(pat *entity.PersonalAccessToken) error {
 	// Overwriting would hand an existing token to another owner.
 	if _, exists := s.pats[pat.Hash]; exists {
 		return store.ErrPATExists
@@ -289,6 +294,27 @@ func (s *Store) SavePAT(ctx context.Context, pat *entity.PersonalAccessToken) er
 	s.pats[pat.Hash] = &stored
 
 	return nil
+}
+
+// SavePATLimited persists a token unless the user already holds max that are
+// not expired at now. The store mutex makes the count and insert atomic.
+func (s *Store) SavePATLimited(ctx context.Context, pat *entity.PersonalAccessToken, max int, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := s.requireUser(pat.UserID); err != nil {
+		return err
+	}
+	live := 0
+	for _, existing := range s.pats {
+		if existing.UserID == pat.UserID && (existing.ExpiresAt == nil || existing.ExpiresAt.After(now)) {
+			live++
+		}
+	}
+	if live >= max {
+		return store.ErrPATLimitReached
+	}
+	return s.savePATLocked(pat)
 }
 
 // GetPAT retrieves a personal access token by its hash. Returns a copy so

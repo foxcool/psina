@@ -1,6 +1,7 @@
 package auth_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/foxcool/psina/auth"
@@ -58,6 +59,12 @@ func TestValidatePassword(t *testing.T) {
 	}
 }
 
+// emailOfLen builds a valid address of exactly n bytes.
+func emailOfLen(n int) string {
+	const suffix = "@example.com"
+	return strings.Repeat("a", n-len(suffix)) + suffix
+}
+
 func TestNormalizeEmail(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -70,6 +77,16 @@ func TestNormalizeEmail(t *testing.T) {
 			email:   "user@example.com",
 			want:    "user@example.com",
 			wantErr: nil,
+		},
+		{
+			name:  "max length",
+			email: emailOfLen(auth.MaxEmailLength),
+			want:  emailOfLen(auth.MaxEmailLength),
+		},
+		{
+			name:    "over max length",
+			email:   emailOfLen(auth.MaxEmailLength + 1),
+			wantErr: auth.ErrInvalidEmail,
 		},
 		{
 			name:    "nul byte",

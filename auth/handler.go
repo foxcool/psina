@@ -14,7 +14,6 @@ import (
 	"github.com/foxcool/psina/api/auth/v1/authv1connect"
 	"github.com/foxcool/psina/entity"
 	"github.com/foxcool/psina/provider/oauth"
-	"github.com/foxcool/psina/store"
 	"github.com/foxcool/psina/token"
 )
 
@@ -530,9 +529,6 @@ func (h *Handler) RevokePersonalAccessToken(
 	}
 
 	if err := h.service.RevokePAT(ctx, userID, req.Msg.Id); err != nil {
-		if errors.Is(err, store.ErrTokenNotFound) {
-			return nil, connect.NewError(connect.CodeNotFound, errors.New("token not found"))
-		}
 		return nil, patErrorToConnect(ctx, "revoke pat", err)
 	}
 
@@ -585,6 +581,8 @@ func patErrorToConnect(ctx context.Context, op string, err error) *connect.Error
 		return connect.NewError(connect.CodeUnimplemented, err)
 	case errors.Is(err, ErrPATNameRequired), errors.Is(err, ErrPATNameTooLong), errors.Is(err, ErrPATExpiryInvalid):
 		return connect.NewError(connect.CodeInvalidArgument, err)
+	case errors.Is(err, ErrPATNotFound):
+		return connect.NewError(connect.CodeNotFound, errors.New("token not found"))
 	case errors.Is(err, ErrPATLimitReached):
 		return connect.NewError(connect.CodeResourceExhausted, err)
 	default:

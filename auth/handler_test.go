@@ -525,8 +525,8 @@ func TestHandler_Verify(t *testing.T) {
 var errStorage = errors.New("pgx: connection refused")
 
 // brokenStore fails storage calls with errStorage: RotateRefreshToken
-// (Refresh), GetRefreshToken (Logout), GetPAT (PAT verify), ListPATs (list and
-// create PAT) and DeletePAT (revoke PAT). Everything else is the memory store.
+// (Refresh), GetRefreshToken (Logout), GetPAT (PAT verify), ListPATs (list),
+// SavePATLimited (create PAT) and DeletePAT (revoke PAT). Everything else is the memory store.
 type brokenStore struct{ *memory.Store }
 
 func (brokenStore) GetRefreshToken(context.Context, string) (*entity.RefreshToken, error) {
@@ -535,6 +535,10 @@ func (brokenStore) GetRefreshToken(context.Context, string) (*entity.RefreshToke
 
 func (brokenStore) ListPATs(context.Context, string) ([]*entity.PersonalAccessToken, error) {
 	return nil, errStorage
+}
+
+func (brokenStore) SavePATLimited(context.Context, *entity.PersonalAccessToken, int, time.Time) error {
+	return errStorage
 }
 
 func (brokenStore) DeletePAT(context.Context, string, string) error {

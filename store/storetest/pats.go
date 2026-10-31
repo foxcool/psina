@@ -135,4 +135,64 @@ func PATs(t *testing.T, newStore NewBackend) {
 		_, err = s.GetPAT(ctx, "h1")
 		assert.ErrorIs(t, err, store.ErrTokenNotFound)
 	})
+
+	t.Run("limited save counts only unexpired tokens", func(t *testing.T) {
+		s := newStore(t)
+		userID, other := createUser(t, s), createUser(t, s)
+		past, future := now.Add(-time.Hour), now.Add(time.Hour)
+		saved := func(hash string, expires *time.Time) error {
+			pat := newPAT(userID, hash)
+			pat.ExpiresAt = expires
+			return s.SavePATLimited(ctx, pat, 2, now)
+		}
+
+		require.NoError(t, s.SavePAT(ctx, &entity.PersonalAccessToken{
+			ID: uuid.New().String(), Hash: "expired", UserID: userID, ExpiresAt: &past,
+		}))
+		require.NoError(t, saved("forever", nil))
+		require.NoError(t, saved("later", &future))
+		assert.ErrorIs(t, saved("third", nil), store.ErrPATLimitReached)
+
+		// The user's expired tokens are pruned; the live ones stay.
+		_, getErr := s.GetPAT(ctx, "expired")
+		assert.ErrorIs(t, getErr, store.ErrTokenNotFound)
+		list, listErr := s.ListPATs(ctx, userID)
+		require.NoError(t, listErr)
+		assert.Len(t, list, 2)
+
+		// The refused token is not stored, and another user has its own budget.
+		_, err := s.GetPAT(ctx, "third")
+		assert.ErrorIs(t, err, store.ErrTokenNotFound)
+		require.NoError(t, s.SavePATLimited(ctx, newPAT(other, "o1"), 2, now))
+	})
+
+	// Verification rejects a PAT only once now is after its expiry, so the
+	// prune must keep one expiring at exactly now.
+	t.Run("limited save prunes strictly after expiry", func(t *testing.T) {
+		s := newStore(t)
+		userID := createUser(t, s)
+		at, before := now, now.Add(-time.Microsecond)
+		for hash, expires := range map[string]*time.Time{"at": &at, "before": &before} {
+			require.NoError(t, s.SavePAT(ctx, &entity.PersonalAccessToken{
+				ID: uuid.New().String(), Hash: hash, UserID: userID, ExpiresAt: expires,
+			}))
+		}
+
+		// "at" still holds a slot, so a cap of one refuses the newcomer.
+		assert.ErrorIs(t, s.SavePATLimited(ctx, newPAT(userID, "new"), 1, now), store.ErrPATLimitReached)
+
+		_, err := s.GetPAT(ctx, "at")
+		require.NoError(t, err, "expiring exactly at now is not expired")
+		_, err = s.GetPAT(ctx, "before")
+		assert.ErrorIs(t, err, store.ErrTokenNotFound, "expired before now is pruned")
+	})
+
+	t.Run("limited save keeps the save rules", func(t *testing.T) {
+		s := newStore(t)
+		userID := createUser(t, s)
+		require.NoError(t, s.SavePATLimited(ctx, newPAT(userID, "h1"), 5, now))
+
+		assert.ErrorIs(t, s.SavePATLimited(ctx, newPAT(userID, "h1"), 5, now), store.ErrPATExists)
+		assert.ErrorIs(t, s.SavePATLimited(ctx, newPAT(uuid.New().String(), "h2"), 5, now), store.ErrUserNotFound)
+	})
 }

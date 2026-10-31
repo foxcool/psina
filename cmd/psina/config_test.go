@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log/slog"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -433,5 +434,32 @@ func TestLoadConfig_CaseDuplicateKeys(t *testing.T) {
 	} {
 		_, err := loadConfig([]string{"-c", writeConfig(t, yaml)})
 		assert.ErrorContains(t, err, "duplicate")
+	}
+}
+
+// A section and a key beneath it in another spelling merge in map order
+// unless the loader settles it: an empty section is no value, anything else
+// is a duplicate.
+func TestLoadConfig_CaseDuplicateSection(t *testing.T) {
+	devEnv(t)
+	empty := writeConfig(t, "PAT: {}\npat:\n  enabled: false\n")
+	for range 50 {
+		c, err := loadConfig([]string{"-c", empty})
+		require.NoError(t, err)
+		require.False(t, c.PAT.Enabled, "pat.enabled: false must not depend on map order")
+	}
+
+	_, err := loadConfig([]string{"-c", writeConfig(t, "PAT: off\npat:\n  enabled: false\n")})
+	assert.ErrorContains(t, err, `duplicate key "PAT" and "pat.enabled"`)
+}
+
+func TestParseLogLevel(t *testing.T) {
+	for level, want := range map[string]slog.Level{
+		"debug": slog.LevelDebug, "info": slog.LevelInfo, "": slog.LevelInfo,
+		"warn": slog.LevelWarn, "ERROR": slog.LevelError,
+	} {
+		got, err := parseLogLevel(level)
+		require.NoError(t, err)
+		assert.Equal(t, want, got, level)
 	}
 }

@@ -170,8 +170,9 @@ func loadConfig(args []string) (*Config, error) {
 // matches the defaults and env keys: koanf keeps YAML keys as written, so a
 // documented "tablePrefix" would sit beside the default "tableprefix" and lose
 // to it. Two spellings of one key are an error rather than a map-order coin
-// toss. A null (a section or key written with no value) is dropped: merged as
-// is, it would replace the whole default subtree beneath it.
+// toss, and so is a key that is also a section in another spelling ("PAT: x"
+// beside "pat.enabled"). A null or an empty section is dropped: merged as is,
+// it would replace the whole default subtree beneath it.
 func loadConfigFile(path string) (map[string]any, error) {
 	fk := koanf.New(".")
 	if err := fk.Load(file.Provider(path), yaml.Parser()); err != nil {
@@ -183,14 +184,40 @@ func loadConfigFile(path string) (map[string]any, error) {
 	for key, value := range all {
 		lower := strings.ToLower(key)
 		if prev, ok := spelling[lower]; ok {
-			return nil, fmt.Errorf("load config file: duplicate key %q and %q", prev, key)
+			return nil, duplicateKeyError(prev, key)
 		}
 		spelling[lower] = key
-		if value != nil {
-			lowered[lower] = value
+		if section, ok := value.(map[string]any); value == nil || ok && len(section) == 0 {
+			continue
+		}
+		lowered[lower] = value
+	}
+	for key := range lowered {
+		for i := strings.IndexByte(key, '.'); i >= 0; i = nextDot(key, i) {
+			if _, ok := lowered[key[:i]]; ok {
+				return nil, duplicateKeyError(spelling[key[:i]], spelling[key])
+			}
 		}
 	}
 	return lowered, nil
+}
+
+// duplicateKeyError names both spellings in a stable order: they were found
+// in map order.
+func duplicateKeyError(a, b string) error {
+	if b < a {
+		a, b = b, a
+	}
+	return fmt.Errorf("load config file: duplicate key %q and %q", a, b)
+}
+
+// nextDot returns the index of the next "." in key after i, or -1.
+func nextDot(key string, i int) int {
+	j := strings.IndexByte(key[i+1:], '.')
+	if j < 0 {
+		return -1
+	}
+	return i + 1 + j
 }
 
 func validateConfig(c *Config) error {

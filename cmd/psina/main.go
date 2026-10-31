@@ -318,6 +318,9 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	// The first signal starts the drain; unregistering then lets a second one
+	// kill the process as usual instead of waiting out the drain.
+	context.AfterFunc(ctx, stop)
 
 	ln, err := net.Listen("tcp", server.Addr)
 	if err != nil {
@@ -344,19 +347,21 @@ func serve(ctx context.Context, server *http.Server, ln net.Listener, drainTimeo
 	served := make(chan error, 1)
 	go func() { served <- server.Serve(ln) }()
 
+	var serveErr error
 	select {
 	case err := <-served:
-		return fmt.Errorf("serve: %w", err)
+		// Handlers already running still need the DB: drain them too.
+		serveErr = fmt.Errorf("serve: %w", err)
 	case <-ctx.Done():
+		slog.Info("shutting down", "cause", context.Cause(ctx))
 	}
-	slog.Info("shutting down", "cause", context.Cause(ctx))
 
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), drainTimeout)
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
-		return fmt.Errorf("shutdown: %w", err)
+		return errors.Join(serveErr, fmt.Errorf("shutdown: %w", err))
 	}
-	return nil
+	return serveErr
 }
 
 func createTokenIssuer(config *Config) (*token.Issuer, error) {

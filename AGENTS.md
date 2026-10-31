@@ -124,7 +124,7 @@ PSINA_DEV=true go run ./cmd/psina/...   # run dev server (in-memory store, ephem
 
 Priority: defaults → config file (`-c config.yaml`) → environment variables (`PSINA_` prefix).
 File keys are case-insensitive; two spellings of one key are a load error. A
-section or key with no value (YAML null) keeps its defaults. Unknown
+key with no value (YAML null) or an empty section keeps its defaults; `""` does not. Unknown
 `logger.level`/`logger.format` values are a startup error.
 
 ```yaml

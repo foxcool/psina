@@ -167,7 +167,8 @@ Environment variables (prefix `PSINA_`):
 | `PSINA_LOGGER_FORMAT` | `json` | Log format: json, text (anything else is a startup error) |
 
 Or use config file (`-c config.yaml`). Keys are case-insensitive, and two
-spellings of one key are an error; a section or key left empty keeps its defaults:
+spellings of one key are an error; a key with no value (YAML null) or an empty
+section (`{}`) keeps its defaults — an empty string `""` does not:
 
 ```yaml
 server:

@@ -91,6 +91,8 @@ http:
 #     environment:
 #       PSINA_DB_URL: "postgres://psina:password@postgres:5432/psina?sslmode=disable"
 #       PSINA_JWT_PRIVATEKEYPATH: "/keys/jwt.pem" # required; mount the key
+#     volumes:
+#       - ./jwt.pem:/keys/jwt.pem:ro  # openssl genrsa -out jwt.pem 2048
 #
 #   your-backend:
 #     image: your-backend:latest

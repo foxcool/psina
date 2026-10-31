@@ -1,0 +1,10 @@
+---
+# Runs only the role's preflight tasks; see tests/preflight.sh.
+- hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Run preflight
+      ansible.builtin.include_role:
+        name: psina
+        tasks_from: preflight

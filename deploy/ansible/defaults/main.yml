@@ -19,9 +19,12 @@ psina_db_user: "psina"
 psina_db_password: "psina_password"
 psina_db_name: "psina"
 
+# Dev mode (PSINA_DEV): allows an ephemeral JWT key. Never in production.
+psina_dev: false
+
 # JWT
 psina_jwt_algorithm: "RS256"
-psina_jwt_private_key: ""  # PEM content; required, psina refuses to start without a key
+psina_jwt_private_key: ""  # PEM content; required unless psina_dev (preflight fails the run when empty)
 
 # Cookie
 psina_cookie_enabled: true

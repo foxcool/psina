@@ -1,4 +1,7 @@
 ---
+- name: Preflight checks
+  ansible.builtin.import_tasks: preflight.yml
+
 - name: Create app directory
   ansible.builtin.file:
     path: "{{ psina_app_dir }}"

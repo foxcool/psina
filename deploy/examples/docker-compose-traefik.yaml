@@ -1,6 +1,7 @@
 # Complete Docker Compose example with Traefik + psina + backend
 #
 # Usage:
+#   openssl genrsa -out jwt.pem 2048   # the key psina signs tokens with
 #   docker compose -f docker-compose-traefik.yaml up -d
 #
 # Test:

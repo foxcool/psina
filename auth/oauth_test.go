@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -167,6 +168,7 @@ func TestOAuth_LinkOrCreate(t *testing.T) {
 		{name: "auto-link disabled still creates", cfg: OAuthConfig{DisableAutoLinkEmail: true}, info: verifiedInfo("sub-1", "fresh@example.com"), wantNew: true},
 		{name: "missing email", info: verifiedInfo("sub-1", ""), wantErr: ErrOAuthEmailRequired},
 		{name: "invalid email", info: verifiedInfo("sub-1", "not-an-email"), wantErr: ErrOAuthEmailRequired},
+		{name: "overlong email", info: verifiedInfo("sub-1", strings.Repeat("a", 250)+"@example.com"), wantErr: ErrOAuthEmailRequired},
 		{name: "missing external id", info: verifiedInfo("", "fresh@example.com"), wantErr: ErrOAuthExchangeFailed},
 	}
 	for _, tt := range tests {

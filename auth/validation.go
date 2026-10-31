@@ -11,6 +11,11 @@ import (
 const (
 	MinPasswordLength = 8
 	MaxPasswordLength = 128
+
+	// MaxEmailLength is the RFC 5321 path limit (254 octets), which also fits
+	// the varchar(255) email columns; a longer value would fail the insert
+	// as a storage error instead of a rejected input.
+	MaxEmailLength = 254
 )
 
 // ErrPasswordTooShort is returned when password is shorter than MinPasswordLength.
@@ -36,12 +41,12 @@ func ValidatePassword(password string) error {
 
 // NormalizeEmail normalizes and validates email address.
 // Applies: trim whitespace, lowercase.
-// Validates: contains @ and ., minimum length, no control characters.
+// Validates: contains @ and ., length bounds, no control characters.
 func NormalizeEmail(email string) (string, error) {
 	email = strings.TrimSpace(email)
 	email = strings.ToLower(email)
 
-	if len(email) < 5 {
+	if len(email) < 5 || len(email) > MaxEmailLength {
 		return "", ErrInvalidEmail
 	}
 	// No legitimate address carries control characters. NUL in particular

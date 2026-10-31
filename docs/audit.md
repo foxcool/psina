@@ -34,7 +34,7 @@ handler sees the client address.
 | `result`     | always         | `success` or `failure` |
 | `ip`         | always         | Client IP. Behind a gateway it is correct only with `server.trustedProxies` set (see [architecture §4.5](architecture.md#45-client-ip-behind-a-gateway)); `unknown` if the peer address does not parse |
 | `user_agent` | always         | Client `User-Agent`, cut to 256 bytes; empty if not sent |
-| `user_id`    | success; some failures | The account. On failures only where the account is known (see `login`) |
+| `user_id`    | success; some failures | The account. On a failure only once the request found or created it: see `login`, refused links in `oauth.sign_in`, and `internal_error` after the account was found |
 | `reason`     | failure        | Why it failed, see each event |
 
 Never in any record: passwords, password hashes, access or refresh tokens, PAT
@@ -57,7 +57,8 @@ Password registration (`Register` RPC).
 | `reason` | `user_exists`, `invalid_email`, `password_too_short`, `password_too_long`, `internal_error` |
 
 A successful `register` is also the creation of the account; no `user.created`
-is written for it.
+is written for it. A failed `register` with `user_id` (`internal_error`) created
+the account but issued no session.
 
 ### `login`
 
@@ -66,7 +67,7 @@ Password sign-in (`Login` RPC).
 | Field | Values |
 | ----- | ------ |
 | `reason` | see below |
-| `user_id` | on success; on `bad_password` and `no_password` (the targeted account) |
+| `user_id` | On success; on `bad_password` and `no_password` (the targeted account); on `internal_error` once the account was found |
 
 | Reason | Meaning |
 | ------ | ------- |
@@ -91,13 +92,15 @@ OAuth sign-in completion (`OAuthCallback` RPC). `GetOAuthURL` writes nothing.
 | ----- | ------ |
 | `provider` | Provider name as the client sent it (`google`, `github`; cut to 256 bytes) |
 | `new_user` | Success only: `true` if this sign-in created the account |
+| `user_id` | On success; on `link_disabled` and `account_has_password` (the account the link targeted); on `internal_error` once the account was found |
 | `reason` | `invalid_request` (provider or redirect URI missing), `oauth_disabled`, `unknown_provider`, `redirect_uri_not_allowed`, `invalid_state` (unknown, expired, replayed or foreign state or browser binding), `exchange_failed` (provider refused the code, or provider outage), `email_missing`, `email_unverified`, `link_disabled` (an account with the email exists, `oauth.autoLinkEmail` is off), `account_has_password` (an account with the email holds a password and is never auto-linked), `internal_error` |
 
 ### `oauth.link`
 
 A first OAuth sign-in attached the provider account to an existing account with
 the same verified email (`oauth.autoLinkEmail`). Written before the
-`oauth.sign_in` success of the same request. Success only: a refused link is an
+`oauth.sign_in` record of the same request, also when that sign-in then fails
+(`internal_error`): the link stands. Success only: a refused link is an
 `oauth.sign_in` failure (`link_disabled`, `account_has_password`).
 
 | Field | Values |
@@ -117,12 +120,18 @@ nothing.
 | ----- | ------ |
 | `chain` | Chain name as the client sent it (cut to 256 bytes) |
 | `new_user` | Success only: `true` if this sign-in created the account |
+| `user_id` | On success; on `internal_error` once the account was found or created |
 | `reason` | `invalid_request` (chain or address missing), `wallet_disabled`, `unsupported_chain`, `invalid_address`, `invalid_challenge` (unknown, expired or replayed nonce, a challenge for another chain or address, or a bad signature), `internal_error` |
 
 ### `user.created`
 
 An account was created by an OAuth or wallet sign-in. Written before the
-`oauth.sign_in` / `wallet.sign_in` success of the same request. Success only.
+`oauth.sign_in` / `wallet.sign_in` record of the same request, also when that
+sign-in then fails (`internal_error`): the account stays. Success only.
+
+Two concurrent first sign-ins with one provider account can both act on the
+new account: one writes `user.created`, the other `oauth.link` for the same
+`user_id`.
 
 | Field | Values |
 | ----- | ------ |

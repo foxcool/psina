@@ -17,7 +17,10 @@ import (
 	authv1 "github.com/foxcool/psina/api/auth/v1"
 	"github.com/foxcool/psina/api/auth/v1/authv1connect"
 	"github.com/foxcool/psina/entity"
+	"github.com/foxcool/psina/provider/oauth"
 	"github.com/foxcool/psina/provider/wallet/evm/evmtest"
+	"github.com/foxcool/psina/store/memory"
+	"github.com/foxcool/psina/token"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -115,7 +118,7 @@ func TestAudit_RegisterAndLogin(t *testing.T) {
 	const email, password = "user@example.com", "SecurePassword123!"
 
 	svc, store := setupTestService(t)
-	_ = store.Create(ctx, &entity.User{ID: "user-123", Email: email})
+	require.NoError(t, store.Create(ctx, &entity.User{ID: "user-123", Email: email}))
 	client, sink := serveAudited(t, svc)
 
 	reg, err := client.Register(ctx, withUA(&authv1.RegisterRequest{Email: email, Password: password}))
@@ -150,6 +153,7 @@ func TestAudit_LoginFailure(t *testing.T) {
 		{"unknown user", &CredentialsError{Reason: ReasonUnknownUser}, ReasonUnknownUser, nil},
 		{"bad password", &CredentialsError{Reason: ReasonBadPassword, UserID: "user-9"}, ReasonBadPassword, "user-9"},
 		{"provider without reason", ErrInvalidCredentials, ReasonInvalidCredentials, nil},
+		{"empty reason", &CredentialsError{}, ReasonInvalidCredentials, nil},
 		{"storage failure", errors.New("db down"), reasonInternalError, nil},
 	}
 	for _, tt := range tests {
@@ -187,33 +191,34 @@ func TestAudit_LoginFailure(t *testing.T) {
 	})
 }
 
+// auditOAuthSignIn runs a whole bearer-mode flow and returns the callback
+// outcome and every secret the flow handled.
+func auditOAuthSignIn(t *testing.T, client authv1connect.AuthServiceClient) (*connect.Response[authv1.OAuthCallbackResponse], []string, error) {
+	t.Helper()
+	ctx := context.Background()
+	start, err := client.GetOAuthURL(ctx, withUA(&authv1.GetOAuthURLRequest{
+		Provider: entity.ProviderTypeGoogle, RedirectUri: testRedirectURI,
+	}))
+	require.NoError(t, err)
+	resp, err := client.OAuthCallback(ctx, withUA(&authv1.OAuthCallbackRequest{
+		Provider: entity.ProviderTypeGoogle, Code: "auth-code-secret", State: start.Msg.State,
+		RedirectUri: testRedirectURI, Binding: start.Msg.Binding,
+	}))
+	secrets := []string{"auth-code-secret", start.Msg.State, start.Msg.Binding}
+	if resp != nil {
+		secrets = append(secrets, resp.Msg.AccessToken, resp.Msg.RefreshToken)
+	}
+	return resp, secrets, err
+}
+
 func TestAudit_OAuth(t *testing.T) {
 	ctx := context.Background()
-
-	// signIn runs a whole bearer-mode flow and returns the callback outcome and
-	// every secret the flow handled.
-	signIn := func(t *testing.T, client authv1connect.AuthServiceClient) (*connect.Response[authv1.OAuthCallbackResponse], []string, error) {
-		t.Helper()
-		start, err := client.GetOAuthURL(ctx, withUA(&authv1.GetOAuthURLRequest{
-			Provider: entity.ProviderTypeGoogle, RedirectUri: testRedirectURI,
-		}))
-		require.NoError(t, err)
-		resp, err := client.OAuthCallback(ctx, withUA(&authv1.OAuthCallbackRequest{
-			Provider: entity.ProviderTypeGoogle, Code: "auth-code-secret", State: start.Msg.State,
-			RedirectUri: testRedirectURI, Binding: start.Msg.Binding,
-		}))
-		secrets := []string{"auth-code-secret", start.Msg.State, start.Msg.Binding}
-		if resp != nil {
-			secrets = append(secrets, resp.Msg.AccessToken, resp.Msg.RefreshToken)
-		}
-		return resp, secrets, err
-	}
 
 	t.Run("new user", func(t *testing.T) {
 		svc, _ := setupOAuthService(t, OAuthConfig{}, newFakeGoogle(verifiedInfo("sub-1", "new@example.com")))
 		client, sink := serveAudited(t, svc)
 
-		resp, secrets, err := signIn(t, client)
+		resp, secrets, err := auditOAuthSignIn(t, client)
 		require.NoError(t, err)
 
 		out := sink.raw()
@@ -234,7 +239,7 @@ func TestAudit_OAuth(t *testing.T) {
 		require.NoError(t, store.Create(ctx, &entity.User{ID: "user-old", Email: "old@example.com"}))
 		client, sink := serveAudited(t, svc)
 
-		_, secrets, err := signIn(t, client)
+		_, secrets, err := auditOAuthSignIn(t, client)
 		require.NoError(t, err)
 
 		out := sink.raw()
@@ -247,7 +252,7 @@ func TestAudit_OAuth(t *testing.T) {
 		assertNoSecrets(t, out, secrets...)
 
 		// The second sign-in finds the link: no link event again.
-		_, _, err = signIn(t, client)
+		_, _, err = auditOAuthSignIn(t, client)
 		require.NoError(t, err)
 		recs = sink.records(t)
 		require.Len(t, recs, 1)
@@ -260,7 +265,7 @@ func TestAudit_OAuth(t *testing.T) {
 		require.NoError(t, store.SavePasswordHash(ctx, "user-pw", "argon2-hash-secret"))
 		client, sink := serveAudited(t, svc)
 
-		_, secrets, err := signIn(t, client)
+		_, secrets, err := auditOAuthSignIn(t, client)
 		require.Error(t, err)
 
 		out := sink.raw()
@@ -269,6 +274,7 @@ func TestAudit_OAuth(t *testing.T) {
 		rec := requireAuditEvent(t, recs[0], auditEventOAuthSignIn, auditResultFailure)
 		assert.Equal(t, "account_has_password", rec["reason"])
 		assert.Equal(t, entity.ProviderTypeGoogle, rec["provider"])
+		assert.Equal(t, "user-pw", rec["user_id"], "the account the link targeted")
 		assertNoSecrets(t, out, append(secrets, "argon2-hash-secret")...)
 	})
 
@@ -398,5 +404,133 @@ func TestCredentialsError(t *testing.T) {
 	err := &CredentialsError{Reason: ReasonBadPassword, UserID: "user-1"}
 	assert.ErrorIs(t, err, ErrInvalidCredentials)
 	assert.NotErrorIs(t, err, ErrUserNotFound)
-	assert.Equal(t, "invalid credentials: bad_password", err.Error())
+	assert.Equal(t, ErrInvalidCredentials.Error(), err.Error())
+}
+
+// failingTokens fails every refresh token save: the last step of a sign-in,
+// after the account was created or linked.
+type failingTokens struct{ *memory.Store }
+
+func (failingTokens) SaveRefreshToken(context.Context, *entity.RefreshToken) error {
+	return errors.New("db down")
+}
+
+// failingUserLookup fails every user lookup by ID.
+type failingUserLookup struct{ *memory.Store }
+
+func (failingUserLookup) GetByID(context.Context, string) (*entity.User, error) {
+	return nil, errors.New("db down")
+}
+
+// A creation or link committed before the sign-in failed stands, so it is
+// recorded, and the failure names the account.
+func TestAudit_AccountChangeBeforeFailure(t *testing.T) {
+	ctx := context.Background()
+	newService := func(t *testing.T, memStore *memory.Store, opts ...ServiceOption) *Service {
+		t.Helper()
+		issuer, err := token.New()
+		require.NoError(t, err)
+		return NewService(failingTokens{memStore}, memStore, issuer, []Provider{&mockProvider{}}, opts...)
+	}
+	withGoogle := func(memStore *memory.Store, email string) ServiceOption {
+		return WithOAuth([]oauth.Provider{newFakeGoogle(verifiedInfo("sub-1", email))}, memStore, memStore, memStore, OAuthConfig{})
+	}
+
+	t.Run("register", func(t *testing.T) {
+		client, sink := serveAudited(t, newService(t, memory.New()))
+
+		_, err := client.Register(ctx, withUA(&authv1.RegisterRequest{Email: "user@example.com", Password: "SecurePassword123!"}))
+		require.Error(t, err)
+
+		recs := sink.records(t)
+		require.Len(t, recs, 1)
+		rec := requireAuditEvent(t, recs[0], auditEventRegister, auditResultFailure)
+		assert.Equal(t, reasonInternalError, rec["reason"])
+		assert.Equal(t, "user-123", rec["user_id"])
+	})
+
+	t.Run("login", func(t *testing.T) {
+		memStore := memory.New()
+		require.NoError(t, memStore.Create(ctx, &entity.User{ID: "user-123", Email: "user@example.com"}))
+		client, sink := serveAudited(t, newService(t, memStore))
+
+		_, err := client.Login(ctx, withUA(&authv1.LoginRequest{Email: "user@example.com", Password: "SecurePassword123!"}))
+		require.Error(t, err)
+
+		recs := sink.records(t)
+		require.Len(t, recs, 1)
+		rec := requireAuditEvent(t, recs[0], auditEventLogin, auditResultFailure)
+		assert.Equal(t, reasonInternalError, rec["reason"])
+		assert.Equal(t, "user-123", rec["user_id"])
+	})
+
+	t.Run("login, user lookup fails", func(t *testing.T) {
+		memStore := memory.New()
+		issuer, err := token.New()
+		require.NoError(t, err)
+		svc := NewService(memStore, failingUserLookup{memStore}, issuer, []Provider{&mockProvider{}})
+		client, sink := serveAudited(t, svc)
+
+		_, err = client.Login(ctx, withUA(&authv1.LoginRequest{Email: "user@example.com", Password: "SecurePassword123!"}))
+		require.Error(t, err)
+
+		recs := sink.records(t)
+		require.Len(t, recs, 1)
+		assert.Equal(t, "user-123", requireAuditEvent(t, recs[0], auditEventLogin, auditResultFailure)["user_id"])
+	})
+
+	t.Run("oauth new user", func(t *testing.T) {
+		memStore := memory.New()
+		client, sink := serveAudited(t, newService(t, memStore, withGoogle(memStore, "new@example.com")))
+
+		_, _, err := auditOAuthSignIn(t, client)
+		require.Error(t, err)
+
+		user, err := memStore.GetByEmail(ctx, "new@example.com")
+		require.NoError(t, err, "the account stays")
+		recs := sink.records(t)
+		require.Len(t, recs, 2)
+		created := requireAuditEvent(t, recs[0], auditEventUserCreated, auditResultSuccess)
+		assert.Equal(t, user.ID, created["user_id"])
+		assert.Equal(t, string(auditMethodOAuth), created["method"])
+		failed := requireAuditEvent(t, recs[1], auditEventOAuthSignIn, auditResultFailure)
+		assert.Equal(t, reasonInternalError, failed["reason"])
+		assert.Equal(t, user.ID, failed["user_id"])
+	})
+
+	t.Run("oauth auto-link", func(t *testing.T) {
+		memStore := memory.New()
+		require.NoError(t, memStore.Create(ctx, &entity.User{ID: "user-old", Email: "old@example.com"}))
+		client, sink := serveAudited(t, newService(t, memStore, withGoogle(memStore, "old@example.com")))
+
+		_, _, err := auditOAuthSignIn(t, client)
+		require.Error(t, err)
+
+		recs := sink.records(t)
+		require.Len(t, recs, 2)
+		assert.Equal(t, "user-old", requireAuditEvent(t, recs[0], auditEventOAuthLink, auditResultSuccess)["user_id"])
+		assert.Equal(t, "user-old", requireAuditEvent(t, recs[1], auditEventOAuthSignIn, auditResultFailure)["user_id"])
+	})
+
+	t.Run("wallet new user", func(t *testing.T) {
+		memStore := memory.New()
+		svc := newService(t, memStore, WithWallet(walletTestDispatcher(), memStore, memStore, testWalletConfig))
+		client, sink := serveAudited(t, svc)
+		signer := newTestSigner(t, evmtest.Key0)
+
+		ch, err := client.GetChallenge(ctx, withUA(&authv1.GetChallengeRequest{Chain: "ethereum", Address: signer.Address}))
+		require.NoError(t, err)
+		_, err = client.AuthenticateWallet(ctx, withUA(&authv1.AuthenticateWalletRequest{
+			Chain: "ethereum", Address: signer.Address, Nonce: ch.Msg.Nonce, Signature: signer.Sign(ch.Msg.Message),
+		}))
+		require.Error(t, err)
+
+		recs := sink.records(t)
+		require.Len(t, recs, 2)
+		created := requireAuditEvent(t, recs[0], auditEventUserCreated, auditResultSuccess)
+		assert.Equal(t, string(auditMethodWallet), created["method"])
+		failed := requireAuditEvent(t, recs[1], auditEventWalletSignIn, auditResultFailure)
+		assert.Equal(t, reasonInternalError, failed["reason"])
+		assert.Equal(t, created["user_id"], failed["user_id"])
+	})
 }

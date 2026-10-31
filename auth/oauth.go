@@ -232,17 +232,18 @@ func (s *Service) OAuthCallback(ctx context.Context, req OAuthCallbackRequest) (
 	}
 
 	// Email and roles come from the user store, not the provider: they may differ.
+	change := accountChange{userID: user.ID, created: origin == oauthUserCreated, linked: origin == oauthUserLinked}
 	pair, err := s.issueTokens(ctx, user.ID, user.Email, user.Roles, "")
 	if err != nil {
-		return nil, fmt.Errorf("issue tokens: %w", err)
+		return nil, &accountError{change, fmt.Errorf("issue tokens: %w", err)}
 	}
 
 	return &OAuthCallbackResult{
 		UserID:    user.ID,
 		Email:     user.Email,
 		TokenPair: pair,
-		IsNewUser: origin == oauthUserCreated,
-		Linked:    origin == oauthUserLinked,
+		IsNewUser: change.created,
+		Linked:    change.linked,
 	}, nil
 }
 
@@ -309,7 +310,7 @@ func (s *Service) resolveOAuthUser(ctx context.Context, provider string, info *o
 	origin := oauthUserCreated
 	if !isNew {
 		if err := s.checkAutoLink(ctx, user.ID); err != nil {
-			return nil, oauthUserExisting, err
+			return nil, oauthUserExisting, &accountError{accountChange{userID: user.ID}, err}
 		}
 		origin = oauthUserLinked
 	}
@@ -330,10 +331,14 @@ func (s *Service) resolveOAuthUser(ctx context.Context, provider string, info *o
 		s.discardUnlinkedUser(ctx, user.ID)
 	}
 	// A concurrent callback for the same provider account linked it first,
-	// often to the very user created here (it found it by email).
+	// often to the very user created here (it found it by email): then this
+	// sign-in still created it.
 	if errors.Is(err, store.ErrOAuthIdentityExists) {
-		user, err := s.oauthIdentityUser(ctx, provider, info.ExternalID)
-		return user, oauthUserExisting, err
+		winner, err := s.oauthIdentityUser(ctx, provider, info.ExternalID)
+		if err == nil && isNew && winner.ID == user.ID {
+			return winner, oauthUserCreated, nil
+		}
+		return winner, oauthUserExisting, err
 	}
 	return nil, oauthUserExisting, fmt.Errorf("save oauth identity: %w", err)
 }

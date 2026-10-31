@@ -72,7 +72,7 @@ func (h *Handler) Register(
 ) (*connect.Response[authv1.RegisterResponse], error) {
 	result, err := h.service.Register(ctx, req.Msg.Email, req.Msg.Password)
 	if err != nil {
-		h.auditFailure(ctx, req, auditEventRegister, registerFailureReason(err))
+		h.auditFailure(ctx, req, auditEventRegister, registerFailureReason(err), accountAttrs(err)...)
 		if errors.Is(err, ErrUserExists) {
 			return nil, connect.NewError(connect.CodeAlreadyExists, err)
 		}
@@ -315,7 +315,7 @@ func (h *Handler) OAuthCallback(
 		Binding:     binding,
 	})
 	if err != nil {
-		h.auditFailure(ctx, req, auditEventOAuthSignIn, oauthFailureReason(err), provider)
+		h.auditSignInFailure(ctx, req, auditEventOAuthSignIn, auditMethodOAuth, oauthFailureReason(err), err, provider)
 		cerr := oauthErrorToConnect(ctx, err)
 		// The binding cookie is single-use like the state; drop it on any outcome.
 		if h.cookieConfig.Enabled {
@@ -323,13 +323,8 @@ func (h *Handler) OAuthCallback(
 		}
 		return nil, cerr
 	}
-	switch {
-	case result.IsNewUser:
-		h.auditSuccess(ctx, req, auditEventUserCreated, result.UserID, slog.String("method", "oauth"), provider)
-	case result.Linked:
-		h.auditSuccess(ctx, req, auditEventOAuthLink, result.UserID, provider)
-	}
-	h.auditSuccess(ctx, req, auditEventOAuthSignIn, result.UserID, provider, slog.Bool("new_user", result.IsNewUser))
+	change := accountChange{userID: result.UserID, created: result.IsNewUser, linked: result.Linked}
+	h.auditSignIn(ctx, req, auditEventOAuthSignIn, auditMethodOAuth, change, provider)
 
 	resp := connect.NewResponse(&authv1.OAuthCallbackResponse{
 		UserId:       result.UserID,
@@ -436,13 +431,10 @@ func (h *Handler) AuthenticateWallet(
 		Signature: msg.Signature,
 	})
 	if err != nil {
-		h.auditFailure(ctx, req, auditEventWalletSignIn, walletFailureReason(err), chain)
+		h.auditSignInFailure(ctx, req, auditEventWalletSignIn, auditMethodWallet, walletFailureReason(err), err, chain)
 		return nil, walletErrorToConnect(ctx, err)
 	}
-	if result.IsNewUser {
-		h.auditSuccess(ctx, req, auditEventUserCreated, result.UserID, slog.String("method", "wallet"), chain)
-	}
-	h.auditSuccess(ctx, req, auditEventWalletSignIn, result.UserID, chain, slog.Bool("new_user", result.IsNewUser))
+	h.auditSignIn(ctx, req, auditEventWalletSignIn, auditMethodWallet, accountChange{userID: result.UserID, created: result.IsNewUser}, chain)
 
 	resp := connect.NewResponse(&authv1.AuthenticateWalletResponse{
 		UserId:       result.UserID,

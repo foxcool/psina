@@ -175,7 +175,7 @@ func (s *Service) AuthenticateWallet(ctx context.Context, req WalletAuthRequest)
 
 	pair, err := s.issueTokens(ctx, user.ID, user.Email, user.Roles, "")
 	if err != nil {
-		return nil, fmt.Errorf("issue tokens: %w", err)
+		return nil, &accountError{accountChange{userID: user.ID, created: isNew}, fmt.Errorf("issue tokens: %w", err)}
 	}
 
 	return &WalletAuthResult{

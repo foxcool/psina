@@ -224,7 +224,7 @@ func (s *Service) Register(ctx context.Context, email, password string) (*Regist
 	// Issue tokens (new session, no parent; fresh users have no roles)
 	tokenPair, err := s.issueTokens(ctx, identity.UserID, identity.Email, nil, "")
 	if err != nil {
-		return nil, fmt.Errorf("issue tokens: %w", err)
+		return nil, &accountError{accountChange{userID: identity.UserID, created: true}, fmt.Errorf("issue tokens: %w", err)}
 	}
 
 	return &RegisterResult{
@@ -260,8 +260,12 @@ func (s *Service) Login(ctx context.Context, email, password string) (*LoginResu
 	}
 	identity, err := s.localProvider.Authenticate(ctx, req)
 	if errors.Is(err, ErrInvalidCredentials) {
-		// Returned as is: a CredentialsError carries the audit reason.
-		return nil, err
+		// Only the audit reason leaves the service, never a provider's own text.
+		var cerr *CredentialsError
+		if errors.As(err, &cerr) {
+			return nil, cerr
+		}
+		return nil, ErrInvalidCredentials
 	}
 	if err != nil {
 		// A storage failure is not a wrong password: keep it out of the 401 path.
@@ -271,13 +275,13 @@ func (s *Service) Login(ctx context.Context, email, password string) (*LoginResu
 	// Load the user to pick up roles for the JWT
 	user, err := s.userStore.GetByID(ctx, identity.UserID)
 	if err != nil {
-		return nil, fmt.Errorf("get user: %w", err)
+		return nil, &accountError{accountChange{userID: identity.UserID}, fmt.Errorf("get user: %w", err)}
 	}
 
 	// Issue tokens (new session, no parent)
 	tokenPair, err := s.issueTokens(ctx, identity.UserID, identity.Email, user.Roles, "")
 	if err != nil {
-		return nil, fmt.Errorf("issue tokens: %w", err)
+		return nil, &accountError{accountChange{userID: identity.UserID}, fmt.Errorf("issue tokens: %w", err)}
 	}
 
 	return &LoginResult{

@@ -478,7 +478,8 @@ func TestOAuth_FailedLinkRollback(t *testing.T) {
 				require.ErrorIs(t, err, tt.wantErr)
 			} else {
 				require.NoError(t, err)
-				assert.False(t, res.IsNewUser, "the concurrent flow created the session first")
+				assert.True(t, res.IsNewUser, "this flow created the user the concurrent one linked")
+				assert.False(t, res.Linked)
 			}
 
 			user, err := memStore.GetByEmail(ctx, "fresh@example.com")

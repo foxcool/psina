@@ -35,6 +35,14 @@ const (
 	auditEventUserCreated  = "user.created"
 )
 
+// auditMethod is how a user.created account signed in.
+type auditMethod string
+
+const (
+	auditMethodOAuth  auditMethod = "oauth"
+	auditMethodWallet auditMethod = "wallet"
+)
+
 const (
 	auditResultSuccess = "success"
 	auditResultFailure = "failure"
@@ -74,21 +82,56 @@ func clientAttr(key, value string) slog.Attr {
 }
 
 // CredentialsError is a rejected sign-in that tells the audit log why. It
-// matches ErrInvalidCredentials, so callers and clients still cannot tell an
-// unknown account from a wrong password. Error() never includes the entered
-// identifier: a password typed into the email field must not reach any log.
+// matches ErrInvalidCredentials and has its text, so callers and clients still
+// cannot tell an unknown account from a wrong password, and the identifier
+// typed into a failed login never reaches a log through it.
 type CredentialsError struct {
 	Reason string // Reason* constant
 	UserID string // the account, when one was found
 }
 
 func (e *CredentialsError) Error() string {
-	return "invalid credentials: " + e.Reason
+	return ErrInvalidCredentials.Error()
 }
 
 // Is matches ErrInvalidCredentials like every other credential rejection.
 func (e *CredentialsError) Is(target error) bool {
 	return target == ErrInvalidCredentials
+}
+
+// accountChange is the account a sign-in acted on and what it did to it.
+type accountChange struct {
+	userID  string
+	created bool
+	linked  bool // auto-linked a provider account to an existing user
+}
+
+// accountError is a failure after the service found or created the account.
+// The audit record names the account, and a creation or link committed before
+// the failure is recorded: it stands even though the request failed.
+type accountError struct {
+	accountChange
+	err error
+}
+
+func (e *accountError) Error() string { return e.err.Error() }
+func (e *accountError) Unwrap() error { return e.err }
+
+// failedAccount returns the account behind a failed request, if it was known.
+func failedAccount(err error) *accountError {
+	var ae *accountError
+	if errors.As(err, &ae) {
+		return ae
+	}
+	return nil
+}
+
+// accountAttrs names the account behind a failed request, if it was known.
+func accountAttrs(err error) []slog.Attr {
+	if ae := failedAccount(err); ae != nil {
+		return []slog.Attr{slog.String("user_id", ae.userID)}
+	}
+	return nil
 }
 
 // WithAuditLogger routes audit events to logger. Default: slog.Default(), whose
@@ -119,6 +162,33 @@ func (h *Handler) auditSuccess(ctx context.Context, req connect.AnyRequest, even
 func (h *Handler) auditFailure(ctx context.Context, req connect.AnyRequest, event, reason string, attrs ...slog.Attr) {
 	attrs = append(attrs, slog.String("reason", reason))
 	h.writeAudit(ctx, req, slog.LevelWarn, event, auditResultFailure, attrs)
+}
+
+// auditSignIn writes a successful sign-in, preceded by the account change it
+// made, if any.
+func (h *Handler) auditSignIn(ctx context.Context, req connect.AnyRequest, event string, method auditMethod, change accountChange, attr slog.Attr) {
+	h.auditAccountChange(ctx, req, method, change, attr)
+	h.auditSuccess(ctx, req, event, change.userID, attr, slog.Bool("new_user", change.created))
+}
+
+// auditSignInFailure writes a failed sign-in, preceded by an account change
+// the service committed before the failure.
+func (h *Handler) auditSignInFailure(ctx context.Context, req connect.AnyRequest, event string, method auditMethod, reason string, err error, attr slog.Attr) {
+	attrs := []slog.Attr{attr}
+	if ae := failedAccount(err); ae != nil {
+		h.auditAccountChange(ctx, req, method, ae.accountChange, attr)
+		attrs = append(attrs, slog.String("user_id", ae.userID))
+	}
+	h.auditFailure(ctx, req, event, reason, attrs...)
+}
+
+func (h *Handler) auditAccountChange(ctx context.Context, req connect.AnyRequest, method auditMethod, change accountChange, attr slog.Attr) {
+	switch {
+	case change.created:
+		h.auditSuccess(ctx, req, auditEventUserCreated, change.userID, slog.String("method", string(method)), attr)
+	case change.linked:
+		h.auditSuccess(ctx, req, auditEventOAuthLink, change.userID, attr)
+	}
 }
 
 func (h *Handler) writeAudit(ctx context.Context, req connect.AnyRequest, level slog.Level, event, result string, attrs []slog.Attr) {
@@ -155,14 +225,18 @@ func loginFailure(err error) (string, []slog.Attr) {
 	var cerr *CredentialsError
 	switch {
 	case errors.As(err, &cerr):
-		if cerr.UserID != "" {
-			return cerr.Reason, []slog.Attr{slog.String("user_id", cerr.UserID)}
+		reason := cerr.Reason
+		if reason == "" {
+			reason = ReasonInvalidCredentials
 		}
-		return cerr.Reason, nil
+		if cerr.UserID != "" {
+			return reason, []slog.Attr{slog.String("user_id", cerr.UserID)}
+		}
+		return reason, nil
 	case errors.Is(err, ErrInvalidCredentials):
 		return ReasonInvalidCredentials, nil
 	default:
-		return reasonInternalError, nil
+		return reasonInternalError, accountAttrs(err)
 	}
 }
 

@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -224,6 +225,35 @@ func TestService_Login_InvalidCredentials(t *testing.T) {
 	_, err := service.Login(ctx, "test@example.com", "WrongPassword")
 	assert.Error(t, err)
 	assert.True(t, errors.Is(err, ErrInvalidCredentials))
+}
+
+// The rejection's text is the bare sentinel's, whatever the provider wrote.
+func TestService_Login_RejectionText(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantReason string // empty: no CredentialsError reaches the caller
+	}{
+		{"credentials error", &CredentialsError{Reason: ReasonUnknownUser}, ReasonUnknownUser},
+		{"provider text", fmt.Errorf("%w: no account alice@example.com", ErrInvalidCredentials), ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider := &mockProvider{authenticateFn: func(context.Context, *entity.AuthRequest) (*entity.Identity, error) {
+				return nil, tt.err
+			}}
+			svc := newServiceWithProvider(t, provider, newMemStore(t))
+
+			_, err := svc.Login(context.Background(), "alice@example.com", "SecurePassword123!")
+			require.ErrorIs(t, err, ErrInvalidCredentials)
+			assert.Equal(t, ErrInvalidCredentials.Error(), err.Error())
+			var cerr *CredentialsError
+			assert.Equal(t, tt.wantReason != "", errors.As(err, &cerr))
+			if cerr != nil {
+				assert.Equal(t, tt.wantReason, cerr.Reason)
+			}
+		})
+	}
 }
 
 func TestService_Refresh(t *testing.T) {

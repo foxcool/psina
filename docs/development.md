@@ -130,7 +130,7 @@ psina/
 │   ├── Dockerfile          # Production (multi-stage)
 │   └── dev.Dockerfile      # Development (Air)
 ├── cmd/psina/              # Server entrypoint
-│   ├── main.go             # Server setup, graceful shutdown
+│   ├── main.go             # Server setup, graceful shutdown (drains before the DB pool closes)
 │   └── config.go           # Configuration loading (koanf)
 ├── deploy/                 # Deployment configs
 │   ├── compose.yaml        # Docker Compose
@@ -238,10 +238,11 @@ Key variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PSINA_DB_URL` | _(empty)_ | PostgreSQL DSN (empty = in-memory) |
+| `PSINA_DEV` | `false` | Allows the in-memory store and an ephemeral JWT key; otherwise either is a startup error |
+| `PSINA_DB_URL` | _(empty)_ | PostgreSQL DSN (empty = in-memory, dev mode only) |
 | `PSINA_SERVER_PORT` | `8080` | Server port |
 | `PSINA_SERVER_TRUSTEDPROXIES` | _(empty)_ | Proxies (CIDRs or IPs, comma-separated) whose `X-Forwarded-For` is believed; empty = the client IP is the connection peer. Set to the subnet of a network only the reverse proxy and psina join; a shared subnet lets every host on it forge the client IP |
-| `PSINA_JWT_PRIVATEKEYPATH` | _(empty)_ | RSA key path (empty = ephemeral) |
+| `PSINA_JWT_PRIVATEKEYPATH` | _(empty)_ | RSA key path (empty = ephemeral, dev mode only) |
 | `PSINA_LOGGER_LEVEL` | `info` | debug, info, warn, error |
 | `PSINA_LOGGER_FORMAT` | `json` | json, text |
 

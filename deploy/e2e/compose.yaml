@@ -14,6 +14,7 @@ services:
       context: ../..
       dockerfile: build/e2e.Dockerfile
     environment:
+      PSINA_DEV: "true" # allows the in-memory store
       PSINA_DB_URL: "" # empty -> in-memory store
       PSINA_SERVER_PORT: "8080"
       PSINA_LOGGER_LEVEL: "info"

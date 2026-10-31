@@ -15,6 +15,9 @@ services:
 {% if psina_trusted_proxies %}
       PSINA_SERVER_TRUSTEDPROXIES: "{{ psina_trusted_proxies }}"
 {% endif %}
+{% if psina_dev | bool %}
+      PSINA_DEV: "true"
+{% endif %}
       PSINA_LOGGER_LEVEL: "{{ psina_log_level | lower }}"
       PSINA_COOKIE_ENABLED: "{{ psina_cookie_enabled | lower }}"
       PSINA_COOKIE_DOMAIN: "{{ psina_cookie_domain }}"

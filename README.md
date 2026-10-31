@@ -23,7 +23,7 @@ Lightweight, embeddable authentication service for Go microservices.
 
 ```bash
 # Development (in-memory store, ephemeral JWT key)
-docker run -p 8080:8080 ghcr.io/foxcool/psina:latest
+docker run -p 8080:8080 -e PSINA_DEV=true ghcr.io/foxcool/psina:latest
 
 # Production (PostgreSQL + persistent JWT key)
 docker run -p 8080:8080 \
@@ -40,12 +40,16 @@ git clone https://github.com/foxcool/psina.git
 cd psina
 go build -o psina ./cmd/psina/...
 
-# Development (in-memory store)
-./psina
+# Development (in-memory store, ephemeral JWT key)
+PSINA_DEV=true ./psina
 
-# With PostgreSQL
-PSINA_DB_URL="postgres://user:pass@localhost:5432/psina?sslmode=disable" ./psina
+# With PostgreSQL and a persistent key
+PSINA_DB_URL="postgres://user:pass@localhost:5432/psina?sslmode=disable" \
+PSINA_JWT_PRIVATEKEYPATH=jwt.pem ./psina
 ```
+
+Without `PSINA_DEV=true`, an empty `PSINA_DB_URL` or a missing JWT key is a
+startup error: either fallback loses every account and session on restart.
 
 ### Embed in your application
 
@@ -129,11 +133,12 @@ Environment variables (prefix `PSINA_`):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `PSINA_DEV` | `false` | Dev mode: allows the in-memory store and an ephemeral JWT key; otherwise either is a startup error |
 | `PSINA_SERVER_PORT` | `8080` | Server port |
 | `PSINA_SERVER_TRUSTEDPROXIES` | _(empty)_ | Proxies (CIDRs or IPs, comma-separated) whose `X-Forwarded-For` is believed; empty = the client IP is the connection peer. Set to the subnet of a network only the reverse proxy and psina join; a shared subnet lets every host on it forge the client IP |
-| `PSINA_DB_URL` | _(empty)_ | PostgreSQL DSN (empty = in-memory) |
+| `PSINA_DB_URL` | _(empty)_ | PostgreSQL DSN (empty = in-memory, dev mode only) |
 | `PSINA_DB_TABLEPREFIX` | _(empty)_ | Table name prefix for shared DB |
-| `PSINA_JWT_PRIVATEKEYPATH` | _(empty)_ | Private key file path |
+| `PSINA_JWT_PRIVATEKEYPATH` | _(empty)_ | Private key file path (no key = ephemeral, dev mode only) |
 | `PSINA_JWT_PRIVATEKEY` | _(empty)_ | Private key PEM (alternative to path) |
 | `PSINA_JWT_ALGORITHM` | `RS256` | JWT algorithm: `RS256` or `ES256` |
 | `PSINA_TOKEN_REFRESHREUSELEEWAY` | `10s` | Grace for duplicate refreshes of a just-rotated token; `0s` = strict |
@@ -158,10 +163,12 @@ Environment variables (prefix `PSINA_`):
 | `PSINA_WALLET_STATEMENT` | _(empty)_ | Text shown to the signer; optional, single line |
 | `PSINA_WALLET_CHALLENGETTL` | `5m` | Time the user has to sign |
 | `PSINA_WALLET_EVMCHAINS` | `ethereum=1` | EVM chains as `name=chainID`, comma-separated; the name is the `chain` request field |
-| `PSINA_LOGGER_LEVEL` | `info` | Log level: debug, info, warn, error |
-| `PSINA_LOGGER_FORMAT` | `json` | Log format: json, text |
+| `PSINA_LOGGER_LEVEL` | `info` | Log level: debug, info, warn, error (anything else is a startup error) |
+| `PSINA_LOGGER_FORMAT` | `json` | Log format: json, text (anything else is a startup error) |
 
-Or use config file (`-c config.yaml`):
+Or use config file (`-c config.yaml`). Keys are case-insensitive, and two
+spellings of one key are an error; a key with no value (YAML null) or an empty
+section (`{}`) keeps its defaults — an empty string `""` does not:
 
 ```yaml
 server:

@@ -1,0 +1,15 @@
+---
+# Fail the play before anything is written or started: psina refuses to start
+# without a JWT key outside dev mode, so the container would only crash-loop.
+# The database URL is always built from psina_db_* for the bundled postgres,
+# so it cannot be empty here.
+- name: Require a JWT private key unless in dev mode
+  ansible.builtin.assert:
+    that:
+      - psina_dev | bool or (psina_jwt_private_key | default("", true) | string | trim | length > 0)
+    quiet: true
+    fail_msg: >-
+      psina_jwt_private_key is empty. psina refuses to start without a JWT
+      signing key unless psina_dev is true (an ephemeral key, so every token dies
+      on restart). Set psina_jwt_private_key to the PEM
+      content of the key (e.g. from ansible-vault).

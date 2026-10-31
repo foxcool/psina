@@ -94,4 +94,17 @@ func PATLimit(t *testing.T, newStore NewBackend) {
 		_, err = svc.CreatePAT(ctx, other, "theirs", nil, nil)
 		require.NoError(t, err)
 	})
+
+	t.Run("negative max is unlimited", func(t *testing.T) {
+		s := newStore(t)
+		issuer, err := token.New()
+		require.NoError(t, err)
+		svc := auth.NewService(s, s, issuer, nil, auth.WithPAT(s, auth.PATConfig{MaxPerUser: -1}))
+		userID := createUser(t, s)
+
+		for i := 0; i < limit+2; i++ {
+			_, err := svc.CreatePAT(ctx, userID, "free", nil, nil)
+			require.NoError(t, err)
+		}
+	})
 }

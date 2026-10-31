@@ -25,7 +25,7 @@ ansible-galaxy collection install community.docker
 | `psina_db_user` | `psina` | PostgreSQL username |
 | `psina_db_password` | `psina_password` | PostgreSQL password |
 | `psina_db_name` | `psina` | PostgreSQL database name |
-| `psina_jwt_private_key` | `""` | PEM content of RS256 private key (empty = ephemeral, dev only) |
+| `psina_jwt_private_key` | `""` | PEM content of RS256 private key; required (empty: psina refuses to start) |
 | `psina_cookie_enabled` | `true` | Enable cookie-based token delivery |
 | `psina_cookie_domain` | `""` | Cookie domain (empty = exact match) |
 | `psina_cookie_secure` | `true` | Secure cookie flag |

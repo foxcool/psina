@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
 	"net/netip"
 	"strconv"
 	"strings"
@@ -18,6 +19,10 @@ import (
 
 // Config holds application configuration.
 type Config struct {
+	// Dev allows the fallbacks that lose data on restart: the in-memory store
+	// (empty db.url) and an ephemeral JWT key. Without it either is a startup
+	// error, so a deploy that lost its DB URL or key fails instead of serving.
+	Dev    bool `koanf:"dev"`
 	Logger struct {
 		Level  string `koanf:"level"`
 		Format string `koanf:"format"` // "json" or "text"
@@ -83,6 +88,7 @@ func loadConfig(args []string) (*Config, error) {
 
 	// Default values
 	defaults := map[string]any{
+		"dev":                      false,
 		"logger.level":             "info",
 		"logger.format":            "json",
 		"server.port":              8080,
@@ -121,19 +127,12 @@ func loadConfig(args []string) (*Config, error) {
 		return nil, fmt.Errorf("parse flags: %w", err)
 	}
 
-	// Load config file if provided. Keys are lowercased to match the defaults
-	// and env keys: koanf keeps YAML keys as written, so a documented
-	// "tablePrefix" would sit beside the default "tableprefix" and lose to it.
 	if *configFile != "" {
-		fk := koanf.New(".")
-		if err := fk.Load(file.Provider(*configFile), yaml.Parser()); err != nil {
-			return nil, fmt.Errorf("load config file: %w", err)
+		fileConf, err := loadConfigFile(*configFile)
+		if err != nil {
+			return nil, err
 		}
-		lowered := make(map[string]any, len(fk.Keys()))
-		for key, value := range fk.All() {
-			lowered[strings.ToLower(key)] = value
-		}
-		if err := k.Load(confmap.Provider(lowered, "."), nil); err != nil {
+		if err := k.Load(confmap.Provider(fileConf, "."), nil); err != nil {
 			return nil, fmt.Errorf("load config file: %w", err)
 		}
 	}
@@ -167,7 +166,95 @@ func loadConfig(args []string) (*Config, error) {
 	return &config, nil
 }
 
+// loadConfigFile reads a YAML config as flat lowercased keys. Lowercasing
+// matches the defaults and env keys: koanf keeps YAML keys as written, so a
+// documented "tablePrefix" would sit beside the default "tableprefix" and lose
+// to it. The file is flattened here, not by koanf, which merges colliding
+// paths in map order: two spellings of one key ("tablePrefix" and
+// "tableprefix", or "cookie.secure" written flat beside a cookie section) are
+// an error, and so is a key that is also a section ("PAT: x" beside
+// "pat.enabled"). A null or an empty section is dropped: merged as is, it
+// would replace the whole default subtree beneath it.
+func loadConfigFile(path string) (map[string]any, error) {
+	data, err := file.Provider(path).ReadBytes()
+	if err != nil {
+		return nil, fmt.Errorf("load config file: %w", err)
+	}
+	raw, err := yaml.Parser().Unmarshal(data)
+	if err != nil {
+		return nil, fmt.Errorf("load config file: %w", err)
+	}
+	flat := make(map[string]any)
+	spelling := make(map[string]string)
+	if err := flattenConfig(raw, "", flat, spelling); err != nil {
+		return nil, err
+	}
+	for key := range flat {
+		for i := strings.IndexByte(key, '.'); i >= 0; i = nextDot(key, i) {
+			if _, ok := flat[key[:i]]; ok {
+				return nil, duplicateKeyError(spelling[key[:i]], spelling[key])
+			}
+		}
+	}
+	return flat, nil
+}
+
+// flattenConfig adds the leaves of m to flat under lowercased dotted paths,
+// remembering each path as written in spelling; see loadConfigFile.
+func flattenConfig(m map[string]any, prefix string, flat map[string]any, spelling map[string]string) error {
+	for key, value := range m {
+		path := prefix + key
+		if section, ok := value.(map[string]any); ok {
+			if err := flattenConfig(section, path+".", flat, spelling); err != nil {
+				return err
+			}
+			continue
+		}
+		lower := strings.ToLower(path)
+		if prev, ok := spelling[lower]; ok {
+			return duplicateKeyError(prev, path)
+		}
+		spelling[lower] = path
+		if value != nil {
+			flat[lower] = value
+		}
+	}
+	return nil
+}
+
+// duplicateKeyError names both spellings in a stable order: they were found
+// in map order.
+func duplicateKeyError(a, b string) error {
+	if b < a {
+		a, b = b, a
+	}
+	return fmt.Errorf("load config file: duplicate key %q and %q", a, b)
+}
+
+// nextDot returns the index of the next "." in key after i, or -1.
+func nextDot(key string, i int) int {
+	j := strings.IndexByte(key[i+1:], '.')
+	if j < 0 {
+		return -1
+	}
+	return i + 1 + j
+}
+
 func validateConfig(c *Config) error {
+	if err := validateDevFallbacks(c); err != nil {
+		return err
+	}
+
+	if _, err := parseLogLevel(c.Logger.Level); err != nil {
+		return err
+	}
+	switch strings.ToLower(c.Logger.Format) {
+	case "json", "text", "":
+		// OK
+	default:
+		return fmt.Errorf("invalid logger.format: %s (supported: json, text)", c.Logger.Format)
+	}
+
 	// Validate JWT algorithm
 	switch c.JWT.Algorithm {
 	case "RS256", "ES256":
@@ -205,6 +292,38 @@ func validateConfig(c *Config) error {
 	}
 
 	return validateWallet(c)
+}
+
+// validateDevFallbacks refuses the data-losing fallbacks outside dev mode;
+// see Config.Dev.
+func validateDevFallbacks(c *Config) error {
+	if c.Dev {
+		return nil
+	}
+	if c.DB.URL == "" {
+		return fmt.Errorf("db.url is empty: set it, or set dev: true (PSINA_DEV) to use the in-memory store")
+	}
+	if c.JWT.PrivateKey == "" && c.JWT.PrivateKeyPath == "" {
+		return fmt.Errorf("no jwt key: set jwt.privatekeypath or jwt.privatekey, or set dev: true (PSINA_DEV) to use an ephemeral key")
+	}
+	return nil
+}
+
+// parseLogLevel maps logger.level; empty means the default, info. An unknown
+// level is an error and also yields info.
+func parseLogLevel(level string) (slog.Level, error) {
+	switch strings.ToLower(level) {
+	case "debug":
+		return slog.LevelDebug, nil
+	case "info", "":
+		return slog.LevelInfo, nil
+	case "warn":
+		return slog.LevelWarn, nil
+	case "error":
+		return slog.LevelError, nil
+	default:
+		return slog.LevelInfo, fmt.Errorf("invalid logger.level: %s (supported: debug, info, warn, error)", level)
+	}
 }
 
 // validateWallet rejects a half-configured wallet sign-in and values that

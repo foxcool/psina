@@ -90,6 +90,7 @@ http:
 #     image: ghcr.io/foxcool/psina:latest
 #     environment:
 #       PSINA_DB_URL: "postgres://psina:password@postgres:5432/psina?sslmode=disable"
+#       PSINA_JWT_PRIVATEKEYPATH: "/keys/jwt.pem" # required; mount the key
 #
 #   your-backend:
 #     image: your-backend:latest

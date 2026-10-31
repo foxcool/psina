@@ -166,6 +166,27 @@ func PATs(t *testing.T, newStore NewBackend) {
 		require.NoError(t, s.SavePATLimited(ctx, newPAT(other, "o1"), 2, now))
 	})
 
+	// Verification rejects a PAT only once now is after its expiry, so the
+	// prune must keep one expiring at exactly now.
+	t.Run("limited save prunes strictly after expiry", func(t *testing.T) {
+		s := newStore(t)
+		userID := createUser(t, s)
+		at, before := now, now.Add(-time.Microsecond)
+		for hash, expires := range map[string]*time.Time{"at": &at, "before": &before} {
+			require.NoError(t, s.SavePAT(ctx, &entity.PersonalAccessToken{
+				ID: uuid.New().String(), Hash: hash, UserID: userID, ExpiresAt: expires,
+			}))
+		}
+
+		// "at" still holds a slot, so a cap of one refuses the newcomer.
+		assert.ErrorIs(t, s.SavePATLimited(ctx, newPAT(userID, "new"), 1, now), store.ErrPATLimitReached)
+
+		_, err := s.GetPAT(ctx, "at")
+		require.NoError(t, err, "expiring exactly at now is not expired")
+		_, err = s.GetPAT(ctx, "before")
+		assert.ErrorIs(t, err, store.ErrTokenNotFound, "expired before now is pruned")
+	})
+
 	t.Run("limited save keeps the save rules", func(t *testing.T) {
 		s := newStore(t)
 		userID := createUser(t, s)

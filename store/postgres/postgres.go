@@ -427,7 +427,7 @@ func (s *Store) SavePATLimited(ctx context.Context, pat *entity.PersonalAccessTo
 		return err
 	}
 
-	prune := fmt.Sprintf(`DELETE FROM %s WHERE user_id = $1 AND expires_at <= $2`, s.tablePATs)
+	prune := fmt.Sprintf(`DELETE FROM %s WHERE user_id = $1 AND expires_at < $2`, s.tablePATs)
 	if _, err := tx.Exec(ctx, prune, pat.UserID, now); err != nil {
 		return fmt.Errorf("prune expired pats: %w", err)
 	}

@@ -311,7 +311,7 @@ func (s *Store) SavePATLimited(ctx context.Context, pat *entity.PersonalAccessTo
 		if existing.UserID != pat.UserID {
 			continue
 		}
-		if existing.ExpiresAt != nil && !existing.ExpiresAt.After(now) {
+		if existing.ExpiresAt != nil && now.After(*existing.ExpiresAt) {
 			delete(s.pats, hash)
 			continue
 		}

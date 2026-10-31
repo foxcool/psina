@@ -81,7 +81,8 @@ type PATStore interface {
 
 	// SavePATLimited is SavePAT with a per-user cap: it refuses the token with
 	// store.ErrPATLimitReached when the user already holds limit tokens that
-	// have not expired at now. The count and the insert are atomic per user,
+	// have not expired at now (expired means now is strictly after ExpiresAt,
+	// as in verification). The count and the insert are atomic per user,
 	// so parallel calls cannot overshoot limit. Callers pass limit > 0.
 	// The user's expired tokens are deleted first: they free their slots, and
 	// without pruning a short-lived token could be minted in a loop to grow

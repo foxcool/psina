@@ -431,6 +431,9 @@ func TestLoadConfig_CaseDuplicateKeys(t *testing.T) {
 	for _, yaml := range []string{
 		"db:\n  tablePrefix: a_\n  tableprefix: b_\n",
 		"DB:\n  url: postgres://a\ndb:\n  url: postgres://b\n",
+		// A dotted key names the same setting as the nested one.
+		"cookie:\n  secure: true\n\"cookie.secure\": false\n",
+		"pat:\n  enabled: true\n\"PAT.Enabled\": false\n",
 	} {
 		_, err := loadConfig([]string{"-c", writeConfig(t, yaml)})
 		assert.ErrorContains(t, err, "duplicate")

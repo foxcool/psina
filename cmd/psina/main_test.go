@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
@@ -172,4 +173,68 @@ func TestServe_ListenerFailure(t *testing.T) {
 
 	err = serve(context.Background(), &http.Server{ReadHeaderTimeout: time.Second}, ln, time.Second)
 	assert.ErrorContains(t, err, "serve")
+}
+
+// failingListener hands out one connection, then fails Accept for good once
+// broken is closed: a request not yet read when shutdown starts is dropped by
+// net/http, so the test breaks the listener only after the handler runs.
+type failingListener struct {
+	net.Listener
+	broken   <-chan struct{}
+	accepted bool
+}
+
+func (l *failingListener) Accept() (net.Conn, error) {
+	if l.accepted {
+		<-l.broken
+		return nil, errors.New("accept: listener broke")
+	}
+	l.accepted = true
+	return l.Listener.Accept()
+}
+
+// A Serve failure still drains: run() closes the DB pool once serve returns.
+func TestServe_ServeFailureDrains(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+	srv := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			close(entered)
+			<-release
+			w.WriteHeader(http.StatusOK)
+		}),
+		ReadHeaderTimeout: time.Second,
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	status := make(chan int, 1)
+	go func() {
+		resp, err := http.Get("http://" + ln.Addr().String())
+		if err != nil {
+			status <- 0
+			return
+		}
+		_ = resp.Body.Close()
+		status <- resp.StatusCode
+	}()
+	served := make(chan error, 1)
+	go func() {
+		served <- serve(context.Background(), srv, &failingListener{Listener: ln, broken: entered}, 10*time.Second)
+	}()
+
+	<-entered
+	select {
+	case err := <-served:
+		t.Fatalf("serve returned while a request was in flight: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	releaseOnce.Do(func() { close(release) })
+	assert.Equal(t, http.StatusOK, <-status)
+	err = <-served
+	assert.ErrorContains(t, err, "listener broke")
+	assert.NotContains(t, err.Error(), "shutdown")
 }

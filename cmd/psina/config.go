@@ -169,37 +169,57 @@ func loadConfig(args []string) (*Config, error) {
 // loadConfigFile reads a YAML config as flat lowercased keys. Lowercasing
 // matches the defaults and env keys: koanf keeps YAML keys as written, so a
 // documented "tablePrefix" would sit beside the default "tableprefix" and lose
-// to it. Two spellings of one key are an error rather than a map-order coin
-// toss, and so is a key that is also a section in another spelling ("PAT: x"
-// beside "pat.enabled"). A null or an empty section is dropped: merged as is,
-// it would replace the whole default subtree beneath it.
+// to it. The file is flattened here, not by koanf, which merges colliding
+// paths in map order: two spellings of one key ("tablePrefix" and
+// "tableprefix", or "cookie.secure" written flat beside a cookie section) are
+// an error, and so is a key that is also a section ("PAT: x" beside
+// "pat.enabled"). A null or an empty section is dropped: merged as is, it
+// would replace the whole default subtree beneath it.
 func loadConfigFile(path string) (map[string]any, error) {
-	fk := koanf.New(".")
-	if err := fk.Load(file.Provider(path), yaml.Parser()); err != nil {
+	data, err := file.Provider(path).ReadBytes()
+	if err != nil {
 		return nil, fmt.Errorf("load config file: %w", err)
 	}
-	all := fk.All()
-	lowered := make(map[string]any, len(all))
-	spelling := make(map[string]string, len(all))
-	for key, value := range all {
-		lower := strings.ToLower(key)
-		if prev, ok := spelling[lower]; ok {
-			return nil, duplicateKeyError(prev, key)
-		}
-		spelling[lower] = key
-		if section, ok := value.(map[string]any); value == nil || ok && len(section) == 0 {
-			continue
-		}
-		lowered[lower] = value
+	raw, err := yaml.Parser().Unmarshal(data)
+	if err != nil {
+		return nil, fmt.Errorf("load config file: %w", err)
 	}
-	for key := range lowered {
+	flat := make(map[string]any)
+	spelling := make(map[string]string)
+	if err := flattenConfig(raw, "", flat, spelling); err != nil {
+		return nil, err
+	}
+	for key := range flat {
 		for i := strings.IndexByte(key, '.'); i >= 0; i = nextDot(key, i) {
-			if _, ok := lowered[key[:i]]; ok {
+			if _, ok := flat[key[:i]]; ok {
 				return nil, duplicateKeyError(spelling[key[:i]], spelling[key])
 			}
 		}
 	}
-	return lowered, nil
+	return flat, nil
+}
+
+// flattenConfig adds the leaves of m to flat under lowercased dotted paths,
+// remembering each path as written in spelling; see loadConfigFile.
+func flattenConfig(m map[string]any, prefix string, flat map[string]any, spelling map[string]string) error {
+	for key, value := range m {
+		path := prefix + key
+		if section, ok := value.(map[string]any); ok {
+			if err := flattenConfig(section, path+".", flat, spelling); err != nil {
+				return err
+			}
+			continue
+		}
+		lower := strings.ToLower(path)
+		if prev, ok := spelling[lower]; ok {
+			return duplicateKeyError(prev, path)
+		}
+		spelling[lower] = path
+		if value != nil {
+			flat[lower] = value
+		}
+	}
+	return nil
 }
 
 // duplicateKeyError names both spellings in a stable order: they were found

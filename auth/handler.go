@@ -38,6 +38,7 @@ type Handler struct {
 	service        *Service
 	cookieConfig   *CookieConfig
 	trustedProxies []netip.Prefix
+	audit          *slog.Logger // nil = slog.Default(); see WithAuditLogger
 }
 
 // HandlerOption configures the Handler.
@@ -71,6 +72,7 @@ func (h *Handler) Register(
 ) (*connect.Response[authv1.RegisterResponse], error) {
 	result, err := h.service.Register(ctx, req.Msg.Email, req.Msg.Password)
 	if err != nil {
+		h.auditFailure(ctx, req, auditEventRegister, registerFailureReason(err))
 		if errors.Is(err, ErrUserExists) {
 			return nil, connect.NewError(connect.CodeAlreadyExists, err)
 		}
@@ -79,6 +81,7 @@ func (h *Handler) Register(
 		}
 		return nil, internalError(ctx, "register failed", err)
 	}
+	h.auditSuccess(ctx, req, auditEventRegister, result.UserID)
 
 	resp := connect.NewResponse(&authv1.RegisterResponse{
 		UserId:       result.UserID,
@@ -103,11 +106,14 @@ func (h *Handler) Login(
 ) (*connect.Response[authv1.LoginResponse], error) {
 	result, err := h.service.Login(ctx, req.Msg.Email, req.Msg.Password)
 	if err != nil {
+		reason, attrs := loginFailure(err)
+		h.auditFailure(ctx, req, auditEventLogin, reason, attrs...)
 		if errors.Is(err, ErrInvalidCredentials) {
 			return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("invalid credentials"))
 		}
 		return nil, internalError(ctx, "login failed", err)
 	}
+	h.auditSuccess(ctx, req, auditEventLogin, result.UserID)
 
 	resp := connect.NewResponse(&authv1.LoginResponse{
 		AccessToken:  result.TokenPair.AccessToken,
@@ -288,7 +294,9 @@ func (h *Handler) OAuthCallback(
 	req *connect.Request[authv1.OAuthCallbackRequest],
 ) (*connect.Response[authv1.OAuthCallbackResponse], error) {
 	msg := req.Msg
+	provider := clientAttr("provider", msg.Provider)
 	if msg.Provider == "" || msg.RedirectUri == "" {
+		h.auditFailure(ctx, req, auditEventOAuthSignIn, reasonInvalidRequest, provider)
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("provider and redirect_uri are required"))
 	}
 
@@ -307,6 +315,7 @@ func (h *Handler) OAuthCallback(
 		Binding:     binding,
 	})
 	if err != nil {
+		h.auditFailure(ctx, req, auditEventOAuthSignIn, oauthFailureReason(err), provider)
 		cerr := oauthErrorToConnect(ctx, err)
 		// The binding cookie is single-use like the state; drop it on any outcome.
 		if h.cookieConfig.Enabled {
@@ -314,6 +323,13 @@ func (h *Handler) OAuthCallback(
 		}
 		return nil, cerr
 	}
+	switch {
+	case result.IsNewUser:
+		h.auditSuccess(ctx, req, auditEventUserCreated, result.UserID, slog.String("method", "oauth"), provider)
+	case result.Linked:
+		h.auditSuccess(ctx, req, auditEventOAuthLink, result.UserID, provider)
+	}
+	h.auditSuccess(ctx, req, auditEventOAuthSignIn, result.UserID, provider, slog.Bool("new_user", result.IsNewUser))
 
 	resp := connect.NewResponse(&authv1.OAuthCallbackResponse{
 		UserId:       result.UserID,
@@ -407,7 +423,9 @@ func (h *Handler) AuthenticateWallet(
 	req *connect.Request[authv1.AuthenticateWalletRequest],
 ) (*connect.Response[authv1.AuthenticateWalletResponse], error) {
 	msg := req.Msg
+	chain := clientAttr("chain", msg.Chain)
 	if msg.Chain == "" || msg.Address == "" {
+		h.auditFailure(ctx, req, auditEventWalletSignIn, reasonInvalidRequest, chain)
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("chain and address are required"))
 	}
 
@@ -418,8 +436,13 @@ func (h *Handler) AuthenticateWallet(
 		Signature: msg.Signature,
 	})
 	if err != nil {
+		h.auditFailure(ctx, req, auditEventWalletSignIn, walletFailureReason(err), chain)
 		return nil, walletErrorToConnect(ctx, err)
 	}
+	if result.IsNewUser {
+		h.auditSuccess(ctx, req, auditEventUserCreated, result.UserID, slog.String("method", "wallet"), chain)
+	}
+	h.auditSuccess(ctx, req, auditEventWalletSignIn, result.UserID, chain, slog.Bool("new_user", result.IsNewUser))
 
 	resp := connect.NewResponse(&authv1.AuthenticateWalletResponse{
 		UserId:       result.UserID,

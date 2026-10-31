@@ -16,6 +16,7 @@ type Provider interface {
 	// Authenticate verifies credentials and returns an authenticated identity.
 	// Rejected credentials must be reported as ErrInvalidCredentials; any other
 	// error is treated as an infrastructure failure, not a wrong password.
+	// Return a *CredentialsError to tell the audit log why.
 	Authenticate(ctx context.Context, req *entity.AuthRequest) (*entity.Identity, error)
 
 	// Register creates a new user account and returns the identity.

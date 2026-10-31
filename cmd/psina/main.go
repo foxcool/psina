@@ -9,6 +9,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -176,7 +177,11 @@ func run() error {
 	if len(trustedProxies) == 0 {
 		slog.Info("no trusted proxies: client IP is the connection peer, X-Forwarded-For is ignored")
 	}
-	handler := auth.NewHandler(service, auth.WithCookieConfig(cookieConfig), auth.WithTrustedProxies(trustedProxies))
+	handler := auth.NewHandler(service,
+		auth.WithCookieConfig(cookieConfig),
+		auth.WithTrustedProxies(trustedProxies),
+		auth.WithAuditLogger(setupAuditLogger(config, os.Stdout)),
+	)
 
 	// Setup HTTP mux
 	mux := http.NewServeMux()
@@ -460,16 +465,22 @@ func setupLogger(config *Config) *slog.Logger {
 		level = slog.LevelInfo
 	}
 
+	return slog.New(newLogHandler(config, os.Stdout, level))
+}
+
+// setupAuditLogger builds the logger for audit events: same output and format
+// as the diagnostic log, but its own level, so logger.level never drops a
+// security event.
+func setupAuditLogger(config *Config, w io.Writer) *slog.Logger {
+	return slog.New(newLogHandler(config, w, slog.LevelInfo))
+}
+
+func newLogHandler(config *Config, w io.Writer, level slog.Level) slog.Handler {
 	opts := &slog.HandlerOptions{Level: level}
-
-	var handler slog.Handler
 	if config.Logger.Format == "text" {
-		handler = slog.NewTextHandler(os.Stdout, opts)
-	} else {
-		handler = slog.NewJSONHandler(os.Stdout, opts)
+		return slog.NewTextHandler(w, opts)
 	}
-
-	return slog.New(handler)
+	return slog.NewJSONHandler(w, opts)
 }
 
 // createOAuthProviders builds the OAuth providers that have credentials configured.

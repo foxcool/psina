@@ -3,12 +3,18 @@ package local_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 
 	"connectrpc.com/connect"
 	authv1 "github.com/foxcool/psina/api/auth/v1"
+	"github.com/foxcool/psina/api/auth/v1/authv1connect"
 	"github.com/foxcool/psina/auth"
 	"github.com/foxcool/psina/entity"
 	"github.com/foxcool/psina/provider/local"
@@ -292,4 +298,125 @@ func TestProvider_ConnectCodesThroughHandler(t *testing.T) {
 			assert.Equal(t, tt.want, connect.CodeOf(tt.call()))
 		})
 	}
+}
+
+// Each rejection tells the audit log why, and only an account that exists is
+// named; the entered identifier is never part of the error.
+func TestProvider_AuthenticateFailureReasons(t *testing.T) {
+	ctx := context.Background()
+	store := memory.New()
+	provider := local.New(store, store)
+	identity, err := provider.Register(ctx, &entity.RegisterRequest{Email: "user@example.com", Password: "SecurePassword123!"})
+	require.NoError(t, err)
+	require.NoError(t, store.Create(ctx, &entity.User{ID: "wallet-user", Email: "nopass@example.com"}))
+
+	tests := []struct {
+		name       string
+		email      string
+		password   string
+		wantReason string
+		wantUserID string
+	}{
+		{"unknown user", "nobody@example.com", "SecurePassword123!", auth.ReasonUnknownUser, ""},
+		{"bad password", "user@example.com", "WrongPassword123!", auth.ReasonBadPassword, identity.UserID},
+		{"no password", "nopass@example.com", "SecurePassword123!", auth.ReasonNoPassword, "wallet-user"},
+		{"empty password", "user@example.com", "", auth.ReasonMalformedCredentials, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := provider.Authenticate(ctx, &entity.AuthRequest{Email: tt.email, Password: tt.password})
+			require.ErrorIs(t, err, auth.ErrInvalidCredentials)
+			var cerr *auth.CredentialsError
+			require.ErrorAs(t, err, &cerr)
+			assert.Equal(t, tt.wantReason, cerr.Reason)
+			assert.Equal(t, tt.wantUserID, cerr.UserID)
+			assert.NotContains(t, err.Error(), tt.email)
+		})
+	}
+}
+
+// Audit events of the password flows, end to end over HTTP with the real
+// provider: failed logins carry the reason, never what the user typed.
+func TestProvider_AuditEvents(t *testing.T) {
+	ctx := context.Background()
+	mem := memory.New()
+	issuer, err := token.New()
+	require.NoError(t, err)
+	var buf syncBuffer
+	handler := auth.NewHandler(
+		auth.NewService(mem, mem, issuer, []auth.Provider{local.New(mem, mem)}),
+		auth.WithAuditLogger(slog.New(slog.NewJSONHandler(&buf, nil))),
+	)
+	path, rpc := authv1connect.NewAuthServiceHandler(handler)
+	mux := http.NewServeMux()
+	mux.Handle(path, rpc)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	client := authv1connect.NewAuthServiceClient(srv.Client(), srv.URL)
+
+	const email, password = "user@example.com", "SecurePassword123!"
+	reg, err := client.Register(ctx, connect.NewRequest(&authv1.RegisterRequest{Email: email, Password: password}))
+	require.NoError(t, err)
+
+	// What a user might type: a password in the identifier field, a near miss.
+	attempts := []struct{ email, password, reason string }{
+		{"Pa55word-in-the-email-field", "AnotherSecret123!", auth.ReasonMalformedCredentials},
+		{"typo@example.com", "AnotherSecret123!", auth.ReasonUnknownUser},
+		{email, "AnotherSecret123!", auth.ReasonBadPassword},
+	}
+	for _, a := range attempts {
+		_, err := client.Login(ctx, connect.NewRequest(&authv1.LoginRequest{Email: a.email, Password: a.password}))
+		require.Equal(t, connect.CodeUnauthenticated, connect.CodeOf(err))
+	}
+	login, err := client.Login(ctx, connect.NewRequest(&authv1.LoginRequest{Email: email, Password: password}))
+	require.NoError(t, err)
+
+	out := buf.String()
+	var recs []map[string]any
+	for line := range strings.Lines(out) {
+		var rec map[string]any
+		require.NoError(t, json.Unmarshal([]byte(line), &rec))
+		recs = append(recs, rec)
+	}
+	require.Len(t, recs, 5)
+	for _, rec := range recs {
+		assert.Equal(t, true, rec["audit"])
+		assert.Equal(t, "127.0.0.1", rec["ip"])
+	}
+	assert.Equal(t, "register", recs[0]["event"])
+	assert.Equal(t, "success", recs[0]["result"])
+	for i, a := range attempts {
+		rec := recs[i+1]
+		assert.Equal(t, "login", rec["event"])
+		assert.Equal(t, "failure", rec["result"])
+		assert.Equal(t, a.reason, rec["reason"])
+	}
+	assert.Equal(t, reg.Msg.UserId, recs[3]["user_id"], "a known account is named")
+	assert.Equal(t, "success", recs[4]["result"])
+
+	for _, secret := range []string{
+		"Pa55word", "typo@example.com", email, password, "AnotherSecret123!", "argon2",
+		reg.Msg.AccessToken, reg.Msg.RefreshToken, login.Msg.AccessToken, login.Msg.RefreshToken,
+	} {
+		assert.NotContains(t, out, secret)
+	}
+}
+
+// syncBuffer is written by the server goroutine and read by the test; the
+// socket between them is not a synchronisation the race detector sees.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }

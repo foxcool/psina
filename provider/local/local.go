@@ -104,16 +104,18 @@ func (p *Provider) Register(ctx context.Context, req *entity.RegisterRequest) (*
 }
 
 // Authenticate verifies email and password credentials.
-// Unknown email, missing credentials and wrong password all yield auth.ErrInvalidCredentials
-// so callers cannot tell them apart; storage failures are returned wrapped as they are.
+// Unknown email, missing credentials and wrong password all yield an
+// *auth.CredentialsError matching auth.ErrInvalidCredentials, so callers cannot
+// tell them apart; its Reason is for the audit log only. Storage failures are
+// returned wrapped as they are.
 func (p *Provider) Authenticate(ctx context.Context, req *entity.AuthRequest) (*entity.Identity, error) {
 	if req.Email == "" || req.Password == "" {
-		return nil, auth.ErrInvalidCredentials
+		return nil, &auth.CredentialsError{Reason: auth.ReasonMalformedCredentials}
 	}
 
 	user, err := p.userStore.GetByEmail(ctx, req.Email)
 	if errors.Is(err, store.ErrUserNotFound) {
-		return nil, auth.ErrInvalidCredentials
+		return nil, &auth.CredentialsError{Reason: auth.ReasonUnknownUser}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("get user: %w", err)
@@ -121,14 +123,14 @@ func (p *Provider) Authenticate(ctx context.Context, req *entity.AuthRequest) (*
 
 	storedHash, err := p.credentialStore.GetPasswordHash(ctx, user.ID)
 	if errors.Is(err, store.ErrCredentialNotFound) {
-		return nil, auth.ErrInvalidCredentials
+		return nil, &auth.CredentialsError{Reason: auth.ReasonNoPassword, UserID: user.ID}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("get password hash: %w", err)
 	}
 
 	if !verifyPassword(req.Password, storedHash) {
-		return nil, auth.ErrInvalidCredentials
+		return nil, &auth.CredentialsError{Reason: auth.ReasonBadPassword, UserID: user.ID}
 	}
 
 	return &entity.Identity{

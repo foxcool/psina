@@ -250,7 +250,7 @@ func (s *Service) Login(ctx context.Context, email, password string) (*LoginResu
 	// Normalize email (don't expose validation errors for security)
 	email, err := NormalizeEmail(email)
 	if err != nil {
-		return nil, ErrInvalidCredentials
+		return nil, &CredentialsError{Reason: ReasonMalformedCredentials}
 	}
 
 	// Authenticate with provider
@@ -260,7 +260,8 @@ func (s *Service) Login(ctx context.Context, email, password string) (*LoginResu
 	}
 	identity, err := s.localProvider.Authenticate(ctx, req)
 	if errors.Is(err, ErrInvalidCredentials) {
-		return nil, ErrInvalidCredentials
+		// Returned as is: a CredentialsError carries the audit reason.
+		return nil, err
 	}
 	if err != nil {
 		// A storage failure is not a wrong password: keep it out of the 401 path.

@@ -118,7 +118,19 @@ type OAuthCallbackResult struct {
 	Email     string
 	TokenPair *entity.TokenPair
 	IsNewUser bool
+	// Linked reports that this sign-in attached the provider account to an
+	// existing user found by email (auto-link).
+	Linked bool
 }
+
+// oauthUserOrigin tells how resolveOAuthUser found the user.
+type oauthUserOrigin int
+
+const (
+	oauthUserExisting oauthUserOrigin = iota // provider account already linked
+	oauthUserCreated
+	oauthUserLinked // auto-linked to an account with the same email
+)
 
 // oauthProvider resolves an enabled provider.
 func (s *Service) oauthProvider(name string) (oauth.Provider, error) {
@@ -214,7 +226,7 @@ func (s *Service) OAuthCallback(ctx context.Context, req OAuthCallbackRequest) (
 		return nil, fmt.Errorf("%w: %w: empty external id", ErrOAuthExchangeFailed, oauth.ErrInvalidToken)
 	}
 
-	user, isNew, err := s.resolveOAuthUser(ctx, req.Provider, info)
+	user, origin, err := s.resolveOAuthUser(ctx, req.Provider, info)
 	if err != nil {
 		return nil, err
 	}
@@ -229,7 +241,8 @@ func (s *Service) OAuthCallback(ctx context.Context, req OAuthCallbackRequest) (
 		UserID:    user.ID,
 		Email:     user.Email,
 		TokenPair: pair,
-		IsNewUser: isNew,
+		IsNewUser: origin == oauthUserCreated,
+		Linked:    origin == oauthUserLinked,
 	}, nil
 }
 
@@ -269,34 +282,36 @@ func (s *Service) consumeOAuthState(ctx context.Context, req OAuthCallbackReques
 }
 
 // resolveOAuthUser finds the user behind a provider account, linking or
-// creating one on first sign-in. Reports whether the user was created.
-func (s *Service) resolveOAuthUser(ctx context.Context, provider string, info *oauth.UserInfo) (*entity.User, bool, error) {
+// creating one on first sign-in.
+func (s *Service) resolveOAuthUser(ctx context.Context, provider string, info *oauth.UserInfo) (*entity.User, oauthUserOrigin, error) {
 	user, err := s.oauthIdentityUser(ctx, provider, info.ExternalID)
 	if err == nil {
-		return user, false, nil
+		return user, oauthUserExisting, nil
 	}
 	if !errors.Is(err, store.ErrOAuthIdentityNotFound) {
-		return nil, false, err
+		return nil, oauthUserExisting, err
 	}
 
 	email, err := NormalizeEmail(info.Email)
 	if err != nil {
-		return nil, false, ErrOAuthEmailRequired
+		return nil, oauthUserExisting, ErrOAuthEmailRequired
 	}
 	// Both creating and linking trust the email; an unverified one would let
 	// anyone claim an address at the provider and own the account behind it.
 	if !info.EmailVerified {
-		return nil, false, ErrOAuthEmailUnverified
+		return nil, oauthUserExisting, ErrOAuthEmailUnverified
 	}
 
 	user, isNew, err := s.findOrCreateUser(ctx, email)
 	if err != nil {
-		return nil, false, err
+		return nil, oauthUserExisting, err
 	}
+	origin := oauthUserCreated
 	if !isNew {
 		if err := s.checkAutoLink(ctx, user.ID); err != nil {
-			return nil, false, err
+			return nil, oauthUserExisting, err
 		}
+		origin = oauthUserLinked
 	}
 
 	err = s.oauthIdentities.SaveOAuthIdentity(ctx, &entity.OAuthIdentity{
@@ -308,7 +323,7 @@ func (s *Service) resolveOAuthUser(ctx context.Context, provider string, info *o
 		CreatedAt:  s.now(),
 	})
 	if err == nil {
-		return user, isNew, nil
+		return user, origin, nil
 	}
 
 	if isNew {
@@ -318,9 +333,9 @@ func (s *Service) resolveOAuthUser(ctx context.Context, provider string, info *o
 	// often to the very user created here (it found it by email).
 	if errors.Is(err, store.ErrOAuthIdentityExists) {
 		user, err := s.oauthIdentityUser(ctx, provider, info.ExternalID)
-		return user, false, err
+		return user, oauthUserExisting, err
 	}
-	return nil, false, fmt.Errorf("save oauth identity: %w", err)
+	return nil, oauthUserExisting, fmt.Errorf("save oauth identity: %w", err)
 }
 
 // discardUnlinkedUser undoes a user created for a sign-in whose identity link

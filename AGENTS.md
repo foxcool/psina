@@ -33,7 +33,7 @@ store/
 testutil/            # testcontainers helpers for integration tests
 schema.hcl           # Atlas declarative schema — edit here, then make schema-apply
 deploy/              # Docker Compose files
-docs/                # architecture, development, contributing
+docs/                # architecture, development, contributing, audit event catalog
 ```
 
 ## Core Interfaces (`auth/ports.go`)
@@ -218,6 +218,9 @@ DefaultQueryTimeout = 5000  // milliseconds
 - **Store errors** → return typed errors from `store/errors.go`; handler maps them to Connect codes via `errors.Is()`
 - **Schema changes** → edit `schema.hcl`, then `make schema-apply` — never write raw SQL migrations
 - **Proto changes** → edit `api/auth/v1/auth.proto`, then `make gen` — never edit the generated files in `api/auth/v1/` directly
+- **Audit events** → emitted by `Handler` (it has the client IP), one slog record each with
+  `audit=true`; catalog and field contract in `docs/audit.md` — update it with any new event,
+  field or reason. Never log credentials, tokens, hashes or a typed identifier.
 - **Roles** → opaque strings on `users.roles`, emitted in the JWT `roles` claim and
   `VerifyResponse`/`X-User-Roles`; psina never interprets them (authorization is the
   app's job). psina has no role-management API and does not derive roles from email —

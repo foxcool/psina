@@ -6,7 +6,7 @@
 - name: Require a JWT private key unless in dev mode
   ansible.builtin.assert:
     that:
-      - psina_dev | bool or (psina_jwt_private_key | trim | length > 0)
+      - psina_dev | bool or (psina_jwt_private_key | default("", true) | string | trim | length > 0)
     quiet: true
     fail_msg: >-
       psina_jwt_private_key is empty. psina refuses to start without a JWT

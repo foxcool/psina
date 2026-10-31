@@ -19,6 +19,9 @@ fi
 out=$(run -e 'psina_jwt_private_key=" "'); rc=$?
 if [ $rc -eq 0 ]; then echo "FAIL: blank key must fail"; fail=1; fi
 
+out=$(run -e '{"psina_jwt_private_key": null}'); rc=$?
+if [ $rc -eq 0 ]; then echo "FAIL: null key must fail"; fail=1; fi
+
 out=$(run -e psina_jwt_private_key=pem); rc=$?
 if [ $rc -ne 0 ]; then echo "FAIL: set key must pass"; echo "$out"; fail=1; fi
 

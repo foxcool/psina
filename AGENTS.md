@@ -67,6 +67,7 @@ type TokenStore interface {
 // PATStore handles personal access tokens (opaque psn_ tokens)
 type PATStore interface {
     SavePAT(ctx context.Context, pat *entity.PersonalAccessToken) error  // ErrPATExists on a duplicate hash
+    SavePATLimited(ctx context.Context, pat *entity.PersonalAccessToken, max int, now time.Time) error  // atomic per-user cap; ErrPATLimitReached
     GetPAT(ctx context.Context, hash string) (*entity.PersonalAccessToken, error)
     ListPATs(ctx context.Context, userID string) ([]*entity.PersonalAccessToken, error)  // newest first
     DeletePAT(ctx context.Context, userID, id string) error  // by UUID, owner-scoped
@@ -241,9 +242,10 @@ if errors.Is(err, store.ErrUserNotFound) {
 ```
 
 Store errors: `ErrUserNotFound`, `ErrUserExists`, `ErrTokenNotFound`, `ErrTokenRevoked`,
-`ErrTokenExpired`, `ErrPATExists`, `ErrCredentialNotFound`.
+`ErrTokenExpired`, `ErrPATExists`, `ErrPATLimitReached`, `ErrCredentialNotFound`.
+(`ErrTokenNotFound` covers refresh tokens and PATs alike.)
 Service errors: `ErrInvalidCredentials`, `ErrTokenExpired`, `ErrPATDisabled`, `ErrWalletChallengeInvalid`,
-`ErrPATLimitReached`, `ErrPATNameRequired`, `ErrPATNameTooLong`, `ErrPATExpiryInvalid`, etc.
+`ErrPATLimitReached`, `ErrPATNotFound`, `ErrPATNameRequired`, `ErrPATNameTooLong`, `ErrPATExpiryInvalid`, etc.
 
 ## Code Style
 

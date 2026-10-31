@@ -239,8 +239,10 @@ scripts), as an alternative to short-lived JWTs:
 - **Management requires a session**: create/list/revoke RPCs reject PATs and
   accept only access JWTs. A leaked PAT cannot mint replacements or revoke
   siblings.
-- **Limits**: per-user count cap and optional max TTL, enforced in the
-  service layer (`auth.PATConfig`). Last-used tracking is throttled
+- **Limits**: per-user count cap and optional max TTL (`auth.PATConfig`).
+  The count cap is checked atomically by the store (`SavePATLimited`,
+  expired tokens do not count and are pruned); the TTL cap by the service.
+  Last-used tracking is throttled
   (`TouchInterval`) to avoid a DB write per verification on the hot
   ForwardAuth path.
 - **Scopes**: stored for forward compatibility, not yet enforced.

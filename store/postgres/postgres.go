@@ -18,17 +18,11 @@ import (
 const (
 	pqUniqueViolation     = "23505" // unique_violation
 	pqForeignKeyViolation = "23503" // foreign_key_violation
-	pqNotNullViolation    = "23502" // not_null_violation
-	pqCheckViolation      = "23514" // check_violation
 )
 
 // DefaultQueryTimeout is the default timeout for database queries.
 // Can be overridden via DSN parameter: ?statement_timeout=5000
 const DefaultQueryTimeout = "5000" // 5 seconds in milliseconds
-
-// DefaultTablePrefix is the default prefix for table names.
-// Empty by default for backward compatibility.
-const DefaultTablePrefix = ""
 
 // Store implements UserStore, TokenStore, CredentialStore, OAuthIdentityStore,
 // WalletIdentityStore, and ChallengeStore using PostgreSQL.
@@ -59,8 +53,7 @@ func WithTablePrefix(prefix string) Option {
 // New creates a new PostgreSQL store.
 func New(pool *pgxpool.Pool, opts ...Option) *Store {
 	s := &Store{
-		pool:        pool,
-		tablePrefix: DefaultTablePrefix,
+		pool: pool,
 	}
 
 	for _, opt := range opts {
@@ -96,17 +89,7 @@ func NewWithDSN(ctx context.Context, dsn string, opts ...Option) (*Store, error)
 		return nil, fmt.Errorf("ping: %w", err)
 	}
 
-	s := &Store{
-		pool:        pool,
-		tablePrefix: DefaultTablePrefix,
-	}
-
-	for _, opt := range opts {
-		opt(s)
-	}
-
-	s.initTableNames()
-	return s, nil
+	return New(pool, opts...), nil
 }
 
 // initTableNames initializes table names with the configured prefix.
@@ -118,11 +101,6 @@ func (s *Store) initTableNames() {
 	s.tableOAuthIdentities = s.tablePrefix + "oauth_identities"
 	s.tableWalletIdentities = s.tablePrefix + "wallet_identities"
 	s.tableChallenges = s.tablePrefix + "auth_challenges"
-}
-
-// TablePrefix returns the current table prefix.
-func (s *Store) TablePrefix() string {
-	return s.tablePrefix
 }
 
 // Close closes the connection pool.
@@ -416,14 +394,86 @@ func (s *Store) SavePAT(ctx context.Context, pat *entity.PersonalAccessToken) er
 
 	_, err := s.pool.Exec(ctx, query,
 		pat.ID, pat.Hash, pat.UserID, pat.Name, scopes, pat.ExpiresAt, pat.LastUsedAt, pat.CreatedAt)
-	if err != nil {
-		if isDuplicateKeyError(err) {
-			return fmt.Errorf("%w: %s", store.ErrPATExists, pat.ID)
-		}
-		return insertError("insert pat", pat.UserID, err)
+	return patSaveError(pat, err)
+}
+
+// SavePATLimited persists a token unless the user already holds limit that have
+// not expired at now; the user's expired ones are deleted first. A conditional
+// INSERT alone is not enough: under READ COMMITTED two transactions both count
+// before either commits. The user row is locked first to serialise creates per
+// user; FOR NO KEY UPDATE does not block the foreign-key checks of other
+// writers (they take FOR KEY SHARE). A missing user matches no row to lock and
+// is reported as store.ErrUserNotFound.
+func (s *Store) SavePATLimited(ctx context.Context, pat *entity.PersonalAccessToken, limit int, now time.Time) error {
+	if pat.CreatedAt.IsZero() {
+		pat.CreatedAt = time.Now()
+	}
+	scopes := pat.Scopes // nil would be NULL; see SavePAT
+	if scopes == nil {
+		scopes = []string{}
 	}
 
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() {
+		// Rollback after a commit is a no-op; a failed one is superseded by
+		// the error already being returned.
+		_ = tx.Rollback(ctx)
+	}()
+
+	if err := s.lockUser(ctx, tx, pat.UserID); err != nil {
+		return err
+	}
+
+	prune := fmt.Sprintf(`DELETE FROM %s WHERE user_id = $1 AND expires_at <= $2`, s.tablePATs)
+	if _, err := tx.Exec(ctx, prune, pat.UserID, now); err != nil {
+		return fmt.Errorf("prune expired pats: %w", err)
+	}
+
+	insert := fmt.Sprintf(`
+		INSERT INTO %[1]s (id, hash, user_id, name, scopes, expires_at, last_used_at, created_at)
+		SELECT $1, $2, $3, $4, $5, $6, $7, $8
+		WHERE (SELECT count(*) FROM %[1]s WHERE user_id = $3) < $9
+	`, s.tablePATs)
+	tag, err := tx.Exec(ctx, insert,
+		pat.ID, pat.Hash, pat.UserID, pat.Name, scopes, pat.ExpiresAt, pat.LastUsedAt, pat.CreatedAt, limit)
+	if err != nil {
+		return patSaveError(pat, err)
+	}
+	// Commit also on a refusal: the prune is worth keeping.
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return store.ErrPATLimitReached
+	}
 	return nil
+}
+
+// lockUser takes the user row lock that serialises PAT creates for the user.
+func (s *Store) lockUser(ctx context.Context, tx pgx.Tx, userID string) error {
+	var locked string
+	query := fmt.Sprintf(`SELECT id::text FROM %s WHERE id = $1 FOR NO KEY UPDATE`, s.tableUsers)
+	if err := tx.QueryRow(ctx, query, userID).Scan(&locked); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("%w: %s", store.ErrUserNotFound, userID)
+		}
+		return fmt.Errorf("lock user: %w", err)
+	}
+	return nil
+}
+
+// patSaveError maps a failed PAT insert to the store's typed errors.
+func patSaveError(pat *entity.PersonalAccessToken, err error) error {
+	if err == nil {
+		return nil
+	}
+	if isDuplicateKeyError(err) {
+		return fmt.Errorf("%w: %s", store.ErrPATExists, pat.ID)
+	}
+	return insertError("insert pat", pat.UserID, err)
 }
 
 // GetPAT retrieves a personal access token by its hash.

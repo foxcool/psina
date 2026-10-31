@@ -314,8 +314,8 @@ make test-e2e            # gateway e2e stand (Traefik + KrakenD), requires Docke
 # Generate protobuf
 make gen
 
-# Apply database schema
-make schema-apply
+# Generate a migration after editing schema.hcl
+make migrate-diff name=<what_changed>
 ```
 
 ## Architecture

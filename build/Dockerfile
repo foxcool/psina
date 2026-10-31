@@ -7,7 +7,9 @@ RUN apk --no-cache add ca-certificates curl
 # Install Atlas CLI for migrations
 RUN curl -sSf https://atlasgo.sh | sh
 
-# Copy schema for Atlas
+# Migrations are what instances run (atlas migrate apply); schema.hcl ships
+# for read-only drift checks only.
+COPY migrations /migrations
 COPY schema.hcl /schema.hcl
 
 # Copy the pre-built binary from goreleaser

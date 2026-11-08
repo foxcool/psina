@@ -100,6 +100,7 @@ make help              # list all targets
 
 make lint              # golangci-lint in Docker (matches CI; do not install locally)
 make sec               # gosec in Docker (matches CI); run with lint before pushing
+make proto-check       # buf lint + breaking against main in Docker (matches CI)
 make test-unit         # unit tests, no Docker needed
 make test-integration  # integration tests, requires Docker
 make test-e2e          # gateway e2e stand (Traefik + KrakenD), requires Docker

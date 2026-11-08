@@ -6,12 +6,15 @@ COMPOSE=docker compose -p psina
 COMPOSE_FILE=deploy/compose.yaml
 # Path to the e2e gateway stand compose file
 E2E_COMPOSE=deploy/e2e/compose.yaml
-# Pinned lint tooling: the single place to bump. CI reads these two lines
-# (the lint job greps GOLANGCI_LINT_VERSION) and runs `make sec`.
+# Pinned lint tooling: the single place to bump. CI reads these lines
+# (the lint job greps GOLANGCI_LINT_VERSION) and runs `make sec` and `make proto-check`.
 GOLANGCI_LINT_VERSION=v2.15.0
 GOSEC_VERSION=2.30.0
+BUF_VERSION=1.55.1
+# Contract baseline for proto-check. CI overrides it with the PR base branch.
+BUF_AGAINST?=.git\#branch=main
 
-.PHONY: gen buf-gen go-gen lint sec test test-unit test-integration test-e2e up down clean logs help migrate-diff migrate-apply migrate-status migrate-baseline migrate-drift
+.PHONY: gen buf-gen go-gen lint sec proto-check test test-unit test-integration test-e2e up down clean logs help migrate-diff migrate-apply migrate-status migrate-baseline migrate-drift
 
 # Default target
 help:
@@ -21,6 +24,7 @@ help:
 	@echo "  go-gen            - Generate go code (go generate)"
 	@echo "  lint              - Run golangci-lint via Docker (matches CI)"
 	@echo "  sec               - Run gosec via Docker (matches CI static security analysis)"
+	@echo "  proto-check       - Lint the proto contract and check it for breaking changes (matches CI)"
 	@echo "  test              - Run all tests"
 	@echo "  test-unit         - Run unit tests only"
 	@echo "  test-integration  - Run integration tests (requires Atlas CLI)"
@@ -61,6 +65,11 @@ lint:
 # does not cover it, and a #nosec it cannot see only fails in CI.
 sec:
 	docker run --rm -v $(PWD):/app -w /app ghcr.io/securego/gosec:$(GOSEC_VERSION) -quiet -exclude-generated ./...
+
+# Lint the proto contract and compare it with BUF_AGAINST (CI calls this target).
+proto-check:
+	docker run --rm -v $(PWD):/workspace -w /workspace bufbuild/buf:$(BUF_VERSION) lint
+	docker run --rm -v $(PWD):/workspace -w /workspace bufbuild/buf:$(BUF_VERSION) breaking --against '$(BUF_AGAINST)'
 
 # Run all tests
 test: test-unit test-integration

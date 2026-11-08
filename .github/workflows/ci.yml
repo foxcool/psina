@@ -109,6 +109,22 @@ jobs:
       - name: Run gosec
         run: make sec
 
+  proto-check:
+    name: Check proto contract for breaking changes
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Same pinned image as local runs; version lives in the Makefile.
+      - name: Run buf lint and breaking
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: make proto-check BUF_AGAINST=".git#ref=origin/$BASE_REF"
+
   gitleaks:
     name: Scan for committed secrets
     runs-on: ubuntu-latest

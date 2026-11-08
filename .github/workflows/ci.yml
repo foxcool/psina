@@ -113,11 +113,15 @@ jobs:
     name: Check proto contract for breaking changes
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
 
     steps:
+      # buf reads the local .git only; no token needs to reach its container.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       # Same pinned image as local runs; version lives in the Makefile.
       - name: Run buf lint and breaking

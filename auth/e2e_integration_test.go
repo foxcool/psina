@@ -57,7 +57,7 @@ func getTestService(t *testing.T, opts ...auth.ServiceOption) *auth.Service {
 }
 
 // concurrentRefresh presents the same refresh token n times in parallel.
-func concurrentRefresh(t *testing.T, service *auth.Service, refreshToken string, n int) (pairs []string, reuse int) {
+func concurrentRefresh(t *testing.T, service *auth.Service, refreshToken string, n int) (pairs []string, reuse, ended int) {
 	t.Helper()
 	ctx := context.Background()
 	results := make([]string, n)
@@ -79,11 +79,13 @@ func concurrentRefresh(t *testing.T, service *auth.Service, refreshToken string,
 			pairs = append(pairs, results[i])
 		case errors.Is(err, auth.ErrTokenReuse):
 			reuse++
+		case errors.Is(err, auth.ErrSessionEnded):
+			ended++
 		default:
 			t.Errorf("unexpected refresh error: %v", err)
 		}
 	}
-	return pairs, reuse
+	return pairs, reuse, ended
 }
 
 func TestE2E_ConcurrentRefresh(t *testing.T) {
@@ -95,7 +97,7 @@ func TestE2E_ConcurrentRefresh(t *testing.T) {
 		reg, err := service.Register(ctx, "concurrent@example.com", "password123")
 		require.NoError(t, err)
 
-		pairs, _ := concurrentRefresh(t, service, reg.TokenPair.RefreshToken, n)
+		pairs, _, _ := concurrentRefresh(t, service, reg.TokenPair.RefreshToken, n)
 		require.Len(t, pairs, n)
 		for _, rt := range pairs {
 			_, err := service.Refresh(ctx, rt)
@@ -108,9 +110,11 @@ func TestE2E_ConcurrentRefresh(t *testing.T) {
 		reg, err := service.Register(ctx, "strict@example.com", "password123")
 		require.NoError(t, err)
 
-		pairs, reuse := concurrentRefresh(t, service, reg.TokenPair.RefreshToken, n)
-		assert.LessOrEqual(t, len(pairs), 1)
-		assert.Equal(t, n, len(pairs)+reuse)
+		// The one rotation winner gets a pair, or learns the session ended
+		// under it when a loser revoked the family before its save.
+		pairs, reuse, ended := concurrentRefresh(t, service, reg.TokenPair.RefreshToken, n)
+		assert.Equal(t, 1, len(pairs)+ended)
+		assert.Equal(t, n, len(pairs)+reuse+ended)
 		for _, rt := range pairs {
 			_, err := service.Refresh(ctx, rt)
 			assert.ErrorIs(t, err, auth.ErrTokenReuse, "nothing issued may outlive the ended session")
@@ -133,10 +137,12 @@ func TestE2E_ConcurrentRefresh(t *testing.T) {
 			wg.Go(func() { assert.NoError(t, service.Logout(ctx, rt)) })
 			wg.Wait()
 
-			// Logout first: the refresh is refused as reuse. Refresh first: its
-			// successor must not outlive the logout that follows.
+			// Logout first: the refresh is refused as reuse. Logout between
+			// rotation and save: the session ended under a legitimate refresh.
+			// Refresh first: its successor must not outlive the logout that follows.
 			if refreshErr != nil {
-				assert.ErrorIs(t, refreshErr, auth.ErrTokenReuse, "iteration %d", i)
+				assert.True(t, errors.Is(refreshErr, auth.ErrTokenReuse) || errors.Is(refreshErr, auth.ErrSessionEnded),
+					"iteration %d: %v", i, refreshErr)
 				continue
 			}
 			if pair != nil {

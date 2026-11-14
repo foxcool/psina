@@ -22,12 +22,17 @@ var _ TokenIssuer = (*token.Issuer)(nil)
 
 // Service errors.
 var (
-	ErrUserNotFound          = errors.New("user not found")
-	ErrInvalidCredentials    = errors.New("invalid credentials")
-	ErrUserExists            = errors.New("user already exists")
-	ErrTokenRevoked          = errors.New("refresh token revoked")
-	ErrTokenExpired          = errors.New("token expired") // refresh token or PAT
-	ErrTokenReuse            = errors.New("refresh token reuse detected")
+	ErrUserNotFound       = errors.New("user not found")
+	ErrInvalidCredentials = errors.New("invalid credentials")
+	ErrUserExists         = errors.New("user already exists")
+	ErrTokenRevoked       = errors.New("refresh token revoked")
+	ErrTokenExpired       = errors.New("token expired") // refresh token or PAT
+	ErrTokenReuse         = errors.New("refresh token reuse detected")
+	// ErrSessionEnded is a refresh whose token was rotated legitimately but
+	// whose session ended (logout, reuse revocation) before the successor was
+	// saved. Wrapped with ErrInvalidCredentials; unlike ErrTokenReuse it is no
+	// sign of a replayed token.
+	ErrSessionEnded          = errors.New("session ended during refresh")
 	ErrPATNotFound           = errors.New("personal access token not found")
 	ErrPATDisabled           = errors.New("personal access tokens are disabled")
 	ErrPATLimitReached       = errors.New("personal access token limit reached")
@@ -337,10 +342,11 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*entity.Tok
 
 	// Rotation and saving the successor are separate steps; a logout or reuse
 	// revocation landing between them ends the session first, and the store
-	// then refuses the successor (SaveRefreshToken contract).
+	// then refuses the successor (SaveRefreshToken contract). This token was
+	// not replayed, so it is not reported as reuse.
 	pair, err := s.issueTokens(ctx, user.ID, user.Email, user.Roles, familyRoot(rt))
 	if errors.Is(err, store.ErrTokenRevoked) {
-		return nil, &TokenReuseError{UserID: rt.UserID}
+		return nil, fmt.Errorf("%w: %w", ErrInvalidCredentials, ErrSessionEnded)
 	}
 	return pair, err
 }

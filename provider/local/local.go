@@ -105,9 +105,11 @@ func (p *Provider) Register(ctx context.Context, req *entity.RegisterRequest) (*
 // Authenticate verifies email and password credentials.
 // Unknown email, missing credentials and wrong password all yield an
 // *auth.CredentialsError matching auth.ErrInvalidCredentials, so callers cannot
-// tell them apart, and each of them runs one Argon2id verification, so the
-// answer time does not tell them apart either; its Reason is for the audit log
-// only. Storage failures are returned wrapped as they are.
+// tell them apart, and each of them runs one Argon2id verification, so its
+// cost does not tell them apart either (the password-hash lookup still runs
+// only for an existing account, and a corrupted stored hash is rejected without
+// Argon2id); its Reason is for the audit log only. Storage failures are
+// returned wrapped as they are.
 func (p *Provider) Authenticate(ctx context.Context, req *entity.AuthRequest) (*entity.Identity, error) {
 	if req.Email == "" || req.Password == "" {
 		return nil, &auth.CredentialsError{Reason: auth.ReasonMalformedCredentials}

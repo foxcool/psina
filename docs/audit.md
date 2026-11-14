@@ -78,10 +78,12 @@ Password sign-in (`Login` RPC).
 | `invalid_credentials` | A custom `auth.Provider` refused without a reason (see below) |
 | `internal_error` | Server failure |
 
-The client gets the same `invalid credentials` answer for every reason. The local
-provider also spends the same time on `unknown_user`, `no_password` and
-`bad_password`: each runs one Argon2id verification (against a fixed decoy
-hash when there is no account or no password).
+The client gets the same `invalid credentials` answer for every reason. In the local
+provider, `unknown_user`, `no_password` and `bad_password` each run one Argon2id
+verification (against a fixed decoy hash when there is no account or no
+password), so the dominant cost does not reveal whether the account exists. The
+password-hash lookup still runs only for an existing account, and a corrupted
+stored hash is rejected without Argon2id.
 
 A custom `auth.Provider` reports the reason by returning an
 `*auth.CredentialsError` (it matches `auth.ErrInvalidCredentials`); a bare

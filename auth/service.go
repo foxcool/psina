@@ -136,7 +136,10 @@ func WithRefreshReuseLeeway(d time.Duration) ServiceOption {
 	}
 }
 
-// WithClock replaces time.Now for refresh token lifecycle decisions (tests).
+// WithClock replaces time.Now as the service clock (tests). Every time-based
+// decision reads it: refresh token rotation, expiry and reuse leeway, PAT
+// creation, expiry and last-used throttling, OAuth state and wallet challenge
+// lifetimes.
 func WithClock(now func() time.Time) ServiceOption {
 	return func(s *Service) {
 		s.now = now
@@ -430,7 +433,8 @@ func (s *Service) verifyPAT(ctx context.Context, accessToken string) (*entity.Cl
 		return nil, fmt.Errorf("get pat: %w", err)
 	}
 
-	if pat.ExpiresAt != nil && time.Now().After(*pat.ExpiresAt) {
+	now := s.now()
+	if pat.ExpiresAt != nil && now.After(*pat.ExpiresAt) {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidCredentials, ErrTokenExpired)
 	}
 
@@ -445,8 +449,8 @@ func (s *Service) verifyPAT(ctx context.Context, accessToken string) (*entity.Cl
 	// Best-effort, throttled last-used tracking; never fail verification on it.
 	if s.patConfig.TouchInterval < 0 ||
 		pat.LastUsedAt == nil ||
-		time.Since(*pat.LastUsedAt) >= s.patConfig.TouchInterval {
-		_ = s.patStore.TouchPAT(ctx, pat.Hash, time.Now())
+		now.Sub(*pat.LastUsedAt) >= s.patConfig.TouchInterval {
+		_ = s.patStore.TouchPAT(ctx, pat.Hash, now)
 	}
 
 	return &entity.Claims{
@@ -478,7 +482,7 @@ func (s *Service) CreatePAT(ctx context.Context, userID, name string, scopes []s
 		return nil, ErrPATNameTooLong
 	}
 
-	now := time.Now()
+	now := s.now()
 	if expiresAt != nil {
 		if !expiresAt.After(now) {
 			return nil, fmt.Errorf("%w: expiry is in the past", ErrPATExpiryInvalid)

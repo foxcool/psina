@@ -106,15 +106,18 @@ func (p *Provider) Register(ctx context.Context, req *entity.RegisterRequest) (*
 // Authenticate verifies email and password credentials.
 // Unknown email, missing credentials and wrong password all yield an
 // *auth.CredentialsError matching auth.ErrInvalidCredentials, so callers cannot
-// tell them apart; its Reason is for the audit log only. Storage failures are
-// returned wrapped as they are.
+// tell them apart, and each of them runs one Argon2id verification, so the
+// answer time does not tell them apart either; its Reason is for the audit log
+// only. Storage failures are returned wrapped as they are.
 func (p *Provider) Authenticate(ctx context.Context, req *entity.AuthRequest) (*entity.Identity, error) {
 	if req.Email == "" || req.Password == "" {
 		return nil, &auth.CredentialsError{Reason: auth.ReasonMalformedCredentials}
 	}
 
+	// Missing accounts and passwords verify against dummyPasswordHash: see there.
 	user, err := p.userStore.GetByEmail(ctx, req.Email)
 	if errors.Is(err, store.ErrUserNotFound) {
+		verifyPassword(req.Password, dummyPasswordHash)
 		return nil, &auth.CredentialsError{Reason: auth.ReasonUnknownUser}
 	}
 	if err != nil {
@@ -123,6 +126,7 @@ func (p *Provider) Authenticate(ctx context.Context, req *entity.AuthRequest) (*
 
 	storedHash, err := p.credentialStore.GetPasswordHash(ctx, user.ID)
 	if errors.Is(err, store.ErrCredentialNotFound) {
+		verifyPassword(req.Password, dummyPasswordHash)
 		return nil, &auth.CredentialsError{Reason: auth.ReasonNoPassword, UserID: user.ID}
 	}
 	if err != nil {
@@ -173,8 +177,18 @@ func hashPassword(password string) (string, error) {
 	), nil
 }
 
-// verifyPassword checks if a password matches the hash.
-func verifyPassword(password, encodedHash string) bool {
+// verifyPassword checks a password against an encoded hash. A variable so
+// tests can count calls.
+var verifyPassword = verifyArgon2id
+
+// dummyPasswordHash is a well-formed Argon2id hash no password matches by
+// design. Authenticate verifies against it when there is no account or no
+// password, so every rejection costs the same Argon2id run as a wrong password
+// and the answer time does not reveal whether the account exists.
+const dummyPasswordHash = "$argon2id$v=19$m=65536,t=3,p=2$qBg35ou2yBIkXw/EeW8Qdg$QlGGGEvAWmNLZ3gehkpL/itgIcOc0JDso5dmDg84W5o" // #nosec G101 -- a decoy hash, not a credential
+
+// verifyArgon2id checks if a password matches the hash.
+func verifyArgon2id(password, encodedHash string) bool {
 	// Parse encoded hash
 	parts := strings.Split(encodedHash, "$")
 	if len(parts) != 6 {

@@ -178,7 +178,7 @@ func hashPassword(password string) (string, error) {
 
 // verifyPassword checks a password against an encoded hash. A variable so
 // tests can count calls.
-var verifyPassword = verifyArgon2id
+var verifyPassword = verifyArgon2id // a function, not a credential gitleaks:allow
 
 // dummyPasswordHash is a well-formed Argon2id hash no password matches by
 // design. Authenticate verifies against it when there is no account or no

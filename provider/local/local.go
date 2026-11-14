@@ -74,7 +74,6 @@ func (p *Provider) Register(ctx context.Context, req *entity.RegisterRequest) (*
 		return nil, fmt.Errorf("hash password: %w", err)
 	}
 
-	// Create user (using email as ID for MVP, should use UUID in production)
 	user := &entity.User{
 		ID:    generateUserID(),
 		Email: req.Email,

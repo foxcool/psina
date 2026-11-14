@@ -4,12 +4,16 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"time"
 
 	"connectrpc.com/connect"
+	"github.com/foxcool/psina/entity"
 	"github.com/foxcool/psina/provider/oauth"
+	"github.com/foxcool/psina/store"
 )
 
-// Audit events are security events (sign-ins, account changes) written as one
+// Audit events are security events (sign-ins, account changes, session ends,
+// refresh refusals, PAT creation and revocation) written as one
 // slog record each, for operators to answer "who signed in to account X, when
 // and from where". They are emitted by the Handler, not the Service: only the
 // Handler sees the client IP and user agent, and an event without them cannot
@@ -33,6 +37,10 @@ const (
 	auditEventOAuthLink    = "oauth.link"
 	auditEventWalletSignIn = "wallet.sign_in"
 	auditEventUserCreated  = "user.created"
+	auditEventLogout       = "logout"
+	auditEventRefresh      = "refresh" // failures only: a successful refresh is routine
+	auditEventPATCreate    = "pat.create"
+	auditEventPATRevoke    = "pat.revoke"
 )
 
 // auditMethod is how a user.created account signed in.
@@ -67,6 +75,8 @@ const (
 const (
 	reasonInvalidRequest = "invalid_request"
 	reasonInternalError  = "internal_error"
+	// reasonUnknownToken is a refresh token that names no session.
+	reasonUnknownToken = "unknown_token"
 )
 
 // maxAuditValue caps a client-controlled value (User-Agent, provider or chain
@@ -280,4 +290,68 @@ func walletFailureReason(err error) string {
 	default:
 		return reasonInternalError
 	}
+}
+
+// refreshFailure maps a Service.Refresh error to its audit reason and, when
+// the token named an account, its user_id attribute.
+func refreshFailure(err error) (string, []slog.Attr) {
+	var reuse *TokenReuseError
+	switch {
+	case errors.As(err, &reuse):
+		return "token_reuse", []slog.Attr{slog.String("user_id", reuse.UserID)}
+	case errors.Is(err, ErrSessionEnded):
+		return "session_ended", accountAttrs(err)
+	case errors.Is(err, ErrTokenExpired):
+		return "token_expired", nil
+	case errors.Is(err, store.ErrTokenNotFound):
+		return reasonUnknownToken, nil
+	case errors.Is(err, store.ErrUserNotFound):
+		return ReasonUnknownUser, nil
+	case errors.Is(err, ErrInvalidCredentials):
+		return ReasonInvalidCredentials, nil
+	default:
+		return reasonInternalError, accountAttrs(err)
+	}
+}
+
+// sessionFailureReason maps an authenticateSession error (PAT management
+// RPCs) to its audit reason.
+func sessionFailureReason(err error) string {
+	switch connect.CodeOf(err) {
+	case connect.CodeUnauthenticated:
+		return "invalid_session"
+	case connect.CodePermissionDenied:
+		return "pat_not_allowed"
+	default:
+		return reasonInternalError
+	}
+}
+
+// patFailureReason maps a CreatePAT / RevokePAT error to its audit reason.
+func patFailureReason(err error) string {
+	switch {
+	case errors.Is(err, ErrPATDisabled):
+		return "pat_disabled"
+	case errors.Is(err, ErrPATNameRequired):
+		return "name_required"
+	case errors.Is(err, ErrPATNameTooLong):
+		return "name_too_long"
+	case errors.Is(err, ErrPATExpiryInvalid):
+		return "invalid_expiry"
+	case errors.Is(err, ErrPATLimitReached):
+		return "limit_reached"
+	case errors.Is(err, ErrPATNotFound):
+		return "not_found"
+	default:
+		return reasonInternalError
+	}
+}
+
+// patAttrs describes a PAT by its metadata; never its secret or hash.
+func patAttrs(pat *entity.PersonalAccessToken) []slog.Attr {
+	attrs := []slog.Attr{slog.String("pat_id", pat.ID), slog.String("name", pat.Name)}
+	if pat.ExpiresAt != nil {
+		attrs = append(attrs, slog.String("expires_at", pat.ExpiresAt.UTC().Format(time.RFC3339)))
+	}
+	return attrs
 }

@@ -337,7 +337,7 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*entity.Tok
 		return nil, fmt.Errorf("%w: %w", ErrInvalidCredentials, err)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("get user: %w", err)
+		return nil, &accountError{accountChange{userID: rt.UserID}, fmt.Errorf("get user: %w", err)}
 	}
 
 	// Rotation and saving the successor are separate steps; a logout or reuse
@@ -346,9 +346,12 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*entity.Tok
 	// not replayed, so it is not reported as reuse.
 	pair, err := s.issueTokens(ctx, user.ID, user.Email, user.Roles, familyRoot(rt))
 	if errors.Is(err, store.ErrTokenRevoked) {
-		return nil, fmt.Errorf("%w: %w", ErrInvalidCredentials, ErrSessionEnded)
+		return nil, &accountError{accountChange{userID: rt.UserID}, fmt.Errorf("%w: %w", ErrInvalidCredentials, ErrSessionEnded)}
 	}
-	return pair, err
+	if err != nil {
+		return nil, &accountError{accountChange{userID: rt.UserID}, err}
+	}
+	return pair, nil
 }
 
 // isDuplicateRefresh reports whether a replay of an already revoked token is a
@@ -400,14 +403,21 @@ func familyRoot(rt *entity.RefreshToken) string {
 // the token itself, so siblings minted within the reuse leeway end with it.
 // An unknown token is not an error.
 func (s *Service) Logout(ctx context.Context, refreshToken string) error {
+	_, err := s.logout(ctx, refreshToken)
+	return err
+}
+
+// logout is Logout that also returns the account the token belongs to, for
+// the audit record; "" when the token is unknown.
+func (s *Service) logout(ctx context.Context, refreshToken string) (string, error) {
 	rt, err := s.tokenStore.GetRefreshToken(ctx, token.HashToken(refreshToken))
 	if errors.Is(err, store.ErrTokenNotFound) {
-		return nil
+		return "", nil
 	}
 	if err != nil {
-		return fmt.Errorf("get refresh token: %w", err)
+		return "", fmt.Errorf("get refresh token: %w", err)
 	}
-	return s.tokenStore.RevokeTokens(ctx, familyRoot(rt))
+	return rt.UserID, s.tokenStore.RevokeTokens(ctx, familyRoot(rt))
 }
 
 // Verify validates a credential and returns claims. It accepts both short-lived
@@ -541,8 +551,15 @@ func (s *Service) ListPATs(ctx context.Context, userID string) ([]*entity.Person
 
 // RevokePAT deletes a personal access token (by its UUID) owned by the user.
 func (s *Service) RevokePAT(ctx context.Context, userID, id string) error {
+	_, err := s.revokePAT(ctx, userID, id)
+	return err
+}
+
+// revokePAT is RevokePAT that also returns the revoked token's metadata, for
+// the audit record.
+func (s *Service) revokePAT(ctx context.Context, userID, id string) (*entity.PersonalAccessToken, error) {
 	if s.patStore == nil {
-		return ErrPATDisabled
+		return nil, ErrPATDisabled
 	}
 	// IDs are UUIDs; anything else cannot exist, and passing it on would make
 	// Postgres fail the uuid cast (a 500) instead of answering not found.
@@ -551,13 +568,34 @@ func (s *Service) RevokePAT(ctx context.Context, userID, id string) error {
 	// canonical form.
 	parsed, err := uuid.Parse(id)
 	if err != nil {
-		return fmt.Errorf("%w: %s", ErrPATNotFound, id)
+		return nil, fmt.Errorf("%w: %s", ErrPATNotFound, id)
 	}
-	err = s.patStore.DeletePAT(ctx, userID, parsed.String())
+	canonical := parsed.String()
+
+	// shortcut: reads the owner's whole PAT list to name the revoked token;
+	// a DeletePAT that returns the deleted row would save the read once PAT
+	// counts grow large.
+	pats, err := s.patStore.ListPATs(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list pats: %w", err)
+	}
+	// DeletePAT stays authoritative: the list only supplies metadata.
+	revoked := &entity.PersonalAccessToken{ID: canonical, UserID: userID}
+	for _, pat := range pats {
+		if pat.ID == canonical {
+			revoked = pat
+			break
+		}
+	}
+
+	err = s.patStore.DeletePAT(ctx, userID, canonical)
 	if errors.Is(err, store.ErrTokenNotFound) {
-		return fmt.Errorf("%w: %s", ErrPATNotFound, id)
+		return nil, fmt.Errorf("%w: %s", ErrPATNotFound, id)
 	}
-	return err
+	if err != nil {
+		return nil, err
+	}
+	return revoked, nil
 }
 
 // JWKS returns the JSON Web Key Set for public key verification.

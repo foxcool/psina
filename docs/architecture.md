@@ -33,11 +33,12 @@ Implemented:
 - Web3 wallet sign-in with SIWE (EIP-4361) on EVM chains
 - JWKS endpoint for gateway validation
 - Traefik ForwardAuth integration
-- Audit events for sign-ins as structured log records ([audit.md](audit.md))
+- Audit events for sign-ins, logouts, refused refreshes and PAT changes as
+  structured log records ([audit.md](audit.md))
 
 Planned (release order in the [README roadmap](../README.md#roadmap)):
 
-- Rate limiting, metrics, audit events for logout, refresh and PATs
+- Rate limiting, metrics
 - WebAuthn/Passkeys, TOTP 2FA
 
 **Non-functional Requirements:**

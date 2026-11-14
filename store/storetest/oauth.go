@@ -126,6 +126,20 @@ func OAuthIdentities(t *testing.T, newStore NewBackend) {
 		assert.Equal(t, existing.ID, got.ID)
 	})
 
+	t.Run("create with identity of another user is refused", func(t *testing.T) {
+		s := newStore(t)
+		other := createUser(t, s)
+
+		user := &entity.User{ID: uuid.New().String(), Email: "new@example.com"}
+		err := s.CreateUserWithOAuthIdentity(ctx, user, newIdentity(other, entity.ProviderTypeGoogle, "sub-42"))
+		assert.ErrorIs(t, err, store.ErrUserNotFound)
+
+		_, err = s.GetByID(ctx, user.ID)
+		assert.ErrorIs(t, err, store.ErrUserNotFound, "no user row without its link")
+		_, err = s.GetOAuthIdentity(ctx, entity.ProviderTypeGoogle, "sub-42")
+		assert.ErrorIs(t, err, store.ErrOAuthIdentityNotFound, "no link to another user")
+	})
+
 	t.Run("list is per user, newest first", func(t *testing.T) {
 		s := newStore(t)
 		userID, other := createUser(t, s), createUser(t, s)

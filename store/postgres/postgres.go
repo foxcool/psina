@@ -575,6 +575,11 @@ func (s *Store) SaveOAuthIdentity(ctx context.Context, identity *entity.OAuthIde
 // CreateUserWithOAuthIdentity creates a user and its first identity link in
 // one transaction: a conflict on either insert rolls back both.
 func (s *Store) CreateUserWithOAuthIdentity(ctx context.Context, user *entity.User, identity *entity.OAuthIdentity) error {
+	// The foreign key alone would accept a link to some other existing user,
+	// leaving the new one without its link.
+	if identity.UserID != user.ID {
+		return fmt.Errorf("%w: %s", store.ErrUserNotFound, identity.UserID)
+	}
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		if err := s.insertUser(ctx, tx, user); err != nil {
 			return err

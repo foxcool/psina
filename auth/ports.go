@@ -115,6 +115,13 @@ type OAuthIdentityStore interface {
 	// Returns store.ErrOAuthIdentityNotFound if none matches.
 	GetOAuthIdentity(ctx context.Context, provider, externalID string) (*entity.OAuthIdentity, error)
 
+	// CreateUserWithOAuthIdentity creates a user together with its first
+	// identity link, atomically: on any error neither is stored. A user that
+	// exists without its link would hold the email with no way to sign in, and
+	// removing it afterwards would race links made to it meanwhile.
+	// Returns store.ErrUserExists or store.ErrOAuthIdentityExists on a conflict.
+	CreateUserWithOAuthIdentity(ctx context.Context, user *entity.User, identity *entity.OAuthIdentity) error
+
 	// ListOAuthIdentities returns all OAuth identities linked to a user,
 	// newest (created_at DESC) first.
 	ListOAuthIdentities(ctx context.Context, userID string) ([]*entity.OAuthIdentity, error)

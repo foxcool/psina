@@ -117,6 +117,16 @@ func (s *Store) Ping(ctx context.Context) error {
 
 // Create persists a new user.
 func (s *Store) Create(ctx context.Context, user *entity.User) error {
+	return s.insertUser(ctx, s.pool, user)
+}
+
+// execer runs a statement on the pool or inside a transaction.
+type execer interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+// insertUser inserts a user row through db.
+func (s *Store) insertUser(ctx context.Context, db execer, user *entity.User) error {
 	now := time.Now()
 	if user.CreatedAt.IsZero() {
 		user.CreatedAt = now
@@ -144,7 +154,7 @@ func (s *Store) Create(ctx context.Context, user *entity.User) error {
 		email = &user.Email
 	}
 
-	_, err := s.pool.Exec(ctx, query, user.ID, email, roles, user.CreatedAt, user.UpdatedAt)
+	_, err := db.Exec(ctx, query, user.ID, email, roles, user.CreatedAt, user.UpdatedAt)
 	if err != nil {
 		if isDuplicateKeyError(err) {
 			return fmt.Errorf("%w: %s", store.ErrUserExists, user.Email)
@@ -559,6 +569,22 @@ func (s *Store) TouchPAT(ctx context.Context, hash string, t time.Time) error {
 
 // SaveOAuthIdentity persists a new OAuth identity.
 func (s *Store) SaveOAuthIdentity(ctx context.Context, identity *entity.OAuthIdentity) error {
+	return s.insertOAuthIdentity(ctx, s.pool, identity)
+}
+
+// CreateUserWithOAuthIdentity creates a user and its first identity link in
+// one transaction: a conflict on either insert rolls back both.
+func (s *Store) CreateUserWithOAuthIdentity(ctx context.Context, user *entity.User, identity *entity.OAuthIdentity) error {
+	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		if err := s.insertUser(ctx, tx, user); err != nil {
+			return err
+		}
+		return s.insertOAuthIdentity(ctx, tx, identity)
+	})
+}
+
+// insertOAuthIdentity inserts an identity row through db.
+func (s *Store) insertOAuthIdentity(ctx context.Context, db execer, identity *entity.OAuthIdentity) error {
 	if identity.CreatedAt.IsZero() {
 		identity.CreatedAt = time.Now()
 	}
@@ -568,7 +594,7 @@ func (s *Store) SaveOAuthIdentity(ctx context.Context, identity *entity.OAuthIde
 		VALUES ($1, $2, $3, $4, $5, $6)
 	`, s.tableOAuthIdentities)
 
-	_, err := s.pool.Exec(ctx, query,
+	_, err := db.Exec(ctx, query,
 		identity.ID, identity.UserID, identity.Provider, identity.ExternalID, identity.Email, identity.CreatedAt)
 	if err != nil {
 		if isDuplicateKeyError(err) {

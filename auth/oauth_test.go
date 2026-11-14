@@ -360,7 +360,7 @@ func TestOAuth_ConcurrentLinkWins(t *testing.T) {
 	assert.Equal(t, winner.ID, res.UserID)
 	assert.False(t, res.IsNewUser)
 
-	// The user created for the lost race is rolled back.
+	// No user is left behind for the lost race.
 	_, err = memStore.GetByEmail(ctx, "fresh@example.com")
 	assert.True(t, errors.Is(err, store.ErrUserNotFound), "orphan user removed, got: %v", err)
 }
@@ -399,13 +399,14 @@ func TestOAuth_ConcurrentRegistration(t *testing.T) {
 	assert.False(t, res.IsNewUser)
 }
 
-// hookIdentities hides the first identity lookup and runs onSave in place of
-// the first save, so a test can stage what a concurrent flow did meanwhile.
+// hookIdentities hides the first identity lookup and runs onCreate in place
+// of the first atomic user+identity create, so a test can stage what a
+// concurrent flow did meanwhile.
 type hookIdentities struct {
 	*memory.Store
-	onSave  func(ctx context.Context, identity *entity.OAuthIdentity) error
-	lookups int
-	saves   int
+	onCreate func(ctx context.Context, user *entity.User, identity *entity.OAuthIdentity) error
+	lookups  int
+	creates  int
 }
 
 func (h *hookIdentities) GetOAuthIdentity(ctx context.Context, provider, externalID string) (*entity.OAuthIdentity, error) {
@@ -416,62 +417,69 @@ func (h *hookIdentities) GetOAuthIdentity(ctx context.Context, provider, externa
 	return h.Store.GetOAuthIdentity(ctx, provider, externalID)
 }
 
-func (h *hookIdentities) SaveOAuthIdentity(ctx context.Context, identity *entity.OAuthIdentity) error {
-	h.saves++
-	if h.saves == 1 {
-		return h.onSave(ctx, identity)
+func (h *hookIdentities) CreateUserWithOAuthIdentity(ctx context.Context, user *entity.User, identity *entity.OAuthIdentity) error {
+	h.creates++
+	if h.creates == 1 {
+		return h.onCreate(ctx, user, identity)
 	}
-	return h.Store.SaveOAuthIdentity(ctx, identity)
+	return h.Store.CreateUserWithOAuthIdentity(ctx, user, identity)
 }
 
-func TestOAuth_FailedLinkRollback(t *testing.T) {
-	errSave := errors.New("save failed")
+func TestOAuth_CreateConflict(t *testing.T) {
+	errCreate := errors.New("create failed")
 	tests := []struct {
-		name     string
-		onSave   func(t *testing.T, m *memory.Store) func(context.Context, *entity.OAuthIdentity) error
-		wantErr  error
-		wantKept bool
+		name string
+		// onCreate stages the concurrent flow and returns the winner's ID.
+		onCreate   func(t *testing.T, m *memory.Store, winner *string) func(context.Context, *entity.User, *entity.OAuthIdentity) error
+		wantErr    error
+		wantWinner bool
+		// wantFresh: an account with the sign-in's email exists afterwards.
+		wantFresh bool
 	}{
 		{
-			// Two flows for one account: the other one found our new user by
-			// email and linked it first. The user is the winner, not an orphan.
-			name: "same account linked to the new user",
-			onSave: func(t *testing.T, m *memory.Store) func(context.Context, *entity.OAuthIdentity) error {
-				return func(ctx context.Context, id *entity.OAuthIdentity) error {
-					winner := *id
-					winner.ID = "winner"
-					require.NoError(t, m.SaveOAuthIdentity(ctx, &winner))
-					return m.SaveOAuthIdentity(ctx, id)
+			// Two flows for one provider account: the other one created the
+			// account with its link first. This flow signs into it.
+			name: "same account created by a concurrent sign-in",
+			onCreate: func(t *testing.T, m *memory.Store, winner *string) func(context.Context, *entity.User, *entity.OAuthIdentity) error {
+				return func(ctx context.Context, u *entity.User, id *entity.OAuthIdentity) error {
+					other, otherID := *u, *id
+					other.ID, otherID.ID, otherID.UserID = "winner", "winner-link", "winner"
+					require.NoError(t, m.CreateUserWithOAuthIdentity(ctx, &other, &otherID))
+					*winner = other.ID
+					return m.CreateUserWithOAuthIdentity(ctx, u, id)
 				}
 			},
-			wantKept: true,
+			wantWinner: true,
+			wantFresh:  true,
 		},
 		{
-			name: "other provider linked the new user, then save fails",
-			onSave: func(t *testing.T, m *memory.Store) func(context.Context, *entity.OAuthIdentity) error {
-				return func(ctx context.Context, id *entity.OAuthIdentity) error {
-					require.NoError(t, m.SaveOAuthIdentity(ctx, &entity.OAuthIdentity{
-						ID: "gh", UserID: id.UserID, Provider: entity.ProviderTypeGitHub, ExternalID: "7",
-					}))
-					return errSave
+			name: "provider account linked to another user first",
+			onCreate: func(t *testing.T, m *memory.Store, winner *string) func(context.Context, *entity.User, *entity.OAuthIdentity) error {
+				return func(ctx context.Context, u *entity.User, id *entity.OAuthIdentity) error {
+					require.NoError(t, m.Create(ctx, &entity.User{ID: "winner", Email: "winner@example.com"}))
+					linked := *id
+					linked.ID, linked.UserID = "winner-link", "winner"
+					require.NoError(t, m.SaveOAuthIdentity(ctx, &linked))
+					*winner = "winner"
+					return m.CreateUserWithOAuthIdentity(ctx, u, id)
 				}
 			},
-			wantErr:  errSave,
-			wantKept: true,
+			wantWinner: true,
 		},
 		{
-			name: "unlinked new user is removed",
-			onSave: func(*testing.T, *memory.Store) func(context.Context, *entity.OAuthIdentity) error {
-				return func(context.Context, *entity.OAuthIdentity) error { return errSave }
+			name: "create fails",
+			onCreate: func(*testing.T, *memory.Store, *string) func(context.Context, *entity.User, *entity.OAuthIdentity) error {
+				return func(context.Context, *entity.User, *entity.OAuthIdentity) error { return errCreate }
 			},
-			wantErr: errSave,
+			wantErr: errCreate,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 			memStore := memory.New()
-			identities := &hookIdentities{Store: memStore, onSave: tt.onSave(t, memStore)}
+			var winner string
+			identities := &hookIdentities{Store: memStore, onCreate: tt.onCreate(t, memStore, &winner)}
 			google := newFakeGoogle(verifiedInfo("sub-1", "fresh@example.com"))
 			svc := newOAuthService(t, memStore, WithOAuth([]oauth.Provider{google}, identities, memStore, memStore, OAuthConfig{}))
 
@@ -480,18 +488,18 @@ func TestOAuth_FailedLinkRollback(t *testing.T) {
 				require.ErrorIs(t, err, tt.wantErr)
 			} else {
 				require.NoError(t, err)
-				assert.True(t, res.IsNewUser, "this flow created the user the concurrent one linked")
+				assert.False(t, res.IsNewUser, "the concurrent flow created the account")
 				assert.False(t, res.Linked)
+				if tt.wantWinner {
+					assert.Equal(t, winner, res.UserID)
+				}
 			}
 
-			user, err := memStore.GetByEmail(ctx, "fresh@example.com")
-			if !tt.wantKept {
-				assert.ErrorIs(t, err, store.ErrUserNotFound)
-				return
-			}
-			require.NoError(t, err)
-			if res != nil {
-				assert.Equal(t, user.ID, res.UserID)
+			_, err = memStore.GetByEmail(ctx, "fresh@example.com")
+			if tt.wantFresh {
+				assert.NoError(t, err)
+			} else {
+				assert.ErrorIs(t, err, store.ErrUserNotFound, "no user without its link")
 			}
 		})
 	}
@@ -518,4 +526,46 @@ func TestOAuth_AutoLinkCredentialLookupFails(t *testing.T) {
 
 	_, err = memStore.GetOAuthIdentity(ctx, entity.ProviderTypeGoogle, "sub-1")
 	assert.ErrorIs(t, err, store.ErrOAuthIdentityNotFound, "an unknown password state does not link")
+}
+
+// failingLink fails every attempt to store an identity link and counts user
+// deletions, which a concurrent link to the deleted user would lose.
+type failingLink struct {
+	*memory.Store
+	deletes int
+}
+
+var errLinkFailed = errors.New("link failed")
+
+func (f *failingLink) SaveOAuthIdentity(context.Context, *entity.OAuthIdentity) error {
+	return errLinkFailed
+}
+
+func (f *failingLink) CreateUserWithOAuthIdentity(context.Context, *entity.User, *entity.OAuthIdentity) error {
+	return errLinkFailed
+}
+
+func (f *failingLink) Delete(ctx context.Context, id string) error {
+	f.deletes++
+	return f.Store.Delete(ctx, id)
+}
+
+func TestOAuth_FailedLinkLeavesNoUser(t *testing.T) {
+	ctx := context.Background()
+	memStore := memory.New()
+	stores := &failingLink{Store: memStore}
+	google := newFakeGoogle(verifiedInfo("sub-1", "fresh@example.com"))
+	issuer, err := token.New()
+	require.NoError(t, err)
+	svc := NewService(memStore, stores, issuer, []Provider{&mockProvider{}},
+		WithOAuth([]oauth.Provider{google}, stores, memStore, memStore, OAuthConfig{}))
+
+	_, err = svc.OAuthCallback(ctx, startFlow(t, svc))
+	require.ErrorIs(t, err, errLinkFailed)
+
+	_, err = memStore.GetByEmail(ctx, "fresh@example.com")
+	assert.ErrorIs(t, err, store.ErrUserNotFound, "no user without its link")
+	// A compensating delete races concurrent links to the same user and
+	// cascades over them; the user must never exist without its link instead.
+	assert.Zero(t, stores.deletes, "no compensating delete")
 }

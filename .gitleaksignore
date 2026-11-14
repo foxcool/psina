@@ -2,3 +2,6 @@
 # the inline gitleaks:allow markers were added (see evmtest/signer.go).
 2ab644a0a5d43374b582c06b166e32a3b7133916:provider/wallet/evm/evmtest/signer.go:generic-api-key:19
 2ab644a0a5d43374b582c06b166e32a3b7133916:provider/wallet/evm/evmtest/signer.go:generic-api-key:20
+# A function assigned to a variable named verifyPassword, committed before its
+# inline gitleaks:allow marker was added (see provider/local/local.go).
+34317e6222c9e80482393e3ca451d802725bca93:provider/local/local.go:generic-api-key:182

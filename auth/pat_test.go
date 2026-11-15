@@ -299,3 +299,50 @@ func TestService_Verify_JWTPathUnchanged(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, user.ID, claims.UserID)
 }
+
+// PAT creation, expiry and touch throttling follow the service clock, the
+// same one refresh tokens use.
+func TestService_PAT_UsesServiceClock(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("expiry", func(t *testing.T) {
+		clock := newFakeClock()
+		service, store := setupTestService(t, WithClock(clock.Now))
+		user := seedUser(t, store)
+
+		expiresAt := clock.Now().Add(time.Hour)
+		res, err := service.CreatePAT(ctx, user.ID, "ci", nil, &expiresAt)
+		require.NoError(t, err)
+		assert.True(t, res.Token.CreatedAt.Equal(clock.Now()))
+
+		_, err = service.Verify(ctx, res.Plaintext)
+		require.NoError(t, err)
+
+		clock.Advance(2 * time.Hour)
+		_, err = service.Verify(ctx, res.Plaintext)
+		assert.ErrorIs(t, err, ErrTokenExpired)
+	})
+
+	t.Run("touch throttle", func(t *testing.T) {
+		clock := newFakeClock()
+		service, store := setupTestService(t, WithClock(clock.Now))
+		user := seedUser(t, store)
+
+		res, err := service.CreatePAT(ctx, user.ID, "ci", nil, nil)
+		require.NoError(t, err)
+
+		_, err = service.Verify(ctx, res.Plaintext)
+		require.NoError(t, err)
+		first, err := store.GetPAT(ctx, res.Token.Hash)
+		require.NoError(t, err)
+		require.NotNil(t, first.LastUsedAt)
+		assert.True(t, first.LastUsedAt.Equal(clock.Now()))
+
+		clock.Advance(DefaultPATTouchInterval + time.Second)
+		_, err = service.Verify(ctx, res.Plaintext)
+		require.NoError(t, err)
+		second, err := store.GetPAT(ctx, res.Token.Hash)
+		require.NoError(t, err)
+		assert.True(t, second.LastUsedAt.Equal(clock.Now()))
+	})
+}

@@ -144,19 +144,14 @@ func (h *Handler) Refresh(
 	}
 
 	if refreshToken == "" {
+		h.auditFailure(ctx, req, auditEventRefresh, reasonInvalidRequest)
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("refresh token required"))
 	}
 
 	tokenPair, err := h.service.Refresh(ctx, refreshToken)
 	if err != nil {
-		var reuseErr *TokenReuseError
-		if errors.As(err, &reuseErr) {
-			slog.Warn("token reuse detected",
-				"user_id", reuseErr.UserID,
-				"ip", h.clientIP(req.Peer().Addr, req.Header()),
-				"user_agent", req.Header().Get("User-Agent"),
-			)
-		}
+		reason, attrs := refreshFailure(err)
+		h.auditFailure(ctx, req, auditEventRefresh, reason, attrs...)
 		// Only a rejected token ends the client's session; a storage failure
 		// answered as 401 would log the user out on a DB blip.
 		if errors.Is(err, ErrInvalidCredentials) {
@@ -194,11 +189,26 @@ func (h *Handler) Logout(
 		}
 	}
 
-	if refreshToken != "" {
-		// Answering success here would leave the session alive while the user
-		// believes it ended; cookies stay so the client can retry.
-		if err := h.service.Logout(ctx, refreshToken); err != nil {
+	// The client is answered success whenever no session is left to end; the
+	// audit record says whether this request ended one.
+	if refreshToken == "" {
+		h.auditFailure(ctx, req, auditEventLogout, reasonInvalidRequest)
+	} else {
+		userID, err := h.service.logout(ctx, refreshToken)
+		switch {
+		case err != nil:
+			var attrs []slog.Attr
+			if userID != "" {
+				attrs = append(attrs, slog.String("user_id", userID))
+			}
+			h.auditFailure(ctx, req, auditEventLogout, reasonInternalError, attrs...)
+			// Answering success here would leave the session alive while the user
+			// believes it ended; cookies stay so the client can retry.
 			return nil, internalError(ctx, "logout failed", err)
+		case userID == "":
+			h.auditFailure(ctx, req, auditEventLogout, reasonUnknownToken)
+		default:
+			h.auditSuccess(ctx, req, auditEventLogout, userID)
 		}
 	}
 
@@ -471,8 +481,10 @@ func (h *Handler) CreatePersonalAccessToken(
 	ctx context.Context,
 	req *connect.Request[authv1.CreatePersonalAccessTokenRequest],
 ) (*connect.Response[authv1.CreatePersonalAccessTokenResponse], error) {
+	name := clientAttr("name", req.Msg.Name)
 	userID, err := h.authenticateSession(ctx, req.Header())
 	if err != nil {
+		h.auditFailure(ctx, req, auditEventPATCreate, sessionFailureReason(err), name)
 		return nil, err
 	}
 
@@ -484,8 +496,10 @@ func (h *Handler) CreatePersonalAccessToken(
 
 	result, err := h.service.CreatePAT(ctx, userID, req.Msg.Name, req.Msg.Scopes, expiresAt)
 	if err != nil {
+		h.auditFailure(ctx, req, auditEventPATCreate, patFailureReason(err), name, slog.String("user_id", userID))
 		return nil, patErrorToConnect(ctx, "create pat", err)
 	}
+	h.auditSuccess(ctx, req, auditEventPATCreate, userID, patAttrs(result.Token)...)
 
 	return connect.NewResponse(&authv1.CreatePersonalAccessTokenResponse{
 		Token: result.Plaintext,
@@ -523,14 +537,19 @@ func (h *Handler) RevokePersonalAccessToken(
 	ctx context.Context,
 	req *connect.Request[authv1.RevokePersonalAccessTokenRequest],
 ) (*connect.Response[authv1.RevokePersonalAccessTokenResponse], error) {
+	patID := clientAttr("pat_id", req.Msg.Id)
 	userID, err := h.authenticateSession(ctx, req.Header())
 	if err != nil {
+		h.auditFailure(ctx, req, auditEventPATRevoke, sessionFailureReason(err), patID)
 		return nil, err
 	}
 
-	if err := h.service.RevokePAT(ctx, userID, req.Msg.Id); err != nil {
+	revoked, err := h.service.revokePAT(ctx, userID, req.Msg.Id)
+	if err != nil {
+		h.auditFailure(ctx, req, auditEventPATRevoke, patFailureReason(err), patID, slog.String("user_id", userID))
 		return nil, patErrorToConnect(ctx, "revoke pat", err)
 	}
+	h.auditSuccess(ctx, req, auditEventPATRevoke, userID, patAttrs(revoked)...)
 
 	return connect.NewResponse(&authv1.RevokePersonalAccessTokenResponse{Success: true}), nil
 }

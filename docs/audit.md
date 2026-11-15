@@ -1,7 +1,8 @@
 # Audit Events
 
 psina writes security events — sign-ins, failed logins, account creation and
-linking — as structured log records, one record per event. They answer "who
+linking, logouts, refused refreshes (token reuse among them), PAT creation and
+revocation — as structured log records, one record per event. They answer "who
 signed in to account X, when and from where" during an incident. There is no
 audit table: records go to stdout next to the diagnostic log, and a log
 collector keeps them.
@@ -34,7 +35,7 @@ handler sees the client address.
 | `result`     | always         | `success` or `failure` |
 | `ip`         | always         | Client IP. Behind a gateway it is correct only with `server.trustedProxies` set (see [architecture §4.5](architecture.md#45-client-ip-behind-a-gateway)); `unknown` if the peer address does not parse |
 | `user_agent` | always         | Client `User-Agent`, cut to 256 bytes; empty if not sent |
-| `user_id`    | success; some failures | The account. On a failure only once the request found or created it: see `login`, refused links in `oauth.sign_in`, and `internal_error` after the account was found |
+| `user_id`    | success; some failures | The account. On a failure only once the request found or created it: see `login`, refused links in `oauth.sign_in`, `refresh`, the PAT events, and `internal_error` after the account was found |
 | `reason`     | failure        | Why it failed, see each event |
 
 Never in any record: passwords, password hashes, access or refresh tokens, PAT
@@ -145,14 +146,75 @@ the other signs into that account without an `oauth.link`.
 | `chain` | With `method=wallet` |
 | `user_id` | The new account |
 
+### `logout`
+
+Session end (`Logout` RPC). The client is answered success whether or not a
+session ended; the record tells the two apart.
+
+| Field | Values |
+| ----- | ------ |
+| `user_id` | On success (the account whose session ended); on `internal_error` once the token was found |
+| `reason` | `invalid_request` (no refresh token in the body or cookie), `unknown_token` (the token names no session; nothing ended), `internal_error` (the session may still be alive; the client gets an error and can retry) |
+
+### `refresh`
+
+A refused `Refresh` RPC. Failures only: a successful refresh is not audited
+(see Not Audited).
+
+| Field | Values |
+| ----- | ------ |
+| `user_id` | On `token_reuse`, `session_ended`, and `internal_error` once the token was found |
+| `reason` | see below |
+
+| Reason | Meaning |
+| ------ | ------- |
+| `invalid_request` | No refresh token in the body or cookie |
+| `unknown_token` | The token names no session |
+| `token_expired` | The token is past its lifetime |
+| `token_reuse` | An already used or revoked token was presented outside the reuse leeway; the whole session was revoked. A stolen token being replayed looks like this |
+| `session_ended` | The token was valid and rotated, but the session ended (a logout, or a reuse revocation by a concurrent request) before its successor was saved. Not a replay |
+| `unknown_user` | The account behind the token no longer exists |
+| `invalid_credentials` | Any other rejection |
+| `internal_error` | Server failure |
+
+The client gets the same `invalid refresh token` answer for every rejection.
+Duplicate refreshes within `token.refreshReuseLeeway` succeed and are not
+audited; they leave an `INFO` diagnostic record
+`duplicate refresh within reuse leeway`.
+
+### `pat.create`
+
+Personal access token creation (`CreatePersonalAccessToken` RPC).
+
+| Field | Values |
+| ----- | ------ |
+| `pat_id` | Success: the new token's id |
+| `name` | The token name; on failure as the client sent it (cut to 256 bytes) |
+| `expires_at` | Success, when the token expires: RFC 3339, UTC; absent for a token without expiry |
+| `user_id` | On success; on failure once the session was authenticated |
+| `reason` | `invalid_session` (missing, malformed, expired or unknown session token), `pat_not_allowed` (a PAT was presented: PATs cannot manage PATs), `pat_disabled`, `name_required`, `name_too_long`, `invalid_expiry`, `limit_reached`, `internal_error` |
+
+The token secret and its hash are never logged.
+
+### `pat.revoke`
+
+Personal access token revocation (`RevokePersonalAccessToken` RPC).
+
+| Field | Values |
+| ----- | ------ |
+| `pat_id` | The token id; on failure as the client sent it (cut to 256 bytes) |
+| `name`, `expires_at` | Success: the revoked token's name and expiry, as in `pat.create` |
+| `user_id` | On success; on failure once the session was authenticated |
+| `reason` | `invalid_session`, `pat_not_allowed`, `pat_disabled`, `not_found` (no token with this id owned by the caller), `internal_error` |
+
 ## Not Audited
 
 - `Verify` RPC and `GET /verify`, successful or not: the hot ForwardAuth path,
-  one record per proxied request would flood the log.
+  one record per proxied request would flood the log. PAT use is tracked in the
+  token's `last_used_at` instead.
 - Successful `Refresh`: routine, every few minutes per session.
-- Logout, refresh reuse and refusal, PAT create and revoke: planned. Refresh
-  reuse is today a diagnostic `WARN` record `token reuse detected` with
-  `user_id`, `ip` and `user_agent`, without the `audit` marker.
+- `ListPersonalAccessTokens`, `GetOAuthURL`, `GetChallenge`: read-only or
+  flow starts that change nothing.
 
 ## Example
 

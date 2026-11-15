@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 	authv1 "github.com/foxcool/psina/api/auth/v1"
@@ -532,5 +533,198 @@ func TestAudit_AccountChangeBeforeFailure(t *testing.T) {
 		failed := requireAuditEvent(t, recs[1], auditEventWalletSignIn, auditResultFailure)
 		assert.Equal(t, reasonInternalError, failed["reason"])
 		assert.Equal(t, created["user_id"], failed["user_id"])
+	})
+}
+
+func TestAudit_SessionEvents(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("logout", func(t *testing.T) {
+		svc, store := setupTestService(t)
+		reg := registerUser(t, store, "user@example.com", "SecurePassword123!", svc)
+		client, sink := serveAudited(t, svc)
+
+		_, err := client.Logout(ctx, withUA(&authv1.LogoutRequest{RefreshToken: reg.TokenPair.RefreshToken}))
+		require.NoError(t, err)
+		_, err = client.Logout(ctx, withUA(&authv1.LogoutRequest{RefreshToken: "not-a-token"}))
+		require.NoError(t, err, "logout of an unknown token still answers success")
+		_, err = client.Logout(ctx, withUA(&authv1.LogoutRequest{}))
+		require.NoError(t, err)
+
+		out := sink.raw()
+		recs := sink.records(t)
+		require.Len(t, recs, 3)
+		assert.Equal(t, "user-123", requireAuditEvent(t, recs[0], auditEventLogout, auditResultSuccess)["user_id"])
+		unknown := requireAuditEvent(t, recs[1], auditEventLogout, auditResultFailure)
+		assert.Equal(t, "unknown_token", unknown["reason"])
+		assert.NotContains(t, unknown, "user_id")
+		assert.Equal(t, reasonInvalidRequest, requireAuditEvent(t, recs[2], auditEventLogout, auditResultFailure)["reason"])
+		assertNoSecrets(t, out, reg.TokenPair.RefreshToken, token.HashToken(reg.TokenPair.RefreshToken), "not-a-token")
+	})
+
+	t.Run("refresh failures", func(t *testing.T) {
+		svc, store := setupTestService(t, WithRefreshReuseLeeway(0))
+		reg := registerUser(t, store, "user@example.com", "SecurePassword123!", svc)
+		client, sink := serveAudited(t, svc)
+		r1 := reg.TokenPair.RefreshToken
+
+		r2, err := client.Refresh(ctx, withUA(&authv1.RefreshRequest{RefreshToken: r1}))
+		require.NoError(t, err, "a successful refresh is not audited")
+		_, err = client.Refresh(ctx, withUA(&authv1.RefreshRequest{RefreshToken: r1}))
+		require.Error(t, err)
+		_, err = client.Refresh(ctx, withUA(&authv1.RefreshRequest{RefreshToken: "not-a-token"}))
+		require.Error(t, err)
+		_, err = client.Refresh(ctx, withUA(&authv1.RefreshRequest{}))
+		require.Error(t, err)
+
+		out := sink.raw()
+		recs := sink.records(t)
+		require.Len(t, recs, 3)
+		reuse := requireAuditEvent(t, recs[0], auditEventRefresh, auditResultFailure)
+		assert.Equal(t, "token_reuse", reuse["reason"])
+		assert.Equal(t, "user-123", reuse["user_id"])
+		unknown := requireAuditEvent(t, recs[1], auditEventRefresh, auditResultFailure)
+		assert.Equal(t, "unknown_token", unknown["reason"])
+		assert.NotContains(t, unknown, "user_id")
+		assert.Equal(t, reasonInvalidRequest, requireAuditEvent(t, recs[2], auditEventRefresh, auditResultFailure)["reason"])
+		assertNoSecrets(t, out, r1, r2.Msg.RefreshToken, r2.Msg.AccessToken,
+			token.HashToken(r1), token.HashToken(r2.Msg.RefreshToken), "not-a-token")
+		assert.NotContains(t, out, "token reuse detected", "the ad-hoc diagnostic record is gone")
+	})
+
+	t.Run("refresh expired", func(t *testing.T) {
+		clock := newFakeClock()
+		svc, store := setupTestService(t, WithClock(clock.Now))
+		reg := registerUser(t, store, "user@example.com", "SecurePassword123!", svc)
+		client, sink := serveAudited(t, svc)
+
+		clock.Advance(token.RefreshTokenTTL + time.Minute)
+		_, err := client.Refresh(ctx, withUA(&authv1.RefreshRequest{RefreshToken: reg.TokenPair.RefreshToken}))
+		require.Error(t, err)
+
+		recs := sink.records(t)
+		require.Len(t, recs, 1)
+		assert.Equal(t, "token_expired", requireAuditEvent(t, recs[0], auditEventRefresh, auditResultFailure)["reason"])
+	})
+
+	t.Run("refresh racing a logout", func(t *testing.T) {
+		memStore := memory.New()
+		issuer, err := token.New()
+		require.NoError(t, err)
+		racy := &logoutBeforeSave{Store: memStore}
+		svc := NewService(racy, memStore, issuer, []Provider{&mockProvider{}})
+		r1 := registerForRefresh(t, svc, memStore)
+		racy.root = token.HashToken(r1)
+		client, sink := serveAudited(t, svc)
+
+		_, err = client.Refresh(ctx, withUA(&authv1.RefreshRequest{RefreshToken: r1}))
+		assert.Equal(t, connect.CodeUnauthenticated, connect.CodeOf(err))
+
+		recs := sink.records(t)
+		require.Len(t, recs, 1)
+		rec := requireAuditEvent(t, recs[0], auditEventRefresh, auditResultFailure)
+		assert.Equal(t, "session_ended", rec["reason"])
+		assert.Equal(t, "user-123", rec["user_id"])
+	})
+}
+
+func TestAudit_PATEvents(t *testing.T) {
+	ctx := context.Background()
+	bearer := func(req connect.AnyRequest, tok string) {
+		req.Header().Set("Authorization", "Bearer "+tok)
+	}
+
+	t.Run("create and revoke", func(t *testing.T) {
+		svc, store := setupTestService(t)
+		reg := registerUser(t, store, "user@example.com", "SecurePassword123!", svc)
+		client, sink := serveAudited(t, svc)
+
+		expiresAt := time.Now().Add(24 * time.Hour).Unix()
+		create := withUA(&authv1.CreatePersonalAccessTokenRequest{Name: "ci", ExpiresAt: expiresAt})
+		bearer(create, reg.TokenPair.AccessToken)
+		created, err := client.CreatePersonalAccessToken(ctx, create)
+		require.NoError(t, err)
+
+		revoke := withUA(&authv1.RevokePersonalAccessTokenRequest{Id: created.Msg.Pat.Id})
+		bearer(revoke, reg.TokenPair.AccessToken)
+		_, err = client.RevokePersonalAccessToken(ctx, revoke)
+		require.NoError(t, err)
+
+		out := sink.raw()
+		recs := sink.records(t)
+		require.Len(t, recs, 2)
+		wantExpiry := time.Unix(expiresAt, 0).UTC().Format(time.RFC3339)
+		for i, event := range []string{auditEventPATCreate, auditEventPATRevoke} {
+			rec := requireAuditEvent(t, recs[i], event, auditResultSuccess)
+			assert.Equal(t, "user-123", rec["user_id"])
+			assert.Equal(t, created.Msg.Pat.Id, rec["pat_id"])
+			assert.Equal(t, "ci", rec["name"])
+			assert.Equal(t, wantExpiry, rec["expires_at"])
+		}
+		assertNoSecrets(t, out, created.Msg.Token, token.HashToken(created.Msg.Token), reg.TokenPair.AccessToken)
+	})
+
+	t.Run("no expiry", func(t *testing.T) {
+		svc, store := setupTestService(t)
+		reg := registerUser(t, store, "user@example.com", "SecurePassword123!", svc)
+		client, sink := serveAudited(t, svc)
+
+		create := withUA(&authv1.CreatePersonalAccessTokenRequest{Name: "ci"})
+		bearer(create, reg.TokenPair.AccessToken)
+		_, err := client.CreatePersonalAccessToken(ctx, create)
+		require.NoError(t, err)
+
+		recs := sink.records(t)
+		require.Len(t, recs, 1)
+		assert.NotContains(t, requireAuditEvent(t, recs[0], auditEventPATCreate, auditResultSuccess), "expires_at")
+	})
+
+	t.Run("failures", func(t *testing.T) {
+		svc, store := setupTestService(t)
+		reg := registerUser(t, store, "user@example.com", "SecurePassword123!", svc)
+		pat, err := svc.CreatePAT(ctx, reg.UserID, "seed", nil, nil)
+		require.NoError(t, err)
+		client, sink := serveAudited(t, svc)
+
+		noName := withUA(&authv1.CreatePersonalAccessTokenRequest{})
+		bearer(noName, reg.TokenPair.AccessToken)
+		_, err = client.CreatePersonalAccessToken(ctx, noName)
+		require.Error(t, err)
+
+		byPAT := withUA(&authv1.CreatePersonalAccessTokenRequest{Name: "ci"})
+		bearer(byPAT, pat.Plaintext)
+		_, err = client.CreatePersonalAccessToken(ctx, byPAT)
+		require.Error(t, err)
+
+		noSession := withUA(&authv1.RevokePersonalAccessTokenRequest{Id: pat.Token.ID})
+		_, err = client.RevokePersonalAccessToken(ctx, noSession)
+		require.Error(t, err)
+
+		unknown := withUA(&authv1.RevokePersonalAccessTokenRequest{Id: "00000000-0000-0000-0000-000000000000"})
+		bearer(unknown, reg.TokenPair.AccessToken)
+		_, err = client.RevokePersonalAccessToken(ctx, unknown)
+		require.Error(t, err)
+
+		out := sink.raw()
+		recs := sink.records(t)
+		require.Len(t, recs, 4)
+
+		rec := requireAuditEvent(t, recs[0], auditEventPATCreate, auditResultFailure)
+		assert.Equal(t, "name_required", rec["reason"])
+		assert.Equal(t, "user-123", rec["user_id"])
+
+		rec = requireAuditEvent(t, recs[1], auditEventPATCreate, auditResultFailure)
+		assert.Equal(t, "pat_not_allowed", rec["reason"])
+		assert.NotContains(t, rec, "user_id")
+
+		rec = requireAuditEvent(t, recs[2], auditEventPATRevoke, auditResultFailure)
+		assert.Equal(t, "invalid_session", rec["reason"])
+		assert.Equal(t, pat.Token.ID, rec["pat_id"])
+
+		rec = requireAuditEvent(t, recs[3], auditEventPATRevoke, auditResultFailure)
+		assert.Equal(t, "not_found", rec["reason"])
+		assert.Equal(t, "user-123", rec["user_id"])
+
+		assertNoSecrets(t, out, pat.Plaintext, pat.Token.Hash, reg.TokenPair.AccessToken)
 	})
 }

@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"connectrpc.com/connect"
+	authv1 "github.com/foxcool/psina/api/auth/v1"
 	"github.com/foxcool/psina/entity"
 	"github.com/foxcool/psina/store"
 	"github.com/foxcool/psina/store/memory"
@@ -462,7 +464,13 @@ func TestService_Refresh_SessionEndsBeforeSave(t *testing.T) {
 	racy.root = token.HashToken(r1)
 
 	_, err = service.Refresh(ctx, r1)
-	require.ErrorIs(t, err, ErrTokenReuse)
+	// The token was rotated legitimately; the session ended under it. That is
+	// a rejection, but not a replay: security logs must not see reuse here.
+	require.ErrorIs(t, err, ErrSessionEnded)
+	require.ErrorIs(t, err, ErrInvalidCredentials)
+	assert.NotErrorIs(t, err, ErrTokenReuse)
+	var reuseErr *TokenReuseError
+	assert.False(t, errors.As(err, &reuseErr))
 
 	// The successor offered after the logout must not join the ended session.
 	require.NotEmpty(t, racy.successor)
@@ -470,11 +478,26 @@ func TestService_Refresh_SessionEndsBeforeSave(t *testing.T) {
 	assert.ErrorIs(t, err, store.ErrTokenNotFound)
 }
 
+func TestHandler_Refresh_SessionEndsBeforeSave(t *testing.T) {
+	ctx := context.Background()
+	memStore := memory.New()
+	issuer, err := token.New()
+	require.NoError(t, err)
+	racy := &logoutBeforeSave{Store: memStore}
+	service := NewService(racy, memStore, issuer, []Provider{&mockProvider{}})
+
+	r1 := registerForRefresh(t, service, memStore)
+	racy.root = token.HashToken(r1)
+
+	_, err = NewHandler(service).Refresh(ctx, connect.NewRequest(&authv1.RefreshRequest{RefreshToken: r1}))
+	assert.Equal(t, connect.CodeUnauthenticated, connect.CodeOf(err))
+}
+
 func TestService_Refresh_Concurrent(t *testing.T) {
 	const n = 10
 	ctx := context.Background()
 
-	run := func(t *testing.T, service *Service, r1 string) (winners []string, reuse int) {
+	run := func(t *testing.T, service *Service, r1 string) (winners []string, reuse, ended int) {
 		t.Helper()
 		errs := make([]error, n)
 		pairs := make([]*entity.TokenPair, n)
@@ -491,29 +514,32 @@ func TestService_Refresh_Concurrent(t *testing.T) {
 				winners = append(winners, pairs[i].RefreshToken)
 			case errors.Is(err, ErrTokenReuse):
 				reuse++
+			case errors.Is(err, ErrSessionEnded):
+				ended++
 			default:
 				t.Errorf("unexpected error: %v", err)
 			}
 		}
-		return winners, reuse
+		return winners, reuse, ended
 	}
 
 	t.Run("leeway absorbs duplicates", func(t *testing.T) {
 		service, memStore := setupTestService(t)
-		winners, _ := run(t, service, registerForRefresh(t, service, memStore))
+		winners, _, _ := run(t, service, registerForRefresh(t, service, memStore))
 		assert.Len(t, winners, n)
 	})
 
 	t.Run("strict: concurrent replays end the session", func(t *testing.T) {
 		service, memStore := setupTestService(t, WithRefreshReuseLeeway(0))
 		r1 := registerForRefresh(t, service, memStore)
-		winners, reuse := run(t, service, r1)
+		winners, reuse, ended := run(t, service, r1)
 
 		// One rotation wins; its pair is handed out only if its successor is
 		// saved before a loser ends the session (otherwise SaveRefreshToken
-		// refuses it). Either way the session ends and nothing issued stays usable.
-		assert.LessOrEqual(t, len(winners), 1)
-		assert.Equal(t, n, len(winners)+reuse)
+		// refuses it, and the winner learns the session ended: it replayed
+		// nothing). Either way the session ends and nothing issued stays usable.
+		assert.Equal(t, 1, len(winners)+ended)
+		assert.Equal(t, n, len(winners)+reuse+ended)
 		family, err := memStore.GetRefreshFamily(ctx, token.HashToken(r1))
 		require.NoError(t, err)
 		assert.True(t, family.SessionEnded)

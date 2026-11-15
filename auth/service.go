@@ -22,12 +22,17 @@ var _ TokenIssuer = (*token.Issuer)(nil)
 
 // Service errors.
 var (
-	ErrUserNotFound          = errors.New("user not found")
-	ErrInvalidCredentials    = errors.New("invalid credentials")
-	ErrUserExists            = errors.New("user already exists")
-	ErrTokenRevoked          = errors.New("refresh token revoked")
-	ErrTokenExpired          = errors.New("token expired") // refresh token or PAT
-	ErrTokenReuse            = errors.New("refresh token reuse detected")
+	ErrUserNotFound       = errors.New("user not found")
+	ErrInvalidCredentials = errors.New("invalid credentials")
+	ErrUserExists         = errors.New("user already exists")
+	ErrTokenRevoked       = errors.New("refresh token revoked")
+	ErrTokenExpired       = errors.New("token expired") // refresh token or PAT
+	ErrTokenReuse         = errors.New("refresh token reuse detected")
+	// ErrSessionEnded is a refresh whose token was rotated legitimately but
+	// whose session ended (logout, reuse revocation) before the successor was
+	// saved. Wrapped with ErrInvalidCredentials; unlike ErrTokenReuse it is no
+	// sign of a replayed token.
+	ErrSessionEnded          = errors.New("session ended during refresh")
 	ErrPATNotFound           = errors.New("personal access token not found")
 	ErrPATDisabled           = errors.New("personal access tokens are disabled")
 	ErrPATLimitReached       = errors.New("personal access token limit reached")
@@ -136,7 +141,10 @@ func WithRefreshReuseLeeway(d time.Duration) ServiceOption {
 	}
 }
 
-// WithClock replaces time.Now for refresh token lifecycle decisions (tests).
+// WithClock replaces time.Now as the service clock (tests). Every time-based
+// decision reads it: refresh token rotation, expiry and reuse leeway, PAT
+// creation, expiry and last-used throttling, OAuth state and wallet challenge
+// lifetimes.
 func WithClock(now func() time.Time) ServiceOption {
 	return func(s *Service) {
 		s.now = now
@@ -329,17 +337,21 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*entity.Tok
 		return nil, fmt.Errorf("%w: %w", ErrInvalidCredentials, err)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("get user: %w", err)
+		return nil, &accountError{accountChange{userID: rt.UserID}, fmt.Errorf("get user: %w", err)}
 	}
 
 	// Rotation and saving the successor are separate steps; a logout or reuse
 	// revocation landing between them ends the session first, and the store
-	// then refuses the successor (SaveRefreshToken contract).
+	// then refuses the successor (SaveRefreshToken contract). This token was
+	// not replayed, so it is not reported as reuse.
 	pair, err := s.issueTokens(ctx, user.ID, user.Email, user.Roles, familyRoot(rt))
 	if errors.Is(err, store.ErrTokenRevoked) {
-		return nil, &TokenReuseError{UserID: rt.UserID}
+		return nil, &accountError{accountChange{userID: rt.UserID}, fmt.Errorf("%w: %w", ErrInvalidCredentials, ErrSessionEnded)}
 	}
-	return pair, err
+	if err != nil {
+		return nil, &accountError{accountChange{userID: rt.UserID}, err}
+	}
+	return pair, nil
 }
 
 // isDuplicateRefresh reports whether a replay of an already revoked token is a
@@ -391,14 +403,21 @@ func familyRoot(rt *entity.RefreshToken) string {
 // the token itself, so siblings minted within the reuse leeway end with it.
 // An unknown token is not an error.
 func (s *Service) Logout(ctx context.Context, refreshToken string) error {
+	_, err := s.logout(ctx, refreshToken)
+	return err
+}
+
+// logout is Logout that also returns the account the token belongs to, for
+// the audit record; "" when the token is unknown.
+func (s *Service) logout(ctx context.Context, refreshToken string) (string, error) {
 	rt, err := s.tokenStore.GetRefreshToken(ctx, token.HashToken(refreshToken))
 	if errors.Is(err, store.ErrTokenNotFound) {
-		return nil
+		return "", nil
 	}
 	if err != nil {
-		return fmt.Errorf("get refresh token: %w", err)
+		return "", fmt.Errorf("get refresh token: %w", err)
 	}
-	return s.tokenStore.RevokeTokens(ctx, familyRoot(rt))
+	return rt.UserID, s.tokenStore.RevokeTokens(ctx, familyRoot(rt))
 }
 
 // Verify validates a credential and returns claims. It accepts both short-lived
@@ -430,7 +449,8 @@ func (s *Service) verifyPAT(ctx context.Context, accessToken string) (*entity.Cl
 		return nil, fmt.Errorf("get pat: %w", err)
 	}
 
-	if pat.ExpiresAt != nil && time.Now().After(*pat.ExpiresAt) {
+	now := s.now()
+	if pat.ExpiresAt != nil && now.After(*pat.ExpiresAt) {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidCredentials, ErrTokenExpired)
 	}
 
@@ -445,8 +465,8 @@ func (s *Service) verifyPAT(ctx context.Context, accessToken string) (*entity.Cl
 	// Best-effort, throttled last-used tracking; never fail verification on it.
 	if s.patConfig.TouchInterval < 0 ||
 		pat.LastUsedAt == nil ||
-		time.Since(*pat.LastUsedAt) >= s.patConfig.TouchInterval {
-		_ = s.patStore.TouchPAT(ctx, pat.Hash, time.Now())
+		now.Sub(*pat.LastUsedAt) >= s.patConfig.TouchInterval {
+		_ = s.patStore.TouchPAT(ctx, pat.Hash, now)
 	}
 
 	return &entity.Claims{
@@ -478,7 +498,7 @@ func (s *Service) CreatePAT(ctx context.Context, userID, name string, scopes []s
 		return nil, ErrPATNameTooLong
 	}
 
-	now := time.Now()
+	now := s.now()
 	if expiresAt != nil {
 		if !expiresAt.After(now) {
 			return nil, fmt.Errorf("%w: expiry is in the past", ErrPATExpiryInvalid)
@@ -531,8 +551,15 @@ func (s *Service) ListPATs(ctx context.Context, userID string) ([]*entity.Person
 
 // RevokePAT deletes a personal access token (by its UUID) owned by the user.
 func (s *Service) RevokePAT(ctx context.Context, userID, id string) error {
+	_, err := s.revokePAT(ctx, userID, id)
+	return err
+}
+
+// revokePAT is RevokePAT that also returns the revoked token's metadata, for
+// the audit record.
+func (s *Service) revokePAT(ctx context.Context, userID, id string) (*entity.PersonalAccessToken, error) {
 	if s.patStore == nil {
-		return ErrPATDisabled
+		return nil, ErrPATDisabled
 	}
 	// IDs are UUIDs; anything else cannot exist, and passing it on would make
 	// Postgres fail the uuid cast (a 500) instead of answering not found.
@@ -541,13 +568,34 @@ func (s *Service) RevokePAT(ctx context.Context, userID, id string) error {
 	// canonical form.
 	parsed, err := uuid.Parse(id)
 	if err != nil {
-		return fmt.Errorf("%w: %s", ErrPATNotFound, id)
+		return nil, fmt.Errorf("%w: %s", ErrPATNotFound, id)
 	}
-	err = s.patStore.DeletePAT(ctx, userID, parsed.String())
+	canonical := parsed.String()
+
+	// shortcut: reads the owner's whole PAT list to name the revoked token;
+	// a DeletePAT that returns the deleted row would save the read once PAT
+	// counts grow large.
+	pats, err := s.patStore.ListPATs(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list pats: %w", err)
+	}
+	// DeletePAT stays authoritative: the list only supplies metadata.
+	revoked := &entity.PersonalAccessToken{ID: canonical, UserID: userID}
+	for _, pat := range pats {
+		if pat.ID == canonical {
+			revoked = pat
+			break
+		}
+	}
+
+	err = s.patStore.DeletePAT(ctx, userID, canonical)
 	if errors.Is(err, store.ErrTokenNotFound) {
-		return fmt.Errorf("%w: %s", ErrPATNotFound, id)
+		return nil, fmt.Errorf("%w: %s", ErrPATNotFound, id)
 	}
-	return err
+	if err != nil {
+		return nil, err
+	}
+	return revoked, nil
 }
 
 // JWKS returns the JSON Web Key Set for public key verification.

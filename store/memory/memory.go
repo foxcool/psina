@@ -60,7 +60,16 @@ func (s *Store) Create(ctx context.Context, user *entity.User) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Check if user already exists
+	if err := s.userConflict(user); err != nil {
+		return err
+	}
+	s.insertUser(user)
+	return nil
+}
+
+// userConflict reports store.ErrUserExists for a user whose ID or email is
+// taken. Callers hold the lock.
+func (s *Store) userConflict(user *entity.User) error {
 	if _, exists := s.users[user.ID]; exists {
 		return fmt.Errorf("%w: %s", store.ErrUserExists, user.ID)
 	}
@@ -69,8 +78,11 @@ func (s *Store) Create(ctx context.Context, user *entity.User) error {
 	if _, exists := s.usersByEmail[user.Email]; exists && user.Email != "" {
 		return fmt.Errorf("%w: %s", store.ErrUserExists, user.Email)
 	}
+	return nil
+}
 
-	// Set timestamps if not set
+// insertUser stores a user checked by userConflict. Callers hold the lock.
+func (s *Store) insertUser(user *entity.User) {
 	now := time.Now()
 	if user.CreatedAt.IsZero() {
 		user.CreatedAt = now
@@ -84,8 +96,6 @@ func (s *Store) Create(ctx context.Context, user *entity.User) error {
 	if user.Email != "" {
 		s.usersByEmail[user.Email] = stored
 	}
-
-	return nil
 }
 
 // GetByID retrieves a user by ID.
@@ -393,17 +403,51 @@ func (s *Store) SaveOAuthIdentity(ctx context.Context, identity *entity.OAuthIde
 	if err := s.requireUser(identity.UserID); err != nil {
 		return err
 	}
-	key := oauthKey{identity.Provider, identity.ExternalID}
-	if _, exists := s.oauthIdentities[key]; exists {
+	if err := s.oauthIdentityConflict(identity); err != nil {
+		return err
+	}
+	s.insertOAuthIdentity(identity)
+	return nil
+}
+
+// CreateUserWithOAuthIdentity creates a user and its first identity link
+// under one lock hold: every check runs before either is stored.
+func (s *Store) CreateUserWithOAuthIdentity(ctx context.Context, user *entity.User, identity *entity.OAuthIdentity) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Same order as the postgres inserts: user first.
+	if err := s.userConflict(user); err != nil {
+		return err
+	}
+	if identity.UserID != user.ID {
+		return fmt.Errorf("%w: %s", store.ErrUserNotFound, identity.UserID)
+	}
+	if err := s.oauthIdentityConflict(identity); err != nil {
+		return err
+	}
+	s.insertUser(user)
+	s.insertOAuthIdentity(identity)
+	return nil
+}
+
+// oauthIdentityConflict reports store.ErrOAuthIdentityExists for a taken
+// (provider, external id) pair. Callers hold the lock.
+func (s *Store) oauthIdentityConflict(identity *entity.OAuthIdentity) error {
+	if _, exists := s.oauthIdentities[oauthKey{identity.Provider, identity.ExternalID}]; exists {
 		return fmt.Errorf("%w: %s/%s", store.ErrOAuthIdentityExists, identity.Provider, identity.ExternalID)
 	}
+	return nil
+}
+
+// insertOAuthIdentity stores an identity checked by oauthIdentityConflict.
+// Callers hold the lock.
+func (s *Store) insertOAuthIdentity(identity *entity.OAuthIdentity) {
 	if identity.CreatedAt.IsZero() {
 		identity.CreatedAt = time.Now()
 	}
 	stored := *identity
-	s.oauthIdentities[key] = &stored
-
-	return nil
+	s.oauthIdentities[oauthKey{identity.Provider, identity.ExternalID}] = &stored
 }
 
 // GetOAuthIdentity retrieves an identity by provider and external account id.

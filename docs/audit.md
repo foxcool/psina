@@ -134,9 +134,9 @@ An account was created by an OAuth or wallet sign-in. Written before the
 `oauth.sign_in` / `wallet.sign_in` record of the same request, also when that
 sign-in then fails (`internal_error`): the account stays. Success only.
 
-Two concurrent first sign-ins with one provider account can both act on the
-new account: one writes `user.created`, the other `oauth.link` for the same
-`user_id`.
+An OAuth sign-in creates the account and its provider link together, so two
+concurrent first sign-ins with one provider account write one `user.created`;
+the other signs into that account without an `oauth.link`.
 
 | Field | Values |
 | ----- | ------ |

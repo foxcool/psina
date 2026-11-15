@@ -9,7 +9,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"log/slog"
 	"time"
 
 	"github.com/foxcool/psina/entity"
@@ -303,65 +302,83 @@ func (s *Service) resolveOAuthUser(ctx context.Context, provider string, info *o
 		return nil, oauthUserExisting, ErrOAuthEmailUnverified
 	}
 
-	user, isNew, err := s.findOrCreateUser(ctx, email)
-	if err != nil {
-		return nil, oauthUserExisting, err
-	}
-	origin := oauthUserCreated
-	if !isNew {
-		if err := s.checkAutoLink(ctx, user.ID); err != nil {
-			return nil, oauthUserExisting, &accountError{accountChange{userID: user.ID}, err}
-		}
-		origin = oauthUserLinked
+	user, err = s.userStore.GetByEmail(ctx, email)
+	switch {
+	case err == nil:
+		return s.linkOAuthUser(ctx, user, provider, info.ExternalID, email)
+	case !errors.Is(err, store.ErrUserNotFound):
+		return nil, oauthUserExisting, fmt.Errorf("get user by email: %w", err)
 	}
 
-	err = s.oauthIdentities.SaveOAuthIdentity(ctx, &entity.OAuthIdentity{
+	user, err = s.createOAuthUser(ctx, provider, info.ExternalID, email)
+	switch {
+	case err == nil:
+		return user, oauthUserCreated, nil
+	case errors.Is(err, store.ErrUserExists):
+		// Lost a race with a concurrent registration or sign-in for the same
+		// email: link to that account as if it had been found above.
+		user, err = s.userStore.GetByEmail(ctx, email)
+		if err != nil {
+			return nil, oauthUserExisting, fmt.Errorf("get user by email: %w", err)
+		}
+		return s.linkOAuthUser(ctx, user, provider, info.ExternalID, email)
+	case errors.Is(err, store.ErrOAuthIdentityExists):
+		// A concurrent callback for the same provider account linked it first.
+		user, err = s.oauthIdentityUser(ctx, provider, info.ExternalID)
+		return user, oauthUserExisting, err
+	default:
+		return nil, oauthUserExisting, fmt.Errorf("create oauth user: %w", err)
+	}
+}
+
+// createOAuthUser creates a user together with its provider link. The store
+// writes both or neither, so a failed link never leaves a user that holds the
+// email with no way to sign in, and nothing has to be removed afterwards.
+func (s *Service) createOAuthUser(ctx context.Context, provider, externalID, email string) (*entity.User, error) {
+	id, err := uuid.NewV7()
+	if err != nil {
+		return nil, fmt.Errorf("generate user id: %w", err)
+	}
+	now := s.now()
+	user := &entity.User{ID: id.String(), Email: email, CreatedAt: now, UpdatedAt: now}
+	err = s.oauthIdentities.CreateUserWithOAuthIdentity(ctx, user, &entity.OAuthIdentity{
 		ID:         uuid.NewString(),
 		UserID:     user.ID,
 		Provider:   provider,
-		ExternalID: info.ExternalID,
+		ExternalID: externalID,
+		Email:      email,
+		CreatedAt:  now,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return user, nil
+}
+
+// linkOAuthUser attaches a provider account to an existing user found by
+// email (auto-link), if checkAutoLink allows it.
+func (s *Service) linkOAuthUser(ctx context.Context, user *entity.User, provider, externalID, email string) (*entity.User, oauthUserOrigin, error) {
+	if err := s.checkAutoLink(ctx, user.ID); err != nil {
+		return nil, oauthUserExisting, &accountError{accountChange{userID: user.ID}, err}
+	}
+
+	err := s.oauthIdentities.SaveOAuthIdentity(ctx, &entity.OAuthIdentity{
+		ID:         uuid.NewString(),
+		UserID:     user.ID,
+		Provider:   provider,
+		ExternalID: externalID,
 		Email:      email,
 		CreatedAt:  s.now(),
 	})
-	if err == nil {
-		return user, origin, nil
-	}
-
-	if isNew {
-		s.discardUnlinkedUser(ctx, user.ID)
-	}
-	// A concurrent callback for the same provider account linked it first,
-	// often to the very user created here (it found it by email): then this
-	// sign-in still created it.
-	if errors.Is(err, store.ErrOAuthIdentityExists) {
-		winner, err := s.oauthIdentityUser(ctx, provider, info.ExternalID)
-		if err == nil && isNew && winner.ID == user.ID {
-			return winner, oauthUserCreated, nil
-		}
+	switch {
+	case err == nil:
+		return user, oauthUserLinked, nil
+	case errors.Is(err, store.ErrOAuthIdentityExists):
+		// A concurrent callback for the same provider account linked it first.
+		winner, err := s.oauthIdentityUser(ctx, provider, externalID)
 		return winner, oauthUserExisting, err
-	}
-	return nil, oauthUserExisting, fmt.Errorf("save oauth identity: %w", err)
-}
-
-// discardUnlinkedUser undoes a user created for a sign-in whose identity link
-// failed. No transaction spans the user and the identity; left behind, the
-// user would hold the email with no way to sign in. A user some concurrent
-// flow has linked meanwhile is kept: deleting it would cascade to that link.
-// Runs detached from ctx so a cancelled request still cleans up.
-// shortcut: a link landing between the check and the delete is lost; a
-// transactional user+identity store method removes the window (personal-w3zn).
-func (s *Service) discardUnlinkedUser(ctx context.Context, userID string) {
-	ctx = context.WithoutCancel(ctx)
-	linked, err := s.oauthIdentities.ListOAuthIdentities(ctx, userID)
-	if err != nil {
-		slog.ErrorContext(ctx, "check user links after failed oauth link", "user_id", userID, "error", err)
-		return
-	}
-	if len(linked) > 0 {
-		return
-	}
-	if err := s.userStore.Delete(ctx, userID); err != nil {
-		slog.ErrorContext(ctx, "delete user after failed oauth link", "user_id", userID, "error", err)
+	default:
+		return nil, oauthUserExisting, fmt.Errorf("save oauth identity: %w", err)
 	}
 }
 
@@ -371,7 +388,8 @@ func (s *Service) discardUnlinkedUser(ctx context.Context, userID string) {
 // first may not own it, and linking would hand them the provider's sign-in
 // (pre-account takeover). Its owner proves control by signing in instead.
 // shortcut: a password saved after this check (a registration racing the
-// sign-in) is not seen; closing it needs the transactional link of personal-w3zn.
+// sign-in) is not seen; closing it needs the check and the link in one
+// transaction.
 func (s *Service) checkAutoLink(ctx context.Context, userID string) error {
 	if s.oauthConfig.DisableAutoLinkEmail {
 		return ErrOAuthLinkDisabled
@@ -402,39 +420,6 @@ func (s *Service) oauthIdentityUser(ctx context.Context, provider, externalID st
 		return nil, fmt.Errorf("get oauth user: %w", err)
 	}
 	return user, nil
-}
-
-// findOrCreateUser returns the account with this email, or creates one.
-// Reports whether the user was created.
-func (s *Service) findOrCreateUser(ctx context.Context, email string) (*entity.User, bool, error) {
-	user, err := s.userStore.GetByEmail(ctx, email)
-	if err == nil {
-		return user, false, nil
-	}
-	if !errors.Is(err, store.ErrUserNotFound) {
-		return nil, false, fmt.Errorf("get user by email: %w", err)
-	}
-
-	id, err := uuid.NewV7()
-	if err != nil {
-		return nil, false, fmt.Errorf("generate user id: %w", err)
-	}
-	now := s.now()
-	user = &entity.User{ID: id.String(), Email: email, CreatedAt: now, UpdatedAt: now}
-	err = s.userStore.Create(ctx, user)
-	if err == nil {
-		return user, true, nil
-	}
-	if !errors.Is(err, store.ErrUserExists) {
-		return nil, false, fmt.Errorf("create user: %w", err)
-	}
-
-	// Lost a race with a concurrent registration of the same email.
-	user, err = s.userStore.GetByEmail(ctx, email)
-	if err != nil {
-		return nil, false, fmt.Errorf("get user by email: %w", err)
-	}
-	return user, false, nil
 }
 
 // oauthStateBinding is the challenge payload that ties a state to the

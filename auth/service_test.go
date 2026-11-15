@@ -307,7 +307,7 @@ func TestService_Refresh_TokenReuse(t *testing.T) {
 
 	// The whole family is revoked, including the legitimate successor
 	_, err = service.Refresh(ctx, second.RefreshToken)
-	assert.ErrorIs(t, err, ErrTokenReuse)
+	assert.ErrorIs(t, err, ErrTokenRevoked)
 	assert.ErrorIs(t, err, ErrInvalidCredentials)
 }
 
@@ -369,7 +369,7 @@ func TestService_Refresh_ReuseLeeway(t *testing.T) {
 		_, err = service.Refresh(ctx, r1)
 		require.ErrorIs(t, err, ErrTokenReuse)
 		_, err = service.Refresh(ctx, r3.RefreshToken)
-		assert.ErrorIs(t, err, ErrTokenReuse, "family must be revoked")
+		assert.ErrorIs(t, err, ErrTokenRevoked, "family must be revoked")
 	})
 
 	t.Run("no grace after logout", func(t *testing.T) {
@@ -395,7 +395,7 @@ func TestService_Refresh_ReuseLeeway(t *testing.T) {
 
 		require.NoError(t, service.Logout(ctx, tabA.RefreshToken))
 		_, err = service.Refresh(ctx, tabB.RefreshToken)
-		assert.ErrorIs(t, err, ErrTokenReuse)
+		assert.ErrorIs(t, err, ErrTokenRevoked)
 	})
 
 	t.Run("replay from a lagging clock beyond leeway is reuse", func(t *testing.T) {
@@ -413,13 +413,15 @@ func TestService_Refresh_ReuseLeeway(t *testing.T) {
 		assert.ErrorIs(t, err, ErrTokenReuse)
 	})
 
-	t.Run("logged out token is reuse without grace", func(t *testing.T) {
+	t.Run("logged out token is revoked, not reuse", func(t *testing.T) {
 		service, memStore := setupTestService(t)
 		r1 := registerForRefresh(t, service, memStore)
 
 		require.NoError(t, service.Logout(ctx, r1))
 		_, err := service.Refresh(ctx, r1)
-		assert.ErrorIs(t, err, ErrTokenReuse)
+		assert.ErrorIs(t, err, ErrTokenRevoked)
+		assert.ErrorIs(t, err, ErrInvalidCredentials)
+		assert.NotErrorIs(t, err, ErrTokenReuse, "a retry after logout is no replay")
 	})
 
 	t.Run("expired token", func(t *testing.T) {
@@ -545,7 +547,7 @@ func TestService_Refresh_Concurrent(t *testing.T) {
 		assert.True(t, family.SessionEnded)
 		for _, rt := range winners {
 			_, err := service.Refresh(ctx, rt)
-			assert.ErrorIs(t, err, ErrTokenReuse)
+			assert.ErrorIs(t, err, ErrTokenRevoked)
 		}
 	})
 }

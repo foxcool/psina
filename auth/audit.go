@@ -301,6 +301,8 @@ func refreshFailure(err error) (string, []slog.Attr) {
 		return "token_reuse", []slog.Attr{slog.String("user_id", reuse.UserID)}
 	case errors.Is(err, ErrSessionEnded):
 		return "session_ended", accountAttrs(err)
+	case errors.Is(err, ErrTokenRevoked):
+		return "token_revoked", accountAttrs(err)
 	case errors.Is(err, ErrTokenExpired):
 		return "token_expired", nil
 	case errors.Is(err, store.ErrTokenNotFound):

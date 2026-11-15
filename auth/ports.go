@@ -49,6 +49,12 @@ type TokenStore interface {
 	// The root row anchors the session: never delete the root of a family
 	// that still has live members (e.g. in an expiry cleanup — the root
 	// expires before its successors).
+	//
+	// Saving a root (a new session) also sweeps whole families in which every
+	// member has expired, so the table stays bounded without a scheduled job.
+	// A family with any unexpired member is kept in full, ended or not: until
+	// a rotated or logged-out token expires, its replay must still be
+	// recognised as reuse rather than as an unknown token.
 	SaveRefreshToken(ctx context.Context, token *entity.RefreshToken) error
 
 	// GetRefreshToken retrieves a refresh token by its hash.

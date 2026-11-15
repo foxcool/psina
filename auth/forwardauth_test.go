@@ -66,6 +66,29 @@ func TestHandler_ForwardAuth(t *testing.T) {
 		assert.Equal(t, "facookie@example.com", rec.Header().Get("X-User-Email"))
 	})
 
+	// A browser mid-eviction sends a cleared legacy duplicate first; Verify
+	// already skips it, ForwardAuth must too.
+	t.Run("empty duplicate cookie does not shadow the token", func(t *testing.T) {
+		handler, service, store := setupCookieHandler(t)
+		result := registerUser(t, store, "dup@example.com", "SecurePassword123!", service)
+
+		rec := serveForwardAuth(handler, http.Header{"Cookie": {AccessTokenCookie + "=; " + AccessTokenCookie + "=" + result.TokenPair.AccessToken}})
+
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, "dup@example.com", rec.Header().Get("X-User-Email"))
+	})
+
+	// HTTP/1.1 clients may split cookies over several Cookie header lines.
+	t.Run("token in a second Cookie header line", func(t *testing.T) {
+		handler, service, store := setupCookieHandler(t)
+		result := registerUser(t, store, "lines@example.com", "SecurePassword123!", service)
+
+		rec := serveForwardAuth(handler, http.Header{"Cookie": {"theme=dark", AccessTokenCookie + "=" + result.TokenPair.AccessToken}})
+
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, "lines@example.com", rec.Header().Get("X-User-Email"))
+	})
+
 	t.Run("cookie ignored when disabled", func(t *testing.T) {
 		handler, service, store := setupTestHandler(t)
 		result := registerUser(t, store, "nocookie@example.com", "SecurePassword123!", service)

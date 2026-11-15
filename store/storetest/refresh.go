@@ -171,7 +171,7 @@ func RefreshRotation(t *testing.T, newStore NewTokenStore) {
 
 	t.Run("starting a session sweeps families whose every member expired", func(t *testing.T) {
 		s, userID := newStore(t)
-		past := time.Now().Add(-time.Hour)
+		past := time.Now().Add(-24 * time.Hour)
 		// Rotated, then expired.
 		save(t, s, &entity.RefreshToken{Hash: "dead", UserID: userID, ExpiresAt: past})
 		save(t, s, &entity.RefreshToken{Hash: "dead-c1", UserID: userID, Parent: "dead", ExpiresAt: past})
@@ -196,7 +196,7 @@ func RefreshRotation(t *testing.T, newStore NewTokenStore) {
 		// token instead of detected reuse.
 		s, userID := newStore(t)
 		wall := time.Now()
-		past, future := wall.Add(-time.Hour), wall.Add(time.Hour)
+		past, future := wall.Add(-24*time.Hour), wall.Add(time.Hour)
 		save(t, s, &entity.RefreshToken{Hash: "root", UserID: userID, ExpiresAt: past})
 		save(t, s, &entity.RefreshToken{Hash: "c1", UserID: userID, Parent: "root", ExpiresAt: past})
 		save(t, s, &entity.RefreshToken{Hash: "c2", UserID: userID, Parent: "root", ExpiresAt: future})
@@ -220,6 +220,23 @@ func RefreshRotation(t *testing.T, newStore NewTokenStore) {
 		require.NoError(t, s.SaveRefreshToken(ctx, &entity.RefreshToken{
 			Hash: "c4", UserID: userID, Parent: "root", ExpiresAt: future,
 		}), "the live session continues")
+	})
+
+	t.Run("sweep keeps a family that expired moments ago", func(t *testing.T) {
+		// A refresh may rotate the last live member just before it expires and
+		// save the successor just after; the sweep must not delete the root
+		// in between.
+		s, userID := newStore(t)
+		wall := time.Now()
+		save(t, s, &entity.RefreshToken{Hash: "root", UserID: userID, ExpiresAt: wall.Add(-time.Second)})
+		_, err := s.RotateRefreshToken(ctx, "root", wall.Add(-2*time.Second))
+		require.NoError(t, err)
+
+		save(t, s, &entity.RefreshToken{Hash: "fresh", UserID: userID})
+
+		require.NoError(t, s.SaveRefreshToken(ctx, &entity.RefreshToken{
+			Hash: "c1", UserID: userID, Parent: "root", ExpiresAt: wall.Add(time.Hour),
+		}), "the in-flight refresh still saves its successor")
 	})
 
 	t.Run("unknown family is empty", func(t *testing.T) {

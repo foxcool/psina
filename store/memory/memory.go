@@ -202,15 +202,17 @@ func (s *Store) SaveRefreshToken(ctx context.Context, token *entity.RefreshToken
 }
 
 // sweepExpiredFamilies deletes every family whose members have all expired
-// (TokenStore.SaveRefreshToken contract). The caller holds the write lock.
+// at least store.RefreshSweepGrace ago (TokenStore.SaveRefreshToken
+// contract). The caller holds the write lock.
 func (s *Store) sweepExpiredFamilies(now time.Time) {
-	live := make(map[string]bool) // family root -> has an unexpired member
+	cutoff := now.Add(-store.RefreshSweepGrace)
+	live := make(map[string]bool) // family root -> has a member not past the cutoff
 	for _, t := range s.refreshTokens {
 		root := t.Parent
 		if root == "" {
 			root = t.Hash
 		}
-		live[root] = live[root] || t.ExpiresAt.After(now)
+		live[root] = live[root] || t.ExpiresAt.After(cutoff)
 	}
 	maps.DeleteFunc(s.refreshTokens, func(_ string, t *entity.RefreshToken) bool {
 		root := t.Parent

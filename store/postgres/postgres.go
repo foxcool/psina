@@ -292,7 +292,8 @@ func (s *Store) SaveRefreshToken(ctx context.Context, token *entity.RefreshToken
 const refreshSweepBatch = 100
 
 // sweepExpiredFamilies deletes up to refreshSweepBatch families whose every
-// member expired before now (TokenStore.SaveRefreshToken contract). It runs
+// member expired at least store.RefreshSweepGrace before now
+// (TokenStore.SaveRefreshToken contract). It runs
 // on root saves only: a refresh adds a member to a live family, which no
 // sweep could delete anyway.
 //
@@ -301,6 +302,7 @@ const refreshSweepBatch = 100
 // takes a fresh snapshot (READ COMMITTED) and re-checks for a live member, so
 // a successor committed between the two statements keeps its root.
 func (s *Store) sweepExpiredFamilies(ctx context.Context, now time.Time) error {
+	cutoff := now.Add(-store.RefreshSweepGrace)
 	lockRoots := fmt.Sprintf(`
 		SELECT r.hash FROM %[1]s r
 		WHERE r.parent = '' AND r.expires_at <= $1
@@ -319,7 +321,7 @@ func (s *Store) sweepExpiredFamilies(ctx context.Context, now time.Time) error {
 	`, s.tableRefreshTokens)
 
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, lockRoots, now, refreshSweepBatch)
+		rows, err := tx.Query(ctx, lockRoots, cutoff, refreshSweepBatch)
 		if err != nil {
 			return fmt.Errorf("lock expired refresh families: %w", err)
 		}
@@ -330,7 +332,7 @@ func (s *Store) sweepExpiredFamilies(ctx context.Context, now time.Time) error {
 		if len(roots) == 0 {
 			return nil
 		}
-		if _, err := tx.Exec(ctx, deleteFamilies, roots, now); err != nil {
+		if _, err := tx.Exec(ctx, deleteFamilies, roots, cutoff); err != nil {
 			return fmt.Errorf("sweep expired refresh families: %w", err)
 		}
 		return nil

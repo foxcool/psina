@@ -591,23 +591,7 @@ func (s *Service) revokePAT(ctx context.Context, userID, id string) (*entity.Per
 	}
 	canonical := parsed.String()
 
-	// shortcut: reads the owner's whole PAT list to name the revoked token;
-	// a DeletePAT that returns the deleted row would save the read once PAT
-	// counts grow large.
-	pats, err := s.patStore.ListPATs(ctx, userID)
-	if err != nil {
-		return nil, fmt.Errorf("list pats: %w", err)
-	}
-	// DeletePAT stays authoritative: the list only supplies metadata.
-	revoked := &entity.PersonalAccessToken{ID: canonical, UserID: userID}
-	for _, pat := range pats {
-		if pat.ID == canonical {
-			revoked = pat
-			break
-		}
-	}
-
-	err = s.patStore.DeletePAT(ctx, userID, canonical)
+	revoked, err := s.patStore.DeletePAT(ctx, userID, canonical)
 	if errors.Is(err, store.ErrTokenNotFound) {
 		return nil, fmt.Errorf("%w: %s", ErrPATNotFound, id)
 	}

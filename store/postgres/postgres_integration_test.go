@@ -273,11 +273,12 @@ func TestStore_PATCRUD(t *testing.T) {
 	require.Len(t, pats, 1)
 
 	// Delete scoped to a different owner is a no-op (not found).
-	err = s.DeletePAT(ctx, uuid.New().String(), pat.ID)
+	_, err = s.DeletePAT(ctx, uuid.New().String(), pat.ID)
 	assert.True(t, errors.Is(err, store.ErrTokenNotFound))
 
 	// Delete by the real owner removes it.
-	require.NoError(t, s.DeletePAT(ctx, user.ID, pat.ID))
+	_, err = s.DeletePAT(ctx, user.ID, pat.ID)
+	require.NoError(t, err)
 	_, err = s.GetPAT(ctx, "pat-hash-1")
 	assert.True(t, errors.Is(err, store.ErrTokenNotFound))
 }

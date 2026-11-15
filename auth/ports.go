@@ -98,8 +98,9 @@ type PATStore interface {
 	ListPATs(ctx context.Context, userID string) ([]*entity.PersonalAccessToken, error)
 
 	// DeletePAT removes a token by its UUID, scoped to its owner to prevent
-	// cross-user deletion. No such token for this owner is store.ErrTokenNotFound.
-	DeletePAT(ctx context.Context, userID, id string) error
+	// cross-user deletion, and returns the deleted token. No such token for
+	// this owner is store.ErrTokenNotFound.
+	DeletePAT(ctx context.Context, userID, id string) (*entity.PersonalAccessToken, error)
 
 	// TouchPAT records last-used time. Best-effort; callers may ignore the error.
 	TouchPAT(ctx context.Context, hash string, t time.Time) error

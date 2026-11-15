@@ -541,8 +541,8 @@ func (brokenStore) SavePATLimited(context.Context, *entity.PersonalAccessToken, 
 	return errStorage
 }
 
-func (brokenStore) DeletePAT(context.Context, string, string) error {
-	return errStorage
+func (brokenStore) DeletePAT(context.Context, string, string) (*entity.PersonalAccessToken, error) {
+	return nil, errStorage
 }
 
 func (brokenStore) RotateRefreshToken(context.Context, string, time.Time) (*entity.RefreshToken, error) {

@@ -538,19 +538,25 @@ func (s *Store) ListPATs(ctx context.Context, userID string) ([]*entity.Personal
 	return out, nil
 }
 
-// DeletePAT removes a token by its UUID, scoped to its owner.
-func (s *Store) DeletePAT(ctx context.Context, userID, id string) error {
-	query := fmt.Sprintf(`DELETE FROM %s WHERE id = $1 AND user_id = $2`, s.tablePATs)
+// DeletePAT removes a token by its UUID, scoped to its owner, and returns it.
+func (s *Store) DeletePAT(ctx context.Context, userID, id string) (*entity.PersonalAccessToken, error) {
+	query := fmt.Sprintf(`
+		DELETE FROM %s
+		WHERE id = $1 AND user_id = $2
+		RETURNING id, hash, user_id, name, scopes, expires_at, last_used_at, created_at
+	`, s.tablePATs)
 
-	result, err := s.pool.Exec(ctx, query, id, userID)
+	pat := &entity.PersonalAccessToken{}
+	err := s.pool.QueryRow(ctx, query, id, userID).Scan(
+		&pat.ID, &pat.Hash, &pat.UserID, &pat.Name, &pat.Scopes, &pat.ExpiresAt, &pat.LastUsedAt, &pat.CreatedAt)
 	if err != nil {
-		return fmt.Errorf("delete pat: %w", err)
-	}
-	if result.RowsAffected() == 0 {
-		return store.ErrTokenNotFound
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, store.ErrTokenNotFound
+		}
+		return nil, fmt.Errorf("delete pat: %w", err)
 	}
 
-	return nil
+	return pat, nil
 }
 
 // TouchPAT records last-used time.

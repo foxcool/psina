@@ -172,7 +172,7 @@ A refused `Refresh` RPC. Failures only: a successful refresh is not audited
 | `unknown_token` | The token names no session |
 | `token_expired` | The token is past its lifetime |
 | `token_reuse` | An already rotated token was presented outside the reuse leeway; the whole session was revoked. A stolen token being replayed looks like this |
-| `token_revoked` | The token was never rotated, but its session had already ended (a logout, or a reuse revocation) before it was presented. A client retrying after logging out elsewhere looks like this. Not a replay |
+| `token_revoked` | The token was never rotated but had already been revoked: its session was ended by a logout or a reuse revocation (or, in a library, the token was revoked on its own, and its session is ended now). A client retrying after logging out elsewhere looks like this. Not a replay |
 | `session_ended` | The token was valid and rotated, but the session ended (a logout, or a reuse revocation by a concurrent request) before its successor was saved. Not a replay |
 | `unknown_user` | The account behind the token no longer exists |
 | `invalid_credentials` | Any other rejection |

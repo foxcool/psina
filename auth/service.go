@@ -400,12 +400,18 @@ func (s *Service) revokeReusedFamily(ctx context.Context, rt *entity.RefreshToke
 	return &TokenReuseError{UserID: rt.UserID}
 }
 
-// refuseRevoked refuses a token that was revoked without being rotated. Its
-// family was ended by the revocation; revoking it again is idempotent and
-// covers a library caller that revoked a single token (see RevokeTokens).
+// refuseRevoked refuses a token that was revoked without being rotated. A
+// logout or reuse revocation has already ended its family, so a retry writes
+// nothing. A library caller may have revoked this token alone (RevokeTokens on
+// a child), leaving the session open: then the family is ended here. The root
+// row decides, as in SaveRefreshToken; RefreshFamily.SessionEnded cannot,
+// since an ended child sets it too.
 func (s *Service) refuseRevoked(ctx context.Context, rt *entity.RefreshToken) error {
-	if err := s.tokenStore.RevokeTokens(ctx, familyRoot(rt)); err != nil {
-		slog.ErrorContext(ctx, "revoke refresh token family", "user_id", rt.UserID, "error", err)
+	root := familyRoot(rt)
+	if r, err := s.tokenStore.GetRefreshToken(ctx, root); err != nil || r.EndedAt == nil {
+		if err := s.tokenStore.RevokeTokens(ctx, root); err != nil {
+			slog.ErrorContext(ctx, "revoke refresh token family", "user_id", rt.UserID, "error", err)
+		}
 	}
 	return &accountError{accountChange{userID: rt.UserID}, fmt.Errorf("%w: %w", ErrInvalidCredentials, ErrTokenRevoked)}
 }

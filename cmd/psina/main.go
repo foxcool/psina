@@ -253,55 +253,8 @@ func run() error {
 		_, _ = w.Write([]byte(resp))
 	})
 
-	// /verify - HTTP endpoint for Traefik ForwardAuth
-	// This is separate from the Connect RPC Verify method to provide a simple HTTP interface
-	mux.HandleFunc("/verify", func(w http.ResponseWriter, r *http.Request) {
-		// Extract token from Authorization header
-		authHeader := r.Header.Get("Authorization")
-		var accessToken string
-
-		if authHeader != "" {
-			accessToken = strings.TrimPrefix(authHeader, "Bearer ")
-			if accessToken == authHeader {
-				// No "Bearer " prefix, invalid format
-				http.Error(w, "invalid authorization format", http.StatusUnauthorized)
-				return
-			}
-		}
-
-		// Also check cookie if cookies are enabled
-		if accessToken == "" && config.Cookie.Enabled {
-			if cookie, err := r.Cookie("psina_access"); err == nil {
-				accessToken = cookie.Value
-			}
-		}
-
-		if accessToken == "" {
-			http.Error(w, "missing authorization", http.StatusUnauthorized)
-			return
-		}
-
-		// Verify token
-		claims, err := service.Verify(r.Context(), accessToken)
-		if errors.Is(err, auth.ErrInvalidCredentials) {
-			http.Error(w, "invalid token", http.StatusUnauthorized)
-			return
-		}
-		if err != nil {
-			// Not 401: the gateway would read an outage as "log the user out".
-			slog.ErrorContext(r.Context(), "verify failed", "error", err)
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-
-		// Set response headers for the gateway
-		w.Header().Set("X-User-Id", claims.UserID)
-		w.Header().Set("X-User-Email", claims.Email)
-		if len(claims.Roles) > 0 {
-			w.Header().Set("X-User-Roles", strings.Join(claims.Roles, ","))
-		}
-		w.WriteHeader(http.StatusOK)
-	})
+	// /verify - plain-HTTP Verify for ForwardAuth gateways (Traefik)
+	mux.Handle("/verify", handler.ForwardAuth())
 
 	// HTTP/1.1 for JSON clients and ForwardAuth, HTTP/2 cleartext (prior knowledge) for gRPC.
 	protocols := new(http.Protocols)

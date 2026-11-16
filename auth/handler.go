@@ -133,15 +133,7 @@ func (h *Handler) Refresh(
 	ctx context.Context,
 	req *connect.Request[authv1.RefreshRequest],
 ) (*connect.Response[authv1.RefreshResponse], error) {
-	// Try to get refresh token from request body first
-	refreshToken := req.Msg.RefreshToken
-
-	// If not in body and cookies enabled, try cookie
-	if refreshToken == "" && h.cookieConfig.Enabled {
-		if cookie := h.getCookieFromHeader(req.Header(), RefreshTokenCookie); cookie != "" {
-			refreshToken = cookie
-		}
-	}
+	refreshToken := h.refreshToken(req.Msg.RefreshToken, req.Header())
 
 	if refreshToken == "" {
 		h.auditFailure(ctx, req, auditEventRefresh, reasonInvalidRequest)
@@ -179,15 +171,7 @@ func (h *Handler) Logout(
 	ctx context.Context,
 	req *connect.Request[authv1.LogoutRequest],
 ) (*connect.Response[authv1.LogoutResponse], error) {
-	// Try to get refresh token from request body first
-	refreshToken := req.Msg.RefreshToken
-
-	// If not in body and cookies enabled, try cookie
-	if refreshToken == "" && h.cookieConfig.Enabled {
-		if cookie := h.getCookieFromHeader(req.Header(), RefreshTokenCookie); cookie != "" {
-			refreshToken = cookie
-		}
-	}
+	refreshToken := h.refreshToken(req.Msg.RefreshToken, req.Header())
 
 	// The client is answered success whenever no session is left to end; the
 	// audit record says whether this request ended one.
@@ -227,26 +211,9 @@ func (h *Handler) Verify(
 	ctx context.Context,
 	req *connect.Request[authv1.VerifyRequest],
 ) (*connect.Response[authv1.VerifyResponse], error) {
-	// Extract token from Authorization header
-	auth := req.Header().Get("Authorization")
-	var accessToken string
-
-	if auth != "" {
-		accessToken = strings.TrimPrefix(auth, "Bearer ")
-		if accessToken == auth {
-			return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("invalid authorization format"))
-		}
-	}
-
-	// If not in header and cookies enabled, try cookie
-	if accessToken == "" && h.cookieConfig.Enabled {
-		if cookie := h.getCookieFromHeader(req.Header(), AccessTokenCookie); cookie != "" {
-			accessToken = cookie
-		}
-	}
-
-	if accessToken == "" {
-		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("missing authorization"))
+	accessToken, err := h.accessToken(req.Header())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeUnauthenticated, err)
 	}
 
 	claims, err := h.service.Verify(ctx, accessToken)
@@ -254,19 +221,62 @@ func (h *Handler) Verify(
 		return nil, verifyErrorToConnect(ctx, err)
 	}
 
-	// Return response with headers for gateway
 	resp := connect.NewResponse(&authv1.VerifyResponse{
 		UserId: claims.UserID,
 		Email:  claims.Email,
 		Roles:  claims.Roles,
 	})
-	resp.Header().Set("X-User-Id", claims.UserID)
-	resp.Header().Set("X-User-Email", claims.Email)
-	if len(claims.Roles) > 0 {
-		resp.Header().Set("X-User-Roles", strings.Join(claims.Roles, ","))
-	}
-
+	setIdentityHeaders(resp.Header(), claims)
 	return resp, nil
+}
+
+// Access-token extraction failures, worded for the client. Verify and
+// ForwardAuth return them as is; authenticateSession folds both into one.
+var (
+	errAuthorizationFormat  = errors.New("invalid authorization format")
+	errAuthorizationMissing = errors.New("missing authorization")
+)
+
+// accessToken returns the caller's access token (JWT or PAT): the Bearer
+// Authorization header, else the access-token cookie when cookies are enabled.
+// Browser clients hold the session in the HttpOnly cookie and cannot set the
+// header. A present non-Bearer Authorization header is rejected even when a
+// cookie is there: the request names a credential psina does not accept.
+func (h *Handler) accessToken(header http.Header) (string, error) {
+	var accessToken string
+	if auth := header.Get("Authorization"); auth != "" {
+		accessToken = strings.TrimPrefix(auth, "Bearer ")
+		if accessToken == auth {
+			return "", errAuthorizationFormat
+		}
+	}
+	if accessToken == "" && h.cookieConfig.Enabled {
+		accessToken = h.getCookieFromHeader(header, AccessTokenCookie)
+	}
+	if accessToken == "" {
+		return "", errAuthorizationMissing
+	}
+	return accessToken, nil
+}
+
+// setIdentityHeaders writes the identity a gateway forwards to the backend.
+// Reverse proxies match these names and formats: X-User-Roles is
+// comma-joined and absent, not empty, when the user has no roles.
+func setIdentityHeaders(header http.Header, claims *entity.Claims) {
+	header.Set("X-User-Id", claims.UserID)
+	header.Set("X-User-Email", claims.Email)
+	if len(claims.Roles) > 0 {
+		header.Set("X-User-Roles", strings.Join(claims.Roles, ","))
+	}
+}
+
+// refreshToken returns the refresh token from the request body, else from the
+// refresh-token cookie when cookies are enabled; "" when neither has one.
+func (h *Handler) refreshToken(body string, header http.Header) string {
+	if body == "" && h.cookieConfig.Enabled {
+		return h.getCookieFromHeader(header, RefreshTokenCookie)
+	}
+	return body
 }
 
 // GetOAuthURL starts an OAuth sign-in flow. The browser-binding secret goes
@@ -558,25 +568,8 @@ func (h *Handler) RevokePersonalAccessToken(
 // the caller's user ID. Only session (JWT) tokens are accepted: PATs cannot
 // manage PATs, so a leaked PAT cannot mint replacements or revoke siblings.
 func (h *Handler) authenticateSession(ctx context.Context, header http.Header) (string, error) {
-	var accessToken string
-
-	auth := header.Get("Authorization")
-	if auth != "" {
-		accessToken = strings.TrimPrefix(auth, "Bearer ")
-		if accessToken == auth {
-			return "", connect.NewError(connect.CodeUnauthenticated, errors.New("missing or invalid authorization"))
-		}
-	}
-
-	// Browser clients hold the session in the HttpOnly psina_access cookie and
-	// cannot set the Authorization header, so fall back to it (same as Verify).
-	if accessToken == "" && h.cookieConfig.Enabled {
-		if cookie := h.getCookieFromHeader(header, AccessTokenCookie); cookie != "" {
-			accessToken = cookie
-		}
-	}
-
-	if accessToken == "" {
+	accessToken, err := h.accessToken(header)
+	if err != nil {
 		return "", connect.NewError(connect.CodeUnauthenticated, errors.New("missing or invalid authorization"))
 	}
 
@@ -822,21 +815,19 @@ func (h *Handler) clearOAuthBindingCookie(header http.Header, state string) {
 	header.Add("Set-Cookie", cookie.String())
 }
 
-// getCookieFromHeader extracts a cookie value from the Cookie header.
+// getCookieFromHeader extracts a cookie value from the Cookie header lines (a
+// client may split cookies over several).
 func (h *Handler) getCookieFromHeader(header http.Header, name string) string {
-	cookieHeader := header.Get("Cookie")
-	if cookieHeader == "" {
-		return ""
-	}
-
 	// Parse cookies manually since we only have headers. A browser can send the
 	// same name more than once (e.g. a legacy host-only duplicate mid-eviction);
 	// skip empty values so a cleared duplicate never shadows the real token.
-	for _, cookie := range strings.Split(cookieHeader, ";") {
-		cookie = strings.TrimSpace(cookie)
-		parts := strings.SplitN(cookie, "=", 2)
-		if len(parts) == 2 && parts[0] == name && parts[1] != "" {
-			return parts[1]
+	for _, cookieHeader := range header.Values("Cookie") {
+		for _, cookie := range strings.Split(cookieHeader, ";") {
+			cookie = strings.TrimSpace(cookie)
+			parts := strings.SplitN(cookie, "=", 2)
+			if len(parts) == 2 && parts[0] == name && parts[1] != "" {
+				return parts[1]
+			}
 		}
 	}
 	return ""

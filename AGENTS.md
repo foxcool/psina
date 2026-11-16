@@ -303,6 +303,7 @@ func main() {
     // Mount on your mux
     path, rpcHandler := authv1connect.NewAuthServiceHandler(handler)
     mux.Handle(path, rpcHandler)
+    mux.Handle("/verify", handler.ForwardAuth()) // optional: HTTP ForwardAuth for gateways
 }
 ```
 

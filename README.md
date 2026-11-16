@@ -184,7 +184,7 @@ token:
   refreshReuseLeeway: 10s  # 0s = strict reuse detection
 cookie:
   enabled: true
-  domain: "example.com"
+  domain: "app.example.com"  # the service host; a parent such as example.com logs a startup warning
   secure: true
   sameSite: strict
 pat:

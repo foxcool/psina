@@ -676,8 +676,12 @@ func (h *Handler) setTokenCookies(header http.Header, accessToken, refreshToken 
 //
 // A parent-domain duplicate (a cookie left on a broader Domain beside the live
 // host-scoped one) is the case host-only-only eviction missed.
+//
+// Also a no-op when a browser stores the configured Domain as host-only: then
+// the host-only scope is the live cookie, and expiring it signs the user out
+// in the same response that signed them in.
 func (h *Handler) clearLegacyScopedCookies(header http.Header) {
-	if h.cookieConfig.Domain == "" {
+	if h.cookieConfig.Domain == "" || storedHostOnly(h.cookieConfig.Domain) {
 		return
 	}
 	// Foreign scopes to expire: host-only (Domain ""), plus every parent domain
@@ -709,6 +713,19 @@ func (h *Handler) clearLegacyScopedCookies(header http.Header) {
 // leading dot is normalized away. A cookie can never be scoped to a public
 // suffix, so a two-label floor is a safe stopping point for the common
 // single-suffix case this heals.
+// storedHostOnly reports whether browsers keep a cookie set with this Domain as
+// a host-only one: a single label such as "localhost", or an IP address. Such a
+// domain has no other scope a legacy duplicate could live under — no parent
+// domain, and the host-only scope is the cookie itself. Measured in Chromium
+// and curl: Domain=localhost followed by a host-only expiry keeps nothing.
+func storedHostOnly(domain string) bool {
+	d := strings.TrimPrefix(domain, ".")
+	if _, err := netip.ParseAddr(d); err == nil {
+		return true
+	}
+	return !strings.Contains(d, ".")
+}
+
 func parentDomains(host string) []string {
 	host = strings.TrimPrefix(host, ".")
 	labels := strings.Split(host, ".")

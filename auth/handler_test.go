@@ -726,6 +726,43 @@ func TestHandler_LegacyScopedCookieEviction(t *testing.T) {
 		}
 	})
 
+	// A browser stores Domain=localhost (or an IP) as host-only, so expiring
+	// the host-only scope would delete the session just set.
+	for _, d := range []string{"localhost", "127.0.0.1", "::1"} {
+		t.Run("domain stored as host-only is not evicted: "+d, func(t *testing.T) {
+			handler, service, store := setupCookieHandlerWithDomain(t, d)
+			ctx := context.Background()
+			registerUser(t, store, "evict-single@example.com", "SecurePassword123!", service)
+
+			resp, err := handler.Login(ctx, connect.NewRequest(&authv1.LoginRequest{
+				Email:    "evict-single@example.com",
+				Password: "SecurePassword123!",
+			}))
+			require.NoError(t, err)
+
+			setScope := map[string]string{}
+			for _, name := range []string{AccessTokenCookie, RefreshTokenCookie} {
+				cookies := setCookiesByName(resp.Header(), name)
+				require.Len(t, cookies, 1, "%s: only the live cookie, no eviction after it", name)
+				assert.NotEmpty(t, cookies[0].Value, "%s: the one cookie carries the token", name)
+				setScope[name] = cookies[0].Domain
+			}
+
+			// Logout still ends the session: its one clear lands on the scope
+			// the login set. (net/http writes no Domain for "::1", so there
+			// both are host-only.)
+			out, err := handler.Logout(ctx, connect.NewRequest(&authv1.LogoutRequest{}))
+			require.NoError(t, err)
+			for _, name := range []string{AccessTokenCookie, RefreshTokenCookie} {
+				cookies := setCookiesByName(out.Header(), name)
+				require.Len(t, cookies, 1, "%s: one clear on logout", name)
+				assert.Equal(t, setScope[name], cookies[0].Domain, "%s: the clear targets the scope login set", name)
+				assert.Empty(t, cookies[0].Value, "%s: clear must be empty", name)
+				assert.Less(t, cookies[0].MaxAge, 0, "%s: clear must expire", name)
+			}
+		})
+	}
+
 	t.Run("host-only config emits no extra eviction", func(t *testing.T) {
 		handler, service, store := setupCookieHandler(t) // Domain unset
 		ctx := context.Background()

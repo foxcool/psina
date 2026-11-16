@@ -143,7 +143,7 @@ Environment variables (prefix `PSINA_`):
 | `PSINA_JWT_ALGORITHM` | `RS256` | JWT algorithm: `RS256` or `ES256` |
 | `PSINA_TOKEN_REFRESHREUSELEEWAY` | `10s` | Grace for duplicate refreshes of a just-rotated token; `0s` = strict |
 | `PSINA_COOKIE_ENABLED` | `false` | Enable HttpOnly refresh token cookies |
-| `PSINA_COOKIE_DOMAIN` | _(required if enabled)_ | Cookie domain |
+| `PSINA_COOKIE_DOMAIN` | _(required if enabled)_ | Cookie domain. A domain broader than the service host (wallet domain, wallet URI or OAuth redirect URI host) logs one startup warning naming the scopes covered and the ones login/logout evicts; with no such host configured the check is skipped and logged once. Not an error: cross-subdomain SSO is legitimate |
 | `PSINA_COOKIE_SECURE` | `true` | HTTPS-only cookies |
 | `PSINA_COOKIE_SAMESITE` | `strict` | Cookie SameSite: strict, lax, none |
 | `PSINA_COOKIE_PATH` | `/` | Cookie path |

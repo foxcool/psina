@@ -94,7 +94,8 @@ func PATs(t *testing.T, newStore NewBackend) {
 		s := newStore(t)
 		_, err := s.GetPAT(ctx, "missing")
 		assert.ErrorIs(t, err, store.ErrTokenNotFound)
-		assert.ErrorIs(t, s.DeletePAT(ctx, createUser(t, s), uuid.New().String()), store.ErrTokenNotFound)
+		_, err = s.DeletePAT(ctx, createUser(t, s), uuid.New().String())
+		assert.ErrorIs(t, err, store.ErrTokenNotFound)
 	})
 
 	t.Run("list is per user, newest first", func(t *testing.T) {
@@ -127,13 +128,41 @@ func PATs(t *testing.T, newStore NewBackend) {
 		pat := newPAT(owner, "h1")
 		require.NoError(t, s.SavePAT(ctx, pat))
 
-		assert.ErrorIs(t, s.DeletePAT(ctx, other, pat.ID), store.ErrTokenNotFound)
-		_, err := s.GetPAT(ctx, "h1")
+		_, err := s.DeletePAT(ctx, other, pat.ID)
+		assert.ErrorIs(t, err, store.ErrTokenNotFound)
+		_, err = s.GetPAT(ctx, "h1")
 		require.NoError(t, err, "another user cannot delete it")
 
-		require.NoError(t, s.DeletePAT(ctx, owner, pat.ID))
+		_, err = s.DeletePAT(ctx, owner, pat.ID)
+		require.NoError(t, err)
 		_, err = s.GetPAT(ctx, "h1")
 		assert.ErrorIs(t, err, store.ErrTokenNotFound)
+	})
+
+	t.Run("delete returns the deleted token", func(t *testing.T) {
+		s := newStore(t)
+		userID := createUser(t, s)
+		expires := now.Add(time.Hour)
+		used := now.Add(-time.Minute)
+		want := newPAT(userID, "h1")
+		want.Scopes = []string{"eye:read"}
+		want.ExpiresAt = &expires
+		want.CreatedAt = now.Add(-time.Hour)
+		require.NoError(t, s.SavePAT(ctx, want))
+		require.NoError(t, s.TouchPAT(ctx, "h1", used))
+
+		got, err := s.DeletePAT(ctx, userID, want.ID)
+		require.NoError(t, err)
+		assert.Equal(t, want.ID, got.ID)
+		assert.Equal(t, "h1", got.Hash)
+		assert.Equal(t, userID, got.UserID)
+		assert.Equal(t, "ci", got.Name)
+		assert.Equal(t, []string{"eye:read"}, got.Scopes)
+		require.NotNil(t, got.ExpiresAt)
+		assert.True(t, expires.Equal(*got.ExpiresAt))
+		require.NotNil(t, got.LastUsedAt)
+		assert.True(t, used.Equal(*got.LastUsedAt))
+		assert.True(t, want.CreatedAt.Equal(got.CreatedAt))
 	})
 
 	t.Run("limited save counts only unexpired tokens", func(t *testing.T) {

@@ -346,3 +346,32 @@ func TestService_PAT_UsesServiceClock(t *testing.T) {
 		assert.True(t, second.LastUsedAt.Equal(clock.Now()))
 	})
 }
+
+// listFailingStore fails ListPATs: revoking a token must not read the owner's
+// whole list to name it.
+type listFailingStore struct{ *memory.Store }
+
+func (listFailingStore) ListPATs(context.Context, string) ([]*entity.PersonalAccessToken, error) {
+	return nil, errStorage
+}
+
+// revokePAT returns the deleted token's metadata for the audit record.
+func TestService_RevokePAT_ReturnsDeleted(t *testing.T) {
+	ctx := context.Background()
+	memStore := newMemStore(t)
+	issuer, err := token.New()
+	require.NoError(t, err)
+	service := NewService(memStore, memStore, issuer, []Provider{&mockProvider{}},
+		WithPAT(listFailingStore{Store: memStore}, PATConfig{}))
+	user := seedUser(t, memStore)
+	expires := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+	created, err := service.CreatePAT(ctx, user.ID, "ci", nil, &expires)
+	require.NoError(t, err)
+
+	revoked, err := service.revokePAT(ctx, user.ID, created.Token.ID)
+	require.NoError(t, err)
+	assert.Equal(t, created.Token.ID, revoked.ID)
+	assert.Equal(t, "ci", revoked.Name)
+	require.NotNil(t, revoked.ExpiresAt)
+	assert.True(t, expires.Equal(*revoked.ExpiresAt))
+}

@@ -366,19 +366,19 @@ func (s *Store) ListPATs(ctx context.Context, userID string) ([]*entity.Personal
 	return out, nil
 }
 
-// DeletePAT removes a token by its UUID, scoped to its owner.
-func (s *Store) DeletePAT(ctx context.Context, userID, id string) error {
+// DeletePAT removes a token by its UUID, scoped to its owner, and returns it.
+func (s *Store) DeletePAT(ctx context.Context, userID, id string) (*entity.PersonalAccessToken, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	for hash, pat := range s.pats {
 		if pat.ID == id && pat.UserID == userID {
 			delete(s.pats, hash)
-			return nil
+			return pat, nil
 		}
 	}
 
-	return store.ErrTokenNotFound
+	return nil, store.ErrTokenNotFound
 }
 
 // TouchPAT records last-used time.

@@ -71,7 +71,7 @@ type PATStore interface {
     SavePATLimited(ctx context.Context, pat *entity.PersonalAccessToken, max int, now time.Time) error  // atomic per-user cap; ErrPATLimitReached
     GetPAT(ctx context.Context, hash string) (*entity.PersonalAccessToken, error)
     ListPATs(ctx context.Context, userID string) ([]*entity.PersonalAccessToken, error)  // newest first
-    DeletePAT(ctx context.Context, userID, id string) error  // by UUID, owner-scoped
+    DeletePAT(ctx context.Context, userID, id string) (*entity.PersonalAccessToken, error)  // by UUID, owner-scoped; returns the deleted row
     TouchPAT(ctx context.Context, hash string, t time.Time) error
 }
 

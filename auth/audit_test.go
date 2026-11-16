@@ -592,6 +592,25 @@ func TestAudit_SessionEvents(t *testing.T) {
 		assert.NotContains(t, out, "token reuse detected", "the ad-hoc diagnostic record is gone")
 	})
 
+	t.Run("refresh after logout is not reuse", func(t *testing.T) {
+		svc, store := setupTestService(t)
+		reg := registerUser(t, store, "user@example.com", "SecurePassword123!", svc)
+		client, sink := serveAudited(t, svc)
+		r1 := reg.TokenPair.RefreshToken
+
+		_, err := client.Logout(ctx, withUA(&authv1.LogoutRequest{RefreshToken: r1}))
+		require.NoError(t, err)
+		_, err = client.Refresh(ctx, withUA(&authv1.RefreshRequest{RefreshToken: r1}))
+		assert.Equal(t, connect.CodeUnauthenticated, connect.CodeOf(err))
+
+		recs := sink.records(t)
+		require.Len(t, recs, 2)
+		requireAuditEvent(t, recs[0], auditEventLogout, auditResultSuccess)
+		rec := requireAuditEvent(t, recs[1], auditEventRefresh, auditResultFailure)
+		assert.Equal(t, "token_revoked", rec["reason"])
+		assert.Equal(t, "user-123", rec["user_id"])
+	})
+
 	t.Run("refresh expired", func(t *testing.T) {
 		clock := newFakeClock()
 		svc, store := setupTestService(t, WithClock(clock.Now))

@@ -307,7 +307,7 @@ func TestService_Refresh_TokenReuse(t *testing.T) {
 
 	// The whole family is revoked, including the legitimate successor
 	_, err = service.Refresh(ctx, second.RefreshToken)
-	assert.ErrorIs(t, err, ErrTokenReuse)
+	assert.ErrorIs(t, err, ErrTokenRevoked)
 	assert.ErrorIs(t, err, ErrInvalidCredentials)
 }
 
@@ -369,7 +369,7 @@ func TestService_Refresh_ReuseLeeway(t *testing.T) {
 		_, err = service.Refresh(ctx, r1)
 		require.ErrorIs(t, err, ErrTokenReuse)
 		_, err = service.Refresh(ctx, r3.RefreshToken)
-		assert.ErrorIs(t, err, ErrTokenReuse, "family must be revoked")
+		assert.ErrorIs(t, err, ErrTokenRevoked, "family must be revoked")
 	})
 
 	t.Run("no grace after logout", func(t *testing.T) {
@@ -395,7 +395,7 @@ func TestService_Refresh_ReuseLeeway(t *testing.T) {
 
 		require.NoError(t, service.Logout(ctx, tabA.RefreshToken))
 		_, err = service.Refresh(ctx, tabB.RefreshToken)
-		assert.ErrorIs(t, err, ErrTokenReuse)
+		assert.ErrorIs(t, err, ErrTokenRevoked)
 	})
 
 	t.Run("replay from a lagging clock beyond leeway is reuse", func(t *testing.T) {
@@ -413,13 +413,15 @@ func TestService_Refresh_ReuseLeeway(t *testing.T) {
 		assert.ErrorIs(t, err, ErrTokenReuse)
 	})
 
-	t.Run("logged out token is reuse without grace", func(t *testing.T) {
+	t.Run("logged out token is revoked, not reuse", func(t *testing.T) {
 		service, memStore := setupTestService(t)
 		r1 := registerForRefresh(t, service, memStore)
 
 		require.NoError(t, service.Logout(ctx, r1))
 		_, err := service.Refresh(ctx, r1)
-		assert.ErrorIs(t, err, ErrTokenReuse)
+		assert.ErrorIs(t, err, ErrTokenRevoked)
+		assert.ErrorIs(t, err, ErrInvalidCredentials)
+		assert.NotErrorIs(t, err, ErrTokenReuse, "a retry after logout is no replay")
 	})
 
 	t.Run("expired token", func(t *testing.T) {
@@ -545,7 +547,7 @@ func TestService_Refresh_Concurrent(t *testing.T) {
 		assert.True(t, family.SessionEnded)
 		for _, rt := range winners {
 			_, err := service.Refresh(ctx, rt)
-			assert.ErrorIs(t, err, ErrTokenReuse)
+			assert.ErrorIs(t, err, ErrTokenRevoked)
 		}
 	})
 }
@@ -615,4 +617,54 @@ func TestService_JWKS(t *testing.T) {
 	assert.NotNil(t, jwks)
 	assert.Len(t, jwks.Keys, 1)
 	assert.Equal(t, "psina-key-1", jwks.Keys[0].KeyID)
+}
+
+// revokeCounter counts RevokeTokens calls.
+type revokeCounter struct {
+	*memory.Store
+	revokes int
+}
+
+func (s *revokeCounter) RevokeTokens(ctx context.Context, hash string) error {
+	s.revokes++
+	return s.Store.RevokeTokens(ctx, hash)
+}
+
+// A token revoked without rotation is refused as ErrTokenRevoked. Its family
+// is ended once: a retry after logout writes nothing, while a token revoked on
+// its own (RevokeTokens on a child) still ends the session it belongs to.
+func TestService_Refresh_RevokedToken(t *testing.T) {
+	ctx := context.Background()
+	setup := func(t *testing.T) (*Service, *memory.Store, *revokeCounter) {
+		memStore := memory.New()
+		issuer, err := token.New()
+		require.NoError(t, err)
+		counter := &revokeCounter{Store: memStore}
+		return NewService(counter, memStore, issuer, []Provider{&mockProvider{}}), memStore, counter
+	}
+
+	t.Run("retry after logout writes nothing", func(t *testing.T) {
+		service, memStore, counter := setup(t)
+		r1 := registerForRefresh(t, service, memStore)
+		require.NoError(t, service.Logout(ctx, r1))
+		counter.revokes = 0
+
+		_, err := service.Refresh(ctx, r1)
+		require.ErrorIs(t, err, ErrTokenRevoked)
+		assert.Zero(t, counter.revokes, "the session already ended")
+	})
+
+	t.Run("a child revoked alone ends its session", func(t *testing.T) {
+		service, memStore, _ := setup(t)
+		r1 := registerForRefresh(t, service, memStore)
+		r2, err := service.Refresh(ctx, r1)
+		require.NoError(t, err)
+		require.NoError(t, memStore.RevokeTokens(ctx, token.HashToken(r2.RefreshToken)))
+
+		_, err = service.Refresh(ctx, r2.RefreshToken)
+		require.ErrorIs(t, err, ErrTokenRevoked)
+		root, err := memStore.GetRefreshToken(ctx, token.HashToken(r1))
+		require.NoError(t, err)
+		assert.NotNil(t, root.EndedAt, "the family must be ended")
+	})
 }

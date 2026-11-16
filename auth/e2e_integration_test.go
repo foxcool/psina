@@ -117,7 +117,7 @@ func TestE2E_ConcurrentRefresh(t *testing.T) {
 		assert.Equal(t, n, len(pairs)+reuse+ended)
 		for _, rt := range pairs {
 			_, err := service.Refresh(ctx, rt)
-			assert.ErrorIs(t, err, auth.ErrTokenReuse, "nothing issued may outlive the ended session")
+			assert.ErrorIs(t, err, auth.ErrTokenRevoked, "nothing issued may outlive the ended session")
 		}
 	})
 
@@ -137,17 +137,17 @@ func TestE2E_ConcurrentRefresh(t *testing.T) {
 			wg.Go(func() { assert.NoError(t, service.Logout(ctx, rt)) })
 			wg.Wait()
 
-			// Logout first: the refresh is refused as reuse. Logout between
+			// Logout first: the refresh is refused as revoked. Logout between
 			// rotation and save: the session ended under a legitimate refresh.
 			// Refresh first: its successor must not outlive the logout that follows.
 			if refreshErr != nil {
-				assert.True(t, errors.Is(refreshErr, auth.ErrTokenReuse) || errors.Is(refreshErr, auth.ErrSessionEnded),
+				assert.True(t, errors.Is(refreshErr, auth.ErrTokenRevoked) || errors.Is(refreshErr, auth.ErrSessionEnded),
 					"iteration %d: %v", i, refreshErr)
 				continue
 			}
 			if pair != nil {
 				_, err := service.Refresh(ctx, pair.RefreshToken)
-				assert.ErrorIs(t, err, auth.ErrTokenReuse, "iteration %d: successor outlived logout", i)
+				assert.ErrorIs(t, err, auth.ErrTokenRevoked, "iteration %d: successor outlived logout", i)
 			}
 		}
 	})
@@ -166,7 +166,7 @@ func TestE2E_ConcurrentRefresh(t *testing.T) {
 		_, err = service.Refresh(ctx, reg.TokenPair.RefreshToken)
 		require.ErrorIs(t, err, auth.ErrTokenReuse)
 		_, err = service.Refresh(ctx, next.RefreshToken)
-		assert.ErrorIs(t, err, auth.ErrTokenReuse, "successor must be revoked with the family")
+		assert.ErrorIs(t, err, auth.ErrTokenRevoked, "successor must be revoked with the family")
 	})
 }
 

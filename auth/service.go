@@ -25,9 +25,13 @@ var (
 	ErrUserNotFound       = errors.New("user not found")
 	ErrInvalidCredentials = errors.New("invalid credentials")
 	ErrUserExists         = errors.New("user already exists")
-	ErrTokenRevoked       = errors.New("refresh token revoked")
-	ErrTokenExpired       = errors.New("token expired") // refresh token or PAT
-	ErrTokenReuse         = errors.New("refresh token reuse detected")
+	// ErrTokenRevoked is a refresh with a token that was never rotated but
+	// whose session ended (logout, reuse revocation): a client retrying after
+	// the session ended elsewhere, not a replay. Wrapped with
+	// ErrInvalidCredentials.
+	ErrTokenRevoked = errors.New("refresh token revoked")
+	ErrTokenExpired = errors.New("token expired") // refresh token or PAT
+	ErrTokenReuse   = errors.New("refresh token reuse detected")
 	// ErrSessionEnded is a refresh whose token was rotated legitimately but
 	// whose session ended (logout, reuse revocation) before the successor was
 	// saved. Wrapped with ErrInvalidCredentials; unlike ErrTokenReuse it is no
@@ -322,6 +326,11 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*entity.Tok
 			return nil, err
 		}
 		if !dup {
+			// Only rotation stamps RotatedAt; a token without it was revoked
+			// with its whole session, so presenting it again is no replay.
+			if rt.RotatedAt == nil {
+				return nil, s.refuseRevoked(ctx, rt)
+			}
 			return nil, s.revokeReusedFamily(ctx, rt)
 		}
 		// The accepted cost of the leeway is that a replay here goes undetected;
@@ -389,6 +398,22 @@ func (s *Service) revokeReusedFamily(ctx context.Context, rt *entity.RefreshToke
 		slog.ErrorContext(ctx, "revoke reused refresh token family", "user_id", rt.UserID, "error", err)
 	}
 	return &TokenReuseError{UserID: rt.UserID}
+}
+
+// refuseRevoked refuses a token that was revoked without being rotated. A
+// logout or reuse revocation has already ended its family, so a retry writes
+// nothing. A library caller may have revoked this token alone (RevokeTokens on
+// a child), leaving the session open: then the family is ended here. The root
+// row decides, as in SaveRefreshToken; RefreshFamily.SessionEnded cannot,
+// since an ended child sets it too.
+func (s *Service) refuseRevoked(ctx context.Context, rt *entity.RefreshToken) error {
+	root := familyRoot(rt)
+	if r, err := s.tokenStore.GetRefreshToken(ctx, root); err != nil || r.EndedAt == nil {
+		if err := s.tokenStore.RevokeTokens(ctx, root); err != nil {
+			slog.ErrorContext(ctx, "revoke refresh token family", "user_id", rt.UserID, "error", err)
+		}
+	}
+	return &accountError{accountChange{userID: rt.UserID}, fmt.Errorf("%w: %w", ErrInvalidCredentials, ErrTokenRevoked)}
 }
 
 // familyRoot returns the hash every token of rt's family uses as parent.
@@ -572,23 +597,7 @@ func (s *Service) revokePAT(ctx context.Context, userID, id string) (*entity.Per
 	}
 	canonical := parsed.String()
 
-	// shortcut: reads the owner's whole PAT list to name the revoked token;
-	// a DeletePAT that returns the deleted row would save the read once PAT
-	// counts grow large.
-	pats, err := s.patStore.ListPATs(ctx, userID)
-	if err != nil {
-		return nil, fmt.Errorf("list pats: %w", err)
-	}
-	// DeletePAT stays authoritative: the list only supplies metadata.
-	revoked := &entity.PersonalAccessToken{ID: canonical, UserID: userID}
-	for _, pat := range pats {
-		if pat.ID == canonical {
-			revoked = pat
-			break
-		}
-	}
-
-	err = s.patStore.DeletePAT(ctx, userID, canonical)
+	revoked, err := s.patStore.DeletePAT(ctx, userID, canonical)
 	if errors.Is(err, store.ErrTokenNotFound) {
 		return nil, fmt.Errorf("%w: %s", ErrPATNotFound, id)
 	}

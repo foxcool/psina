@@ -83,6 +83,32 @@ jobs:
       - name: Run e2e gateway stand
         run: make test-e2e
 
+  deploy-checks:
+    name: Check deploy role and examples
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ansible-core
+        run: pipx install ansible-core
+
+      - name: Run role preflight test
+        run: deploy/ansible/tests/preflight.sh
+
+      - name: Require a demo-only header on every example
+        run: |
+          for f in deploy/examples/*; do
+            head -n 1 "$f" | grep -q '^# DEMO ONLY' || { echo "missing demo header: $f"; exit 1; }
+          done
+
+      # Only the compose files: traefik-forwardauth.yaml is Traefik config.
+      - name: Validate compose examples
+        run: |
+          for f in deploy/examples/docker-compose*.yaml; do
+            docker compose -f "$f" config --quiet
+          done
+
   govulncheck:
     name: Scan dependencies for vulnerabilities
     runs-on: ubuntu-latest

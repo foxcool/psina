@@ -1,3 +1,7 @@
+# DEMO ONLY: not a production setup. Before real use, replace the placeholder
+# backend URL, serve TLS on the entrypoint, pin image tags, and replace the
+# fixed database credentials and the key path in the Docker Compose snippet.
+#
 # Traefik ForwardAuth integration with psina
 #
 # This example shows how to configure Traefik to use psina

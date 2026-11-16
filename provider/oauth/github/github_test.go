@@ -267,9 +267,8 @@ func TestProvider_ExchangeCode_EmailPages(t *testing.T) {
 		var requests int
 		p := fakeGitHub(t, fakeResponses{emailsPages: pages, emailsRequests: &requests})
 
-		info, err := p.ExchangeCode(context.Background(), "auth-code", testParams())
-		require.NoError(t, err)
-		assert.Empty(t, info.Email, "a primary past the bound is not found")
+		_, err := p.ExchangeCode(context.Background(), "auth-code", testParams())
+		assert.ErrorContains(t, err, "pages", "a primary past the bound is an error, not an email-less account")
 		assert.Equal(t, maxEmailPages, requests)
 	})
 }

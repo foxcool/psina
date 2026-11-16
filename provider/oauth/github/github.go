@@ -182,10 +182,12 @@ func (p *Provider) listEmails(ctx context.Context, client *http.Client) ([]apiEm
 		}
 		all = append(all, batch...)
 		if slices.ContainsFunc(batch, func(e apiEmail) bool { return e.Primary }) || !hasNextPage(header) {
-			break
+			return all, nil
 		}
 	}
-	return all, nil
+	// Out of pages with more advertised and no primary seen: failing says so,
+	// where returning the list would pass for an account without an email.
+	return nil, fmt.Errorf("github: /user/emails has more than %d pages without a primary address", maxEmailPages)
 }
 
 // hasNextPage reports whether a Link header carries rel="next".

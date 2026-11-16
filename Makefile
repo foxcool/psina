@@ -14,7 +14,7 @@ BUF_VERSION=1.55.1
 # Contract baseline for proto-check. CI overrides it with the PR base branch.
 BUF_AGAINST?=.git\#branch=main
 
-.PHONY: gen buf-gen go-gen lint sec proto-check test test-unit test-integration test-e2e up down clean logs help migrate-diff migrate-apply migrate-status migrate-baseline migrate-drift
+.PHONY: gen buf-gen go-gen lint sec proto-check covdata test test-unit test-integration test-e2e up down clean logs help migrate-diff migrate-apply migrate-status migrate-baseline migrate-drift
 
 # Default target
 help:
@@ -74,13 +74,21 @@ proto-check:
 # Run all tests
 test: test-unit test-integration
 
+# go test -cover runs covdata for packages without tests. A Go toolchain that
+# was downloaded on demand (go.mod newer than the installed go) can come
+# without it, which fails the whole run although every test passes. Build it
+# into the toolchain when missing; the coverage flags and output are unchanged.
+# Without write access to the toolchain, install a go at the go.mod version.
+covdata:
+	@test -x "$$(go env GOTOOLDIR)/covdata" || go build -o "$$(go env GOTOOLDIR)/covdata" cmd/covdata
+
 # Run unit tests
-test-unit:
+test-unit: covdata
 	@echo "Running unit tests..."
 	go test -v -race -coverprofile=coverage-unit.out -covermode=atomic ./...
 
 # Run integration tests (requires Docker)
-test-integration:
+test-integration: covdata
 	@echo "Running integration tests..."
 	go test -v -tags=integration -coverprofile=coverage-integration.out ./...
 

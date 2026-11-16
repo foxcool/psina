@@ -23,10 +23,10 @@ ansible-galaxy collection install community.docker
 | `psina_trusted_proxies` | `""` | IPs or CIDRs (comma-separated) whose `X-Forwarded-For` psina believes. Never the `proxy` subnet: every container on it could forge the client IP. This role routes Traefik to psina over `proxy`, so leave it empty (logs show Traefik's IP) unless Traefik reaches psina from an address no other container can hold |
 | `psina_platform_domain` | `auth.example.com` | Domain for Traefik routing |
 | `psina_db_user` | `psina` | PostgreSQL username |
-| `psina_db_password` | `psina_password` | PostgreSQL password |
+| `psina_db_password` | `psina_password` | PostgreSQL password. The default is public: preflight fails the play while it is unchanged unless `psina_dev` is `true`. Set your own (e.g. from `ansible-vault`) |
 | `psina_db_name` | `psina` | PostgreSQL database name |
 | `psina_jwt_private_key` | `""` | PEM content of the private key; required. An empty value fails the play before anything is written or started |
-| `psina_dev` | `false` | Sets `PSINA_DEV=true`: lets psina run with an ephemeral JWT key (tokens die on restart). Dev stands only; this is the one way to deploy without `psina_jwt_private_key` |
+| `psina_dev` | `false` | Sets `PSINA_DEV=true`: lets psina run with an ephemeral JWT key (tokens die on restart). Dev stands only; this is the one way to deploy without `psina_jwt_private_key` or with the default `psina_db_password` |
 | `psina_cookie_enabled` | `true` | Enable cookie-based token delivery |
 | `psina_cookie_domain` | `""` | Cookie domain (empty = exact match) |
 | `psina_cookie_secure` | `true` | Secure cookie flag |
@@ -103,7 +103,7 @@ ansible-playbook playbook.yml --tags destroy
 
 ## Tests
 
-`tests/preflight.sh` runs only the preflight assert (needs `ansible-core`, no Docker or target host): an empty key fails naming `psina_jwt_private_key`; a key or `psina_dev: true` passes.
+`tests/preflight.sh` runs only the preflight assert (needs `ansible-core`, no Docker or target host): an empty key fails naming `psina_jwt_private_key`; a key or `psina_dev: true` passes. The default `psina_db_password` fails naming `psina_db_password`, unless `psina_dev: true`; a changed password passes.
 
 ## Traefik Integration
 

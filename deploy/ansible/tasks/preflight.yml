@@ -1,6 +1,8 @@
 ---
 # Fail the play before anything is written or started: psina refuses to start
 # without a JWT key outside dev mode, so the container would only crash-loop.
+# The default database password is public (it is in the role defaults), so a
+# deployment that is not a dev stand must set its own.
 # The database URL is always built from psina_db_* for the bundled postgres,
 # so it cannot be empty here.
 - name: Require a JWT private key unless in dev mode
@@ -13,3 +15,12 @@
       signing key unless psina_dev is true (an ephemeral key, so every token dies
       on restart). Set psina_jwt_private_key to the PEM
       content of the key (e.g. from ansible-vault).
+
+- name: Reject the public default database password unless in dev mode
+  ansible.builtin.assert:
+    that:
+      - psina_dev | bool or (psina_db_password | string != "psina_password")
+    quiet: true
+    fail_msg: >-
+      psina_db_password is the public default from the role. Set it to your own
+      secret (e.g. from ansible-vault), or set psina_dev to true for a dev stand.

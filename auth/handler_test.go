@@ -740,10 +740,25 @@ func TestHandler_LegacyScopedCookieEviction(t *testing.T) {
 			}))
 			require.NoError(t, err)
 
+			setScope := map[string]string{}
 			for _, name := range []string{AccessTokenCookie, RefreshTokenCookie} {
 				cookies := setCookiesByName(resp.Header(), name)
 				require.Len(t, cookies, 1, "%s: only the live cookie, no eviction after it", name)
 				assert.NotEmpty(t, cookies[0].Value, "%s: the one cookie carries the token", name)
+				setScope[name] = cookies[0].Domain
+			}
+
+			// Logout still ends the session: its one clear lands on the scope
+			// the login set. (net/http writes no Domain for "::1", so there
+			// both are host-only.)
+			out, err := handler.Logout(ctx, connect.NewRequest(&authv1.LogoutRequest{}))
+			require.NoError(t, err)
+			for _, name := range []string{AccessTokenCookie, RefreshTokenCookie} {
+				cookies := setCookiesByName(out.Header(), name)
+				require.Len(t, cookies, 1, "%s: one clear on logout", name)
+				assert.Equal(t, setScope[name], cookies[0].Domain, "%s: the clear targets the scope login set", name)
+				assert.Empty(t, cookies[0].Value, "%s: clear must be empty", name)
+				assert.Less(t, cookies[0].MaxAge, 0, "%s: clear must expire", name)
 			}
 		})
 	}

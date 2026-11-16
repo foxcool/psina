@@ -466,3 +466,35 @@ func TestParseLogLevel(t *testing.T) {
 		assert.Equal(t, want, got, level)
 	}
 }
+
+// A template that renders an empty value must not flip a boolean: weak typing
+// reads "" as false, which would drop cookie.secure without a word.
+func TestLoadConfig_EmptyBoolean(t *testing.T) {
+	devEnv(t)
+	keys := map[string]string{
+		"PSINA_DEV":                 "dev",
+		"PSINA_COOKIE_ENABLED":      "cookie.enabled",
+		"PSINA_COOKIE_SECURE":       "cookie.secure",
+		"PSINA_PAT_ENABLED":         "pat.enabled",
+		"PSINA_OAUTH_AUTOLINKEMAIL": "oauth.autolinkemail",
+	}
+	for envName, key := range keys {
+		t.Run("env "+envName, func(t *testing.T) {
+			t.Setenv(envName, "")
+			_, err := loadConfig(nil)
+			assert.ErrorContains(t, err, "empty")
+			assert.ErrorContains(t, err, key)
+		})
+	}
+	t.Run("yaml", func(t *testing.T) {
+		path := writeConfig(t, "cookie:\n  secure: ''\n")
+		_, err := loadConfig([]string{"-c", path})
+		assert.ErrorContains(t, err, "cookie.secure")
+	})
+	t.Run("explicit values still load", func(t *testing.T) {
+		t.Setenv("PSINA_COOKIE_SECURE", "false")
+		cfg, err := loadConfig(nil)
+		require.NoError(t, err)
+		assert.False(t, cfg.Cookie.Secure)
+	})
+}

@@ -1,14 +1,17 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/foxcool/psina/auth"
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/confmap"
 	"github.com/knadh/koanf/providers/env"
@@ -149,7 +152,19 @@ func loadConfig(args []string) (*Config, error) {
 
 	// Unmarshal
 	var config Config
-	if err := k.Unmarshal("", &config); err != nil {
+	if err := k.UnmarshalWithConf("", &config, koanf.UnmarshalConf{
+		DecoderConfig: &mapstructure.DecoderConfig{
+			DecodeHook: mapstructure.ComposeDecodeHookFunc(
+				rejectEmptyBool,
+				mapstructure.StringToTimeDurationHookFunc(),
+				mapstructure.StringToSliceHookFunc(","),
+				mapstructure.TextUnmarshallerHookFunc(),
+			),
+			Result:           &config,
+			WeaklyTypedInput: true,
+			TagName:          "koanf",
+		},
+	}); err != nil {
 		return nil, fmt.Errorf("unmarshal config: %w", err)
 	}
 
@@ -164,6 +179,17 @@ func loadConfig(args []string) (*Config, error) {
 	}
 
 	return &config, nil
+}
+
+// rejectEmptyBool makes an empty string for a boolean a load error. Weak typing
+// would read it as false, so a template that renders an empty value would
+// silently turn off cookie.secure or pat.enabled; failing loudly beats guessing
+// a default. It applies to every boolean in Config, from env and from YAML.
+func rejectEmptyBool(from, to reflect.Type, data any) (any, error) {
+	if from.Kind() == reflect.String && to.Kind() == reflect.Bool && data.(string) == "" {
+		return nil, errors.New("empty value for a boolean: set true or false, or unset it to keep the default")
+	}
+	return data, nil
 }
 
 // loadConfigFile reads a YAML config as flat lowercased keys. Lowercasing

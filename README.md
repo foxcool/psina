@@ -129,7 +129,7 @@ curl http://localhost:8080/.well-known/jwks.json
 
 ## Configuration
 
-Environment variables (prefix `PSINA_`):
+Environment variables (prefix `PSINA_`). An empty value for a boolean (`PSINA_COOKIE_SECURE=`, `PSINA_PAT_ENABLED=`, ...) is a startup error, not `false`: set `true` or `false`, or leave the variable unset to keep the default.
 
 | Variable | Default | Description |
 |----------|---------|-------------|

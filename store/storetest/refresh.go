@@ -20,7 +20,8 @@ import (
 // refresh tokens may reference.
 type NewTokenStore func(t *testing.T) (s auth.TokenStore, userID string)
 
-// RefreshRotation checks RotateRefreshToken and GetRefreshFamily.
+// RefreshRotation checks RotateRefreshToken, GetRefreshFamily and the sweep
+// of expired families.
 func RefreshRotation(t *testing.T, newStore NewTokenStore) {
 	ctx := context.Background()
 	// Postgres keeps microseconds; truncate so round-tripped times compare equal.
@@ -166,6 +167,76 @@ func RefreshRotation(t *testing.T, newStore NewTokenStore) {
 		require.ErrorIs(t, err, store.ErrTokenRevoked)
 		_, err = s.GetRefreshToken(ctx, "orphan")
 		assert.ErrorIs(t, err, store.ErrTokenNotFound)
+	})
+
+	t.Run("starting a session sweeps families whose every member expired", func(t *testing.T) {
+		s, userID := newStore(t)
+		past := time.Now().Add(-24 * time.Hour)
+		// Rotated, then expired.
+		save(t, s, &entity.RefreshToken{Hash: "dead", UserID: userID, ExpiresAt: past})
+		save(t, s, &entity.RefreshToken{Hash: "dead-c1", UserID: userID, Parent: "dead", ExpiresAt: past})
+		// Ended by logout, then expired.
+		save(t, s, &entity.RefreshToken{Hash: "ended", UserID: userID, ExpiresAt: past})
+		require.NoError(t, s.RevokeTokens(ctx, "ended"))
+
+		save(t, s, &entity.RefreshToken{Hash: "fresh", UserID: userID})
+
+		for _, hash := range []string{"dead", "dead-c1", "ended"} {
+			_, err := s.GetRefreshToken(ctx, hash)
+			assert.ErrorIs(t, err, store.ErrTokenNotFound, hash)
+		}
+		_, err := s.GetRefreshToken(ctx, "fresh")
+		assert.NoError(t, err)
+	})
+
+	t.Run("sweep keeps a live family's root and every member that could still be replayed", func(t *testing.T) {
+		// The root expires before its successors; deleting it would end the
+		// session (successors need the root row), and deleting a rotated or
+		// ended member before it expires would turn a replay into an unknown
+		// token instead of detected reuse.
+		s, userID := newStore(t)
+		wall := time.Now()
+		past, future := wall.Add(-24*time.Hour), wall.Add(time.Hour)
+		save(t, s, &entity.RefreshToken{Hash: "root", UserID: userID, ExpiresAt: past})
+		save(t, s, &entity.RefreshToken{Hash: "c1", UserID: userID, Parent: "root", ExpiresAt: past})
+		save(t, s, &entity.RefreshToken{Hash: "c2", UserID: userID, Parent: "root", ExpiresAt: future})
+		_, err := s.RotateRefreshToken(ctx, "c2", wall)
+		require.NoError(t, err)
+		save(t, s, &entity.RefreshToken{Hash: "c3", UserID: userID, Parent: "root", ExpiresAt: future})
+		// A logged-out session whose tokens have not expired yet.
+		save(t, s, &entity.RefreshToken{Hash: "out", UserID: userID, ExpiresAt: future})
+		require.NoError(t, s.RevokeTokens(ctx, "out"))
+
+		save(t, s, &entity.RefreshToken{Hash: "fresh", UserID: userID})
+
+		for _, hash := range []string{"root", "c1", "c2", "c3", "out"} {
+			_, err := s.GetRefreshToken(ctx, hash)
+			assert.NoError(t, err, hash)
+		}
+		_, err = s.RotateRefreshToken(ctx, "c2", wall)
+		require.ErrorIs(t, err, store.ErrTokenRevoked, "a replayed rotated token is still recognised")
+		_, err = s.RotateRefreshToken(ctx, "out", wall)
+		require.ErrorIs(t, err, store.ErrTokenRevoked, "a replayed logged-out token is still recognised")
+		require.NoError(t, s.SaveRefreshToken(ctx, &entity.RefreshToken{
+			Hash: "c4", UserID: userID, Parent: "root", ExpiresAt: future,
+		}), "the live session continues")
+	})
+
+	t.Run("sweep keeps a family that expired moments ago", func(t *testing.T) {
+		// A refresh may rotate the last live member just before it expires and
+		// save the successor just after; the sweep must not delete the root
+		// in between.
+		s, userID := newStore(t)
+		wall := time.Now()
+		save(t, s, &entity.RefreshToken{Hash: "root", UserID: userID, ExpiresAt: wall.Add(-time.Second)})
+		_, err := s.RotateRefreshToken(ctx, "root", wall.Add(-2*time.Second))
+		require.NoError(t, err)
+
+		save(t, s, &entity.RefreshToken{Hash: "fresh", UserID: userID})
+
+		require.NoError(t, s.SaveRefreshToken(ctx, &entity.RefreshToken{
+			Hash: "c1", UserID: userID, Parent: "root", ExpiresAt: wall.Add(time.Hour),
+		}), "the in-flight refresh still saves its successor")
 	})
 
 	t.Run("unknown family is empty", func(t *testing.T) {

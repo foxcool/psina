@@ -252,6 +252,9 @@ func (s *Store) SaveRefreshToken(ctx context.Context, token *entity.RefreshToken
 	args := []any{token.Hash, token.UserID, token.Parent, token.ExpiresAt, token.CreatedAt, token.Revoked}
 
 	if token.Parent == "" {
+		if err := s.sweepExpiredFamilies(ctx, now); err != nil {
+			return err
+		}
 		if _, err := s.pool.Exec(ctx, insert, args...); err != nil {
 			return insertError("insert refresh token", token.UserID, err)
 		}
@@ -277,6 +280,60 @@ func (s *Store) SaveRefreshToken(ctx context.Context, token *entity.RefreshToken
 		}
 		if _, err := tx.Exec(ctx, insert, args...); err != nil {
 			return insertError("insert refresh token", token.UserID, err)
+		}
+		return nil
+	})
+}
+
+// refreshSweepBatch bounds the families one sweep deletes, so a backlog
+// (first run after an upgrade) spreads over several logins instead of
+// stalling one. Families are created only by root saves, each of which
+// sweeps up to this many, so the backlog cannot outgrow the sweep.
+const refreshSweepBatch = 100
+
+// sweepExpiredFamilies deletes up to refreshSweepBatch families whose every
+// member expired at least store.RefreshSweepGrace before now
+// (TokenStore.SaveRefreshToken contract). It runs
+// on root saves only: a refresh adds a member to a live family, which no
+// sweep could delete anyway.
+//
+// The candidate roots are locked first, in their own statement, skipping any
+// a concurrent SaveRefreshToken holds under its share lock. The DELETE then
+// takes a fresh snapshot (READ COMMITTED) and re-checks for a live member, so
+// a successor committed between the two statements keeps its root.
+func (s *Store) sweepExpiredFamilies(ctx context.Context, now time.Time) error {
+	cutoff := now.Add(-store.RefreshSweepGrace)
+	lockRoots := fmt.Sprintf(`
+		SELECT r.hash FROM %[1]s r
+		WHERE r.parent = '' AND r.expires_at <= $1
+		  AND NOT EXISTS (SELECT 1 FROM %[1]s c WHERE c.parent = r.hash AND c.expires_at > $1)
+		LIMIT $2
+		FOR UPDATE OF r SKIP LOCKED
+	`, s.tableRefreshTokens)
+	deleteFamilies := fmt.Sprintf(`
+		WITH dead AS (
+			SELECT r.hash FROM %[1]s r
+			WHERE r.hash = ANY($1)
+			  AND NOT EXISTS (SELECT 1 FROM %[1]s c WHERE c.parent = r.hash AND c.expires_at > $2)
+		)
+		DELETE FROM %[1]s
+		WHERE hash IN (SELECT hash FROM dead) OR parent IN (SELECT hash FROM dead)
+	`, s.tableRefreshTokens)
+
+	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, lockRoots, cutoff, refreshSweepBatch)
+		if err != nil {
+			return fmt.Errorf("lock expired refresh families: %w", err)
+		}
+		roots, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			return fmt.Errorf("lock expired refresh families: %w", err)
+		}
+		if len(roots) == 0 {
+			return nil
+		}
+		if _, err := tx.Exec(ctx, deleteFamilies, roots, cutoff); err != nil {
+			return fmt.Errorf("sweep expired refresh families: %w", err)
 		}
 		return nil
 	})

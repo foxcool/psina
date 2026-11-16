@@ -192,10 +192,35 @@ func (s *Store) SaveRefreshToken(ctx context.Context, token *entity.RefreshToken
 	if err := s.requireUser(token.UserID); err != nil {
 		return err
 	}
+	if token.Parent == "" {
+		s.sweepExpiredFamilies(now)
+	}
 
 	s.refreshTokens[token.Hash] = snapshot(token)
 
 	return nil
+}
+
+// sweepExpiredFamilies deletes every family whose members have all expired
+// at least store.RefreshSweepGrace ago (TokenStore.SaveRefreshToken
+// contract). The caller holds the write lock.
+func (s *Store) sweepExpiredFamilies(now time.Time) {
+	cutoff := now.Add(-store.RefreshSweepGrace)
+	live := make(map[string]bool) // family root -> has a member not past the cutoff
+	for _, t := range s.refreshTokens {
+		root := t.Parent
+		if root == "" {
+			root = t.Hash
+		}
+		live[root] = live[root] || t.ExpiresAt.After(cutoff)
+	}
+	maps.DeleteFunc(s.refreshTokens, func(_ string, t *entity.RefreshToken) bool {
+		root := t.Parent
+		if root == "" {
+			root = t.Hash
+		}
+		return !live[root]
+	})
 }
 
 // snapshot copies a stored token: callers must not alias structs that

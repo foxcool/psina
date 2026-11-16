@@ -1,3 +1,10 @@
+# DEMO ONLY: not a production setup. Before real use, change:
+#   - the database password (postgres, psina and migrate share a fixed one)
+#   - Traefik: drop --api.insecure=true and the published dashboard port (8081);
+#     it serves an unauthenticated dashboard and API
+#   - the image tags (latest/v3 float), and serve TLS instead of plain HTTP
+#   - generate your own jwt.pem and keep it out of version control
+#
 # Complete Docker Compose example with Traefik + psina + backend
 #
 # Usage:

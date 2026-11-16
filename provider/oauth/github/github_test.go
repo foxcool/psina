@@ -132,6 +132,11 @@ type fakeResponses struct {
 	userBody     string
 	emailsStatus int
 	emailsBody   string
+	// emailsPages, when set, replaces emailsBody: page N (1-based) is served
+	// with a Link rel="next" header while pages remain.
+	emailsPages []string
+	// emailsRequests counts the /user/emails requests served.
+	emailsRequests *int
 }
 
 const (
@@ -177,6 +182,23 @@ func fakeGitHub(t *testing.T, r fakeResponses) *Provider {
 	emails := api(r.emailsStatus, r.emailsBody)
 	mux.HandleFunc("GET /api/user/emails", func(w http.ResponseWriter, req *http.Request) {
 		assert.Equal(t, strconv.Itoa(emailsPerPage), req.URL.Query().Get("per_page"), "default page of 30 may miss the primary")
+		if r.emailsRequests != nil {
+			*r.emailsRequests++
+		}
+		if r.emailsPages != nil {
+			page := 1
+			if q := req.URL.Query().Get("page"); q != "" {
+				n, err := strconv.Atoi(q)
+				assert.NoError(t, err)
+				page = n
+			}
+			if page < len(r.emailsPages) {
+				// An absolute URL on another host: it must not be followed.
+				w.Header().Set("Link", `<https://elsewhere.invalid/user/emails?page=`+strconv.Itoa(page+1)+`>; rel="next", <https://elsewhere.invalid/user/emails?page=9>; rel="last"`)
+			}
+			_, _ = w.Write([]byte(r.emailsPages[page-1]))
+			return
+		}
 		emails(w, req)
 	})
 
@@ -219,6 +241,36 @@ func TestProvider_ExchangeCode(t *testing.T) {
 			assert.Equal(t, tt.wantVerified, info.EmailVerified)
 		})
 	}
+}
+
+func TestProvider_ExchangeCode_EmailPages(t *testing.T) {
+	filler := `[{"email": "x@example.com", "primary": false, "verified": true}]`
+	primary := `[{"email": "octocat@example.com", "primary": true, "verified": true}]`
+
+	t.Run("primary on page 2", func(t *testing.T) {
+		var requests int
+		p := fakeGitHub(t, fakeResponses{emailsPages: []string{filler, primary}, emailsRequests: &requests})
+
+		info, err := p.ExchangeCode(context.Background(), "auth-code", testParams())
+		require.NoError(t, err)
+		assert.Equal(t, "octocat@example.com", info.Email)
+		assert.True(t, info.EmailVerified)
+		assert.Equal(t, 2, requests)
+	})
+
+	t.Run("stops at the page bound", func(t *testing.T) {
+		pages := make([]string, maxEmailPages+5)
+		for i := range pages {
+			pages[i] = filler
+		}
+		pages[len(pages)-1] = primary
+		var requests int
+		p := fakeGitHub(t, fakeResponses{emailsPages: pages, emailsRequests: &requests})
+
+		_, err := p.ExchangeCode(context.Background(), "auth-code", testParams())
+		assert.ErrorContains(t, err, "pages", "a primary past the bound is an error, not an email-less account")
+		assert.Equal(t, maxEmailPages, requests)
+	})
 }
 
 func TestProvider_ExchangeCode_Failures(t *testing.T) {

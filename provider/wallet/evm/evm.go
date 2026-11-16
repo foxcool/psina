@@ -2,8 +2,7 @@
 // Ethereum (EIP-4361): EIP-55 addresses and EIP-191 personal_sign signatures.
 //
 // shortcut: only externally owned accounts are supported; smart-contract
-// wallets sign through EIP-1271, which needs an RPC call to the chain
-// (personal-7xr2).
+// wallets sign through EIP-1271, which needs an RPC call to the chain.
 package evm
 
 import (

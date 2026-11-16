@@ -38,7 +38,7 @@ var (
 	ErrOAuthLinkDisabled = errors.New("account exists and automatic oauth linking is disabled")
 	// ErrOAuthAccountHasPassword means an account with the provider's email
 	// exists and holds a password, so it is not linked automatically. Its
-	// password holder may link the provider explicitly (personal-usuw).
+	// password holder could link the provider explicitly, but no such flow exists yet.
 	ErrOAuthAccountHasPassword = errors.New("an account with this email has a password and is not linked automatically")
 )
 

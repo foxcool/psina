@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
+	"strings"
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/endpoints"
@@ -28,6 +29,10 @@ const (
 	maxAPIResponse = 1 << 20
 	// emailsPerPage is GitHub's largest page size for /user/emails.
 	emailsPerPage = 100
+	// maxEmailPages bounds the pages read from /user/emails, so a misbehaving
+	// API cannot keep a sign-in busy. GitHub documents no cap on the number of
+	// addresses per account, hence the pagination.
+	maxEmailPages = 10
 )
 
 // Config configures the GitHub provider.
@@ -141,18 +146,15 @@ func (p *Provider) ExchangeCode(ctx context.Context, code string, params oauth.A
 	client := conf.Client(ctx, token)
 
 	var user apiUser
-	if err := p.getJSON(ctx, client, "/user", &user); err != nil {
+	if _, err := p.getJSON(ctx, client, "/user", &user); err != nil {
 		return nil, err
 	}
 	if user.ID <= 0 {
 		return nil, fmt.Errorf("%w: /user has no id", oauth.ErrInvalidToken)
 	}
 
-	// The list is paginated and the primary is not guaranteed to come first.
-	// shortcut: first page only, follow the Link header if an account ever
-	// exceeds it (personal-ssoj).
-	var emails []apiEmail
-	if err := p.getJSON(ctx, client, "/user/emails?per_page="+strconv.Itoa(emailsPerPage), &emails); err != nil {
+	emails, err := p.listEmails(ctx, client)
+	if err != nil {
 		return nil, err
 	}
 
@@ -164,18 +166,56 @@ func (p *Provider) ExchangeCode(ctx context.Context, code string, params oauth.A
 	return info, nil
 }
 
-// getJSON GETs a REST API path with the user's token and decodes the body into dst.
-func (p *Provider) getJSON(ctx context.Context, client *http.Client, path string, dst any) error {
+// listEmails reads /user/emails. The list is paginated and the primary is not
+// guaranteed to come first, so it follows the Link header up to maxEmailPages.
+// The next page is requested by number on the configured API host: the URL in
+// the header is only a signal that a page exists, never fetched, so the token
+// cannot be sent anywhere else.
+func (p *Provider) listEmails(ctx context.Context, client *http.Client) ([]apiEmail, error) {
+	var all []apiEmail
+	for page := 1; page <= maxEmailPages; page++ {
+		var batch []apiEmail
+		path := "/user/emails?per_page=" + strconv.Itoa(emailsPerPage) + "&page=" + strconv.Itoa(page)
+		header, err := p.getJSON(ctx, client, path, &batch)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, batch...)
+		if slices.ContainsFunc(batch, func(e apiEmail) bool { return e.Primary }) || !hasNextPage(header) {
+			break
+		}
+	}
+	return all, nil
+}
+
+// hasNextPage reports whether a Link header carries rel="next".
+func hasNextPage(h http.Header) bool {
+	for _, value := range h.Values("Link") {
+		for part := range strings.SplitSeq(value, ",") {
+			_, params, _ := strings.Cut(part, ";")
+			for param := range strings.SplitSeq(params, ";") {
+				if k, v, ok := strings.Cut(strings.TrimSpace(param), "="); ok && k == "rel" && strings.Trim(v, `"`) == "next" {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// getJSON GETs a REST API path with the user's token and decodes the body into
+// dst; it returns the response headers.
+func (p *Provider) getJSON(ctx context.Context, client *http.Client, path string, dst any) (http.Header, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.apiURL+path, nil)
 	if err != nil {
-		return fmt.Errorf("github: build %s request: %w", path, err)
+		return nil, fmt.Errorf("github: build %s request: %w", path, err)
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", apiVersion)
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("github: get %s: %w", path, err)
+		return nil, fmt.Errorf("github: get %s: %w", path, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -183,10 +223,10 @@ func (p *Provider) getJSON(ctx context.Context, client *http.Client, path string
 	if resp.StatusCode != http.StatusOK {
 		// Drain so the connection is reused; the body is not echoed into the error.
 		_, _ = io.Copy(io.Discard, body)
-		return fmt.Errorf("github: get %s: unexpected status %d", path, resp.StatusCode)
+		return nil, fmt.Errorf("github: get %s: unexpected status %d", path, resp.StatusCode)
 	}
 	if err := json.NewDecoder(body).Decode(dst); err != nil {
-		return fmt.Errorf("%w: decode %s: %v", oauth.ErrInvalidToken, path, err)
+		return nil, fmt.Errorf("%w: decode %s: %v", oauth.ErrInvalidToken, path, err)
 	}
-	return nil
+	return resp.Header, nil
 }

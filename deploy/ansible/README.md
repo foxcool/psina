@@ -28,7 +28,7 @@ ansible-galaxy collection install community.docker
 | `psina_jwt_private_key` | `""` | PEM content of the private key; required. An empty value fails the play before anything is written or started |
 | `psina_dev` | `false` | Sets `PSINA_DEV=true`: lets psina run with an ephemeral JWT key (tokens die on restart). Dev stands only; this is the one way to deploy without `psina_jwt_private_key` |
 | `psina_cookie_enabled` | `true` | Enable cookie-based token delivery |
-| `psina_cookie_domain` | `""` | Cookie domain (empty = exact match) |
+| `psina_cookie_domain` | `""` | Cookie domain (empty = exact match). A domain broader than the service host logs a startup warning naming the scopes it covers and evicts; see the main README |
 | `psina_cookie_secure` | `true` | Secure cookie flag |
 | `psina_cookie_samesite` | `strict` | SameSite policy (`strict` or `lax` for SSO) |
 | `psina_traefik_middlewares` | `""` | Additional Traefik middlewares (e.g. `tailscale-only@file`) |

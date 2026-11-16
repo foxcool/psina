@@ -74,6 +74,8 @@ func run() error {
 		"pat_enabled", config.PAT.Enabled,
 	)
 
+	warnBroadCookieDomain(logger, config)
+
 	// Initialize stores based on config
 	var userStore auth.UserStore
 	var tokenStore auth.TokenStore

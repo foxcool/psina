@@ -132,6 +132,16 @@ type OAuthIdentityStore interface {
 	// Returns store.ErrUserExists or store.ErrOAuthIdentityExists on a conflict.
 	CreateUserWithOAuthIdentity(ctx context.Context, user *entity.User, identity *entity.OAuthIdentity) error
 
+	// ClaimAccountWithOAuthIdentity links identity to the account found by its
+	// provider-verified email. An account with a password and no OAuth or
+	// wallet identity is taken over in the same transaction: password deleted,
+	// sessions ended, PATs deleted, CredentialsChangedAt set from the store's
+	// clock after its locks and returned (nil: nothing was dropped). The rule
+	// lives in the store because the check and the writes must be atomic.
+	// Errors, checked in this order: store.ErrUserNotFound,
+	// store.ErrOAuthIdentityExists, store.ErrUserHasIdentity; nothing changes.
+	ClaimAccountWithOAuthIdentity(ctx context.Context, identity *entity.OAuthIdentity) (passwordDroppedAt *time.Time, err error)
+
 	// ListOAuthIdentities returns all OAuth identities linked to a user,
 	// newest (created_at DESC) first.
 	ListOAuthIdentities(ctx context.Context, userID string) ([]*entity.OAuthIdentity, error)

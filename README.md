@@ -159,7 +159,7 @@ Environment variables (prefix `PSINA_`). An empty value for a boolean (`PSINA_CO
 | `PSINA_OAUTH_GITHUB_CLIENTID` | _(empty)_ | GitHub OAuth app client id; set to enable GitHub sign-in |
 | `PSINA_OAUTH_GITHUB_CLIENTSECRET` | _(empty)_ | GitHub OAuth app client secret |
 | `PSINA_OAUTH_GITHUB_REDIRECTURIS` | _(empty)_ | Allowed redirect URIs, comma-separated (exact match) |
-| `PSINA_OAUTH_AUTOLINKEMAIL` | `true` | Link a first OAuth sign-in to an existing passwordless account with the same verified email; accounts with a password are never linked |
+| `PSINA_OAUTH_AUTOLINKEMAIL` | `true` | Link a first OAuth sign-in to an existing account with the same verified email; takeover rules in [docs/audit.md](docs/audit.md#passworddropped) |
 | `PSINA_WALLET_DOMAIN` | _(empty)_ | SIWE domain (e.g. `app.example.com`); set to enable wallet sign-in |
 | `PSINA_WALLET_URI` | _(empty)_ | SIWE URI (e.g. `https://app.example.com`); required with the domain |
 | `PSINA_WALLET_STATEMENT` | _(empty)_ | Text shown to the signer; optional, single line |

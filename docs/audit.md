@@ -55,11 +55,11 @@ Password registration (`Register` RPC).
 
 | Field | Values |
 | ----- | ------ |
-| `reason` | `user_exists`, `invalid_email`, `password_too_short`, `password_too_long`, `internal_error` |
+| `reason` | `user_exists`, `invalid_email`, `password_too_short`, `password_too_long`, `no_password` (a takeover, see `password.dropped`, dropped the new password before the session was saved; the session is ended), `internal_error` |
 
 A successful `register` is also the creation of the account; no `user.created`
-is written for it. A failed `register` with `user_id` (`internal_error`) created
-the account but issued no session.
+is written for it. A failed `register` with `user_id` (`internal_error`,
+`no_password`) created the account but issued no session.
 
 ### `login`
 
@@ -74,7 +74,7 @@ Password sign-in (`Login` RPC).
 | ------ | ------- |
 | `unknown_user` | No account with this email |
 | `bad_password` | Account exists, wrong password |
-| `no_password` | Account exists without a password (created by OAuth or wallet sign-in) |
+| `no_password` | Account exists without a password (created by OAuth or wallet sign-in, or its password was dropped by a takeover, also one that landed while this login ran; see `password.dropped`) |
 | `malformed_credentials` | The identifier is not an email, or the password is empty; nothing was looked up |
 | `invalid_credentials` | A custom `auth.Provider` refused without a reason (see below) |
 | `internal_error` | Server failure |
@@ -99,7 +99,7 @@ OAuth sign-in completion (`OAuthCallback` RPC). `GetOAuthURL` writes nothing.
 | `provider` | Provider name as the client sent it (`google`, `github`; cut to 256 bytes) |
 | `new_user` | Success only: `true` if this sign-in created the account |
 | `user_id` | On success; on `link_disabled` and `account_has_password` (the account the link targeted); on `internal_error` once the account was found |
-| `reason` | `invalid_request` (provider or redirect URI missing), `oauth_disabled`, `unknown_provider`, `redirect_uri_not_allowed`, `invalid_state` (unknown, expired, replayed or foreign state or browser binding), `exchange_failed` (provider refused the code, or provider outage), `email_missing`, `email_unverified`, `link_disabled` (an account with the email exists, `oauth.autoLinkEmail` is off), `account_has_password` (an account with the email holds a password and is never auto-linked), `internal_error` |
+| `reason` | `invalid_request` (provider or redirect URI missing), `oauth_disabled`, `unknown_provider`, `redirect_uri_not_allowed`, `invalid_state` (unknown, expired, replayed or foreign state or browser binding), `exchange_failed` (provider refused the code, or provider outage), `email_missing`, `email_unverified`, `link_disabled` (an account with the email exists, `oauth.autoLinkEmail` is off), `account_has_password` (an account with the email holds a password and already has an OAuth or wallet link, so it is not auto-linked; see `password.dropped` for one without), `internal_error` |
 
 ### `oauth.link`
 
@@ -107,7 +107,8 @@ A first OAuth sign-in attached the provider account to an existing account with
 the same verified email (`oauth.autoLinkEmail`). Written before the
 `oauth.sign_in` record of the same request, also when that sign-in then fails
 (`internal_error`): the link stands. Success only: a refused link is an
-`oauth.sign_in` failure (`link_disabled`, `account_has_password`).
+`oauth.sign_in` failure (`link_disabled`, `account_has_password`). A link that
+took over a password account follows a `password.dropped` record.
 
 | Field | Values |
 | ----- | ------ |
@@ -116,6 +117,45 @@ the same verified email (`oauth.autoLinkEmail`). Written before the
 
 An unexpected `oauth.link` for an account is the trace of a takeover through a
 provider account with the victim's email.
+
+### `password.dropped`
+
+A first OAuth sign-in with a provider-verified email took over an account that
+holds a password but no OAuth or wallet link. Local registration does not verify
+email, so nothing proved the password holder owns the address; the provider
+account's owner wins. In one step the password is deleted, every refresh session
+of the account ended, every PAT deleted, the provider account linked, and the
+account's credential epoch set to the takeover time. Written first, before the
+`oauth.link` and `oauth.sign_in` records of the same request, also when that
+sign-in then fails (`internal_error`): the takeover stands. Success only.
+
+| Field | Values |
+| ----- | ------ |
+| `provider` | The provider whose verified email won |
+| `user_id` | The account taken over |
+
+After it, the password holder's leftovers are refused:
+
+- An access token issued before the epoch cannot manage PATs (`pat.create` and
+  `pat.revoke` fail with `invalid_session`). Access tokens carry whole seconds,
+  so one issued in the takeover's own second counts as before it; the owner's
+  first token is issued after that second (the sign-in waits up to a second).
+  `Verify` and `GET /verify` stay stateless: such a token still passes there
+  until it expires (at most the access token lifetime, 15 minutes by default).
+- A refresh of a session that started before the epoch fails with
+  `session_ended`, and the session is ended.
+- A password login that the takeover overlapped (it read the password before
+  the takeover committed and saved its session after) fails with
+  `no_password`, and that session is ended. This check compares the account's
+  epoch before and after the login, not clocks.
+
+The epoch is the database clock at the takeover; access token and session
+times come from the psina host. The time comparisons above assume the two
+clocks agree to well under a second (NTP).
+
+The provider-verified email is trusted as proof of ownership. GitHub marks an
+address verified once and never rechecks it, so a former owner of the mailbox
+can take over a password account that has no linked identity.
 
 ### `wallet.sign_in`
 
@@ -173,7 +213,7 @@ A refused `Refresh` RPC. Failures only: a successful refresh is not audited
 | `token_expired` | The token is past its lifetime |
 | `token_reuse` | An already rotated token was presented outside the reuse leeway; the whole session was revoked. A stolen token being replayed looks like this |
 | `token_revoked` | The token was never rotated but had already been revoked: its session was ended by a logout or a reuse revocation (or, in a library, the token was revoked on its own, and its session is ended now). A client retrying after logging out elsewhere looks like this. Not a replay |
-| `session_ended` | The token was valid and rotated, but the session ended (a logout, or a reuse revocation by a concurrent request) before its successor was saved. Not a replay |
+| `session_ended` | The token was valid and rotated, but the session ended (a logout, or a reuse revocation by a concurrent request) before its successor was saved; or the session started before the account was taken over (`password.dropped`). Not a replay |
 | `unknown_user` | The account behind the token no longer exists |
 | `invalid_credentials` | Any other rejection |
 | `internal_error` | Server failure |
@@ -193,7 +233,7 @@ Personal access token creation (`CreatePersonalAccessToken` RPC).
 | `name` | The token name; on failure as the client sent it (cut to 256 bytes) |
 | `expires_at` | Success, when the token expires: RFC 3339, UTC; absent for a token without expiry |
 | `user_id` | On success; on failure once the session was authenticated |
-| `reason` | `invalid_session` (missing, malformed, expired or unknown session token), `pat_not_allowed` (a PAT was presented: PATs cannot manage PATs), `pat_disabled`, `name_required`, `name_too_long`, `invalid_expiry`, `limit_reached`, `internal_error` |
+| `reason` | `invalid_session` (missing, malformed, expired or unknown session token, or one issued before the account was taken over, see `password.dropped`), `pat_not_allowed` (a PAT was presented: PATs cannot manage PATs), `pat_disabled`, `name_required`, `name_too_long`, `invalid_expiry`, `limit_reached`, `internal_error` |
 
 The token secret and its hash are never logged.
 
@@ -207,6 +247,10 @@ Personal access token revocation (`RevokePersonalAccessToken` RPC).
 | `name`, `expires_at` | Success: the revoked token's name and expiry, as in `pat.create` |
 | `user_id` | On success; on failure once the session was authenticated |
 | `reason` | `invalid_session`, `pat_not_allowed`, `pat_disabled`, `not_found` (no token with this id owned by the caller), `internal_error` |
+
+A takeover committing between the session check and the delete is not seen:
+an access token issued before it can still revoke one PAT the owner created
+in that window.
 
 ## Not Audited
 

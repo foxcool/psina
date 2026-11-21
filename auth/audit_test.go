@@ -260,10 +260,35 @@ func TestAudit_OAuth(t *testing.T) {
 		requireAuditEvent(t, recs[0], auditEventOAuthSignIn, auditResultSuccess)
 	})
 
+	t.Run("password dropped", func(t *testing.T) {
+		svc, store := setupOAuthService(t, OAuthConfig{}, newFakeGoogle(verifiedInfo("sub-1", "pw@example.com")))
+		require.NoError(t, store.Create(ctx, &entity.User{ID: "user-pw", Email: "pw@example.com"}))
+		require.NoError(t, store.SavePasswordHash(ctx, "user-pw", "argon2-hash-secret"))
+		client, sink := serveAudited(t, svc)
+
+		_, secrets, err := auditOAuthSignIn(t, client)
+		require.NoError(t, err)
+
+		out := sink.raw()
+		recs := sink.records(t)
+		require.Len(t, recs, 3)
+		dropped := requireAuditEvent(t, recs[0], auditEventPasswordDropped, auditResultSuccess)
+		assert.Equal(t, "user-pw", dropped["user_id"])
+		assert.Equal(t, entity.ProviderTypeGoogle, dropped["provider"])
+		linked := requireAuditEvent(t, recs[1], auditEventOAuthLink, auditResultSuccess)
+		assert.Equal(t, "user-pw", linked["user_id"])
+		requireAuditEvent(t, recs[2], auditEventOAuthSignIn, auditResultSuccess)
+		assertNoSecrets(t, out, append(secrets, "argon2-hash-secret")...)
+	})
+
 	t.Run("link refused", func(t *testing.T) {
 		svc, store := setupOAuthService(t, OAuthConfig{}, newFakeGoogle(verifiedInfo("sub-1", "pw@example.com")))
 		require.NoError(t, store.Create(ctx, &entity.User{ID: "user-pw", Email: "pw@example.com"}))
 		require.NoError(t, store.SavePasswordHash(ctx, "user-pw", "argon2-hash-secret"))
+		// An identity proves the account's ownership: it is not taken over.
+		require.NoError(t, store.SaveOAuthIdentity(ctx, &entity.OAuthIdentity{
+			ID: "gh", UserID: "user-pw", Provider: entity.ProviderTypeGitHub, ExternalID: "42",
+		}))
 		client, sink := serveAudited(t, svc)
 
 		_, secrets, err := auditOAuthSignIn(t, client)
@@ -434,7 +459,7 @@ func TestAudit_AccountChangeBeforeFailure(t *testing.T) {
 		return NewService(failingTokens{memStore}, memStore, issuer, []Provider{&mockProvider{}}, opts...)
 	}
 	withGoogle := func(memStore *memory.Store, email string) ServiceOption {
-		return WithOAuth([]oauth.Provider{newFakeGoogle(verifiedInfo("sub-1", email))}, memStore, memStore, memStore, OAuthConfig{})
+		return WithOAuth([]oauth.Provider{newFakeGoogle(verifiedInfo("sub-1", email))}, memStore, memStore, OAuthConfig{})
 	}
 
 	t.Run("register", func(t *testing.T) {
@@ -511,6 +536,22 @@ func TestAudit_AccountChangeBeforeFailure(t *testing.T) {
 		require.Len(t, recs, 2)
 		assert.Equal(t, "user-old", requireAuditEvent(t, recs[0], auditEventOAuthLink, auditResultSuccess)["user_id"])
 		assert.Equal(t, "user-old", requireAuditEvent(t, recs[1], auditEventOAuthSignIn, auditResultFailure)["user_id"])
+	})
+
+	t.Run("oauth password account takeover", func(t *testing.T) {
+		memStore := memory.New()
+		require.NoError(t, memStore.Create(ctx, &entity.User{ID: "user-pw", Email: "pw@example.com"}))
+		require.NoError(t, memStore.SavePasswordHash(ctx, "user-pw", "hash"))
+		client, sink := serveAudited(t, newService(t, memStore, withGoogle(memStore, "pw@example.com")))
+
+		_, _, err := auditOAuthSignIn(t, client)
+		require.Error(t, err)
+
+		recs := sink.records(t)
+		require.Len(t, recs, 3, "the takeover stands")
+		assert.Equal(t, "user-pw", requireAuditEvent(t, recs[0], auditEventPasswordDropped, auditResultSuccess)["user_id"])
+		assert.Equal(t, "user-pw", requireAuditEvent(t, recs[1], auditEventOAuthLink, auditResultSuccess)["user_id"])
+		assert.Equal(t, "user-pw", requireAuditEvent(t, recs[2], auditEventOAuthSignIn, auditResultFailure)["user_id"])
 	})
 
 	t.Run("wallet new user", func(t *testing.T) {

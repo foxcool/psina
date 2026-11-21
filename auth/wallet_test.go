@@ -241,7 +241,7 @@ func TestWallet_ChallengesDoNotCrossWithOAuthState(t *testing.T) {
 	ctx := context.Background()
 	memStore := memory.New()
 	google := newFakeGoogle(verifiedInfo("sub-1", "user@example.com"))
-	svc := newWalletService(t, memStore, memStore, WithOAuth([]oauth.Provider{google}, memStore, memStore, memStore, OAuthConfig{}))
+	svc := newWalletService(t, memStore, memStore, WithOAuth([]oauth.Provider{google}, memStore, memStore, OAuthConfig{}))
 	signer := newTestSigner(t, evmtest.Key0)
 
 	// An OAuth state used as a wallet nonce, with a valid signature of the

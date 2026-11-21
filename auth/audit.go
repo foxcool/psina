@@ -31,16 +31,17 @@ import (
 //	user_agent   client User-Agent, truncated
 //	user_id      the account, when known
 const (
-	auditEventRegister     = "register"
-	auditEventLogin        = "login"
-	auditEventOAuthSignIn  = "oauth.sign_in"
-	auditEventOAuthLink    = "oauth.link"
-	auditEventWalletSignIn = "wallet.sign_in"
-	auditEventUserCreated  = "user.created"
-	auditEventLogout       = "logout"
-	auditEventRefresh      = "refresh" // failures only: a successful refresh is routine
-	auditEventPATCreate    = "pat.create"
-	auditEventPATRevoke    = "pat.revoke"
+	auditEventRegister        = "register"
+	auditEventLogin           = "login"
+	auditEventOAuthSignIn     = "oauth.sign_in"
+	auditEventOAuthLink       = "oauth.link"
+	auditEventPasswordDropped = "password.dropped"
+	auditEventWalletSignIn    = "wallet.sign_in"
+	auditEventUserCreated     = "user.created"
+	auditEventLogout          = "logout"
+	auditEventRefresh         = "refresh" // failures only: a successful refresh is routine
+	auditEventPATCreate       = "pat.create"
+	auditEventPATRevoke       = "pat.revoke"
 )
 
 // auditMethod is how a user.created account signed in.
@@ -111,9 +112,10 @@ func (e *CredentialsError) Is(target error) bool {
 
 // accountChange is the account a sign-in acted on and what it did to it.
 type accountChange struct {
-	userID  string
-	created bool
-	linked  bool // auto-linked a provider account to an existing user
+	userID          string
+	created         bool
+	linked          bool // auto-linked a provider account to an existing user
+	passwordDropped bool
 }
 
 // accountError is a failure after the service found or created the account.
@@ -197,6 +199,9 @@ func (h *Handler) auditAccountChange(ctx context.Context, req connect.AnyRequest
 	case change.created:
 		h.auditSuccess(ctx, req, auditEventUserCreated, change.userID, slog.String("method", string(method)), attr)
 	case change.linked:
+		if change.passwordDropped {
+			h.auditSuccess(ctx, req, auditEventPasswordDropped, change.userID, attr)
+		}
 		h.auditSuccess(ctx, req, auditEventOAuthLink, change.userID, attr)
 	}
 }
@@ -224,6 +229,8 @@ func registerFailureReason(err error) string {
 		return "password_too_short"
 	case errors.Is(err, ErrPasswordTooLong):
 		return "password_too_long"
+	case errors.Is(err, ErrInvalidCredentials):
+		return ReasonNoPassword
 	default:
 		return reasonInternalError
 	}

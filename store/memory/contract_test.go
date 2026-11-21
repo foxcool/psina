@@ -39,3 +39,4 @@ func TestContract_PATs(t *testing.T)            { storetest.PATs(t, newBackend) 
 func TestContract_OAuthIdentities(t *testing.T) { storetest.OAuthIdentities(t, newBackend) }
 func TestContract_UserOwnership(t *testing.T)   { storetest.UserOwnership(t, newBackend) }
 func TestContract_PATLimit(t *testing.T)        { storetest.PATLimit(t, newBackend) }
+func TestContract_AccountClaims(t *testing.T)   { storetest.AccountClaims(t, newBackend) }

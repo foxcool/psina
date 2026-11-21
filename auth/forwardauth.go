@@ -22,7 +22,7 @@ func (h *Handler) ForwardAuth() http.Handler {
 
 		claims, err := h.service.Verify(r.Context(), accessToken)
 		if err != nil {
-			cerr := verifyErrorToConnect(r.Context(), err)
+			cerr := credentialErrorToConnect(r.Context(), err)
 			status := http.StatusInternalServerError
 			if cerr.Code() == connect.CodeUnauthenticated {
 				status = http.StatusUnauthorized

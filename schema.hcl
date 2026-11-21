@@ -37,6 +37,13 @@ table "users" {
     default = sql("now()")
   }
 
+  // Set when a provider-verified sign-in dropped the unproven password; see
+  // docs/audit.md, password.dropped. NULL: never.
+  column "credentials_changed_at" {
+    type = timestamptz
+    null = true
+  }
+
   primary_key {
     columns = [column.id]
   }

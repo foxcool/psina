@@ -129,6 +129,10 @@ func (s *Store) GetByEmail(ctx context.Context, email string) (*entity.User, err
 func copyUser(user *entity.User) *entity.User {
 	cp := *user
 	cp.Roles = slices.Clone(user.Roles)
+	if user.CredentialsChangedAt != nil {
+		at := *user.CredentialsChangedAt
+		cp.CredentialsChangedAt = &at
+	}
 	return &cp
 }
 
@@ -454,6 +458,65 @@ func (s *Store) CreateUserWithOAuthIdentity(ctx context.Context, user *entity.Us
 	s.insertUser(user)
 	s.insertOAuthIdentity(identity)
 	return nil
+}
+
+// ClaimAccountWithOAuthIdentity links identity to its user, taking over a
+// password account that has no identity yet. Every check runs under one lock
+// hold before anything changes.
+func (s *Store) ClaimAccountWithOAuthIdentity(ctx context.Context, identity *entity.OAuthIdentity) (*time.Time, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	userID := identity.UserID
+	if err := s.requireUser(userID); err != nil {
+		return nil, err
+	}
+	if err := s.oauthIdentityConflict(identity); err != nil {
+		return nil, err
+	}
+	_, hasPassword := s.passwordHashes[userID]
+	if hasPassword && s.hasIdentity(userID) {
+		return nil, fmt.Errorf("%w: %s", store.ErrUserHasIdentity, userID)
+	}
+
+	if !hasPassword {
+		s.insertOAuthIdentity(identity)
+		return nil, nil
+	}
+
+	now := time.Now()
+	delete(s.passwordHashes, userID)
+	// usersByEmail shares this user; the stored epoch is not the returned one,
+	// so the caller cannot change it.
+	stored := now
+	s.users[userID].CredentialsChangedAt = &stored
+	for _, token := range s.refreshTokens {
+		if token.UserID == userID {
+			token.Revoked = true
+			if token.EndedAt == nil {
+				token.EndedAt = &now
+			}
+		}
+	}
+	maps.DeleteFunc(s.pats, func(_ string, p *entity.PersonalAccessToken) bool { return p.UserID == userID })
+	s.insertOAuthIdentity(identity)
+	return &now, nil
+}
+
+// hasIdentity reports whether the user has an OAuth or wallet identity.
+// Callers hold the lock.
+func (s *Store) hasIdentity(userID string) bool {
+	for _, identity := range s.oauthIdentities {
+		if identity.UserID == userID {
+			return true
+		}
+	}
+	for _, identity := range s.walletIdentities {
+		if identity.UserID == userID {
+			return true
+		}
+	}
+	return false
 }
 
 // oauthIdentityConflict reports store.ErrOAuthIdentityExists for a taken

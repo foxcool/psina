@@ -40,6 +40,10 @@ var (
 	// already linked to a user.
 	ErrOAuthIdentityExists = errors.New("oauth identity already exists")
 
+	// ErrUserHasIdentity indicates the user already has an OAuth or wallet
+	// identity, so its password account is not taken over by email.
+	ErrUserHasIdentity = errors.New("user already has a linked identity")
+
 	// ErrWalletIdentityNotFound indicates no wallet identity matches the lookup.
 	ErrWalletIdentityNotFound = errors.New("wallet identity not found")
 

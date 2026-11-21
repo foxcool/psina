@@ -11,4 +11,7 @@ type User struct {
 	Roles     []string
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	// CredentialsChangedAt is set when a provider-verified sign-in dropped the
+	// account's unproven password; see docs/audit.md, password.dropped. nil: never.
+	CredentialsChangedAt *time.Time
 }

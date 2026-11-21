@@ -168,7 +168,7 @@ func (s *Store) insertUser(ctx context.Context, db execer, user *entity.User) er
 // GetByID retrieves a user by ID.
 func (s *Store) GetByID(ctx context.Context, id string) (*entity.User, error) {
 	query := fmt.Sprintf(`
-		SELECT id, email, roles, created_at, updated_at
+		SELECT id, email, roles, created_at, updated_at, credentials_changed_at
 		FROM %s
 		WHERE id = $1
 	`, s.tableUsers)
@@ -192,7 +192,7 @@ func (s *Store) GetByEmail(ctx context.Context, email string) (*entity.User, err
 	}
 
 	query := fmt.Sprintf(`
-		SELECT id, email, roles, created_at, updated_at
+		SELECT id, email, roles, created_at, updated_at, credentials_changed_at
 		FROM %s
 		WHERE email = $1
 	`, s.tableUsers)
@@ -208,12 +208,12 @@ func (s *Store) GetByEmail(ctx context.Context, email string) (*entity.User, err
 	return user, nil
 }
 
-// scanUser reads id, email, roles, created_at, updated_at; a NULL email
-// becomes "".
+// scanUser reads id, email, roles, created_at, updated_at,
+// credentials_changed_at; a NULL email becomes "".
 func scanUser(row pgx.Row) (*entity.User, error) {
 	user := &entity.User{}
 	var email *string
-	if err := row.Scan(&user.ID, &email, &user.Roles, &user.CreatedAt, &user.UpdatedAt); err != nil {
+	if err := row.Scan(&user.ID, &email, &user.Roles, &user.CreatedAt, &user.UpdatedAt, &user.CredentialsChangedAt); err != nil {
 		return nil, err
 	}
 	if email != nil {
@@ -490,7 +490,7 @@ func (s *Store) SavePATLimited(ctx context.Context, pat *entity.PersonalAccessTo
 		_ = tx.Rollback(ctx)
 	}()
 
-	if err := s.lockUser(ctx, tx, pat.UserID); err != nil {
+	if err := s.lockUser(ctx, tx, pat.UserID, lockForNoKeyUpdate); err != nil {
 		return err
 	}
 
@@ -519,10 +519,23 @@ func (s *Store) SavePATLimited(ctx context.Context, pat *entity.PersonalAccessTo
 	return nil
 }
 
-// lockUser takes the user row lock that serialises PAT creates for the user.
-func (s *Store) lockUser(ctx context.Context, tx pgx.Tx, userID string) error {
+// userLock is the strength of a user row lock.
+type userLock string
+
+const (
+	// lockForNoKeyUpdate serialises writers that take it (PAT creates) without
+	// blocking other writers' foreign-key checks (FOR KEY SHARE).
+	lockForNoKeyUpdate userLock = "FOR NO KEY UPDATE"
+	// lockForUpdate also blocks those foreign-key checks: no row referencing
+	// the user is inserted until the lock holder commits.
+	lockForUpdate userLock = "FOR UPDATE"
+)
+
+// lockUser locks the user row with the given strength; a missing user is
+// store.ErrUserNotFound.
+func (s *Store) lockUser(ctx context.Context, tx pgx.Tx, userID string, strength userLock) error {
 	var locked string
-	query := fmt.Sprintf(`SELECT id::text FROM %s WHERE id = $1 FOR NO KEY UPDATE`, s.tableUsers)
+	query := fmt.Sprintf(`SELECT id::text FROM %s WHERE id = $1 %s`, s.tableUsers, strength)
 	if err := tx.QueryRow(ctx, query, userID).Scan(&locked); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("%w: %s", store.ErrUserNotFound, userID)
@@ -649,6 +662,94 @@ func (s *Store) CreateUserWithOAuthIdentity(ctx context.Context, user *entity.Us
 		}
 		return s.insertOAuthIdentity(ctx, tx, identity)
 	})
+}
+
+// ClaimAccountWithOAuthIdentity links identity to its user, taking over a
+// password account that has no identity yet, in one transaction.
+//
+// Locks: the user's refresh family roots first, then the user row FOR UPDATE.
+// Roots come first because a refresh holds its root FOR SHARE while its
+// insert's foreign-key check waits on the user row; the other order could
+// deadlock. FOR UPDATE blocks those foreign-key checks, so a session, PAT or
+// identity saved for the user meanwhile commits only after the claim, and its
+// writer then sees the claim (Login and PAT creation re-check after saving).
+func (s *Store) ClaimAccountWithOAuthIdentity(ctx context.Context, identity *entity.OAuthIdentity) (*time.Time, error) {
+	var epoch *time.Time
+	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		lockRoots := fmt.Sprintf(`SELECT 1 FROM %s WHERE user_id = $1 AND parent = '' FOR UPDATE`, s.tableRefreshTokens)
+		if _, err := tx.Exec(ctx, lockRoots, identity.UserID); err != nil {
+			return fmt.Errorf("lock refresh family roots: %w", err)
+		}
+		if err := s.lockUser(ctx, tx, identity.UserID, lockForUpdate); err != nil {
+			return err
+		}
+		hasPassword, err := s.checkClaim(ctx, tx, identity)
+		if err != nil {
+			return err
+		}
+		if hasPassword {
+			if epoch, err = s.dropCredentials(ctx, tx, identity.UserID); err != nil {
+				return err
+			}
+		}
+		return s.insertOAuthIdentity(ctx, tx, identity)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return epoch, nil
+}
+
+// checkClaim reports whether the claim drops a password, or why it is
+// refused. A taken provider account is reported before an identity of the
+// user, as in the memory store.
+func (s *Store) checkClaim(ctx context.Context, tx pgx.Tx, identity *entity.OAuthIdentity) (bool, error) {
+	query := fmt.Sprintf(`
+		SELECT EXISTS (SELECT 1 FROM %[1]s WHERE provider = $2 AND external_id = $3),
+		       EXISTS (SELECT 1 FROM %[2]s WHERE user_id = $1),
+		       EXISTS (SELECT 1 FROM %[1]s WHERE user_id = $1)
+		    OR EXISTS (SELECT 1 FROM %[3]s WHERE user_id = $1)
+	`, s.tableOAuthIdentities, s.tableLocalCredentials, s.tableWalletIdentities)
+	var taken, hasPassword, hasIdentity bool
+	err := tx.QueryRow(ctx, query, identity.UserID, identity.Provider, identity.ExternalID).
+		Scan(&taken, &hasPassword, &hasIdentity)
+	switch {
+	case err != nil:
+		return false, fmt.Errorf("query claim state: %w", err)
+	case taken:
+		return false, fmt.Errorf("%w: %s/%s", store.ErrOAuthIdentityExists, identity.Provider, identity.ExternalID)
+	case hasPassword && hasIdentity:
+		return false, fmt.Errorf("%w: %s", store.ErrUserHasIdentity, identity.UserID)
+	}
+	return hasPassword, nil
+}
+
+// dropCredentials deletes the password and PATs, ends every refresh session
+// and sets the credential epoch, which it returns. Roots are locked again: one
+// saved between the claim's two lock statements is locked now, so the UPDATE
+// sees every successor (as in RevokeTokens).
+func (s *Store) dropCredentials(ctx context.Context, tx pgx.Tx, userID string) (*time.Time, error) {
+	for _, stmt := range []struct{ op, sql string }{
+		{"drop password", fmt.Sprintf(`DELETE FROM %s WHERE user_id = $1`, s.tableLocalCredentials)},
+		{"drop pats", fmt.Sprintf(`DELETE FROM %s WHERE user_id = $1`, s.tablePATs)},
+		{"lock refresh family roots", fmt.Sprintf(`SELECT 1 FROM %s WHERE user_id = $1 AND parent = '' FOR UPDATE`, s.tableRefreshTokens)},
+		{"end sessions", fmt.Sprintf(`
+			UPDATE %s SET revoked = true, ended_at = COALESCE(ended_at, now())
+			WHERE user_id = $1`, s.tableRefreshTokens)},
+	} {
+		if _, err := tx.Exec(ctx, stmt.sql, userID); err != nil {
+			return nil, fmt.Errorf("%s: %w", stmt.op, err)
+		}
+	}
+	setEpoch := fmt.Sprintf(`
+		UPDATE %s SET credentials_changed_at = clock_timestamp(), updated_at = now()
+		WHERE id = $1
+		RETURNING credentials_changed_at`, s.tableUsers)
+	var epoch time.Time
+	if err := tx.QueryRow(ctx, setEpoch, userID).Scan(&epoch); err != nil {
+		return nil, fmt.Errorf("set credential epoch: %w", err)
+	}
+	return &epoch, nil
 }
 
 // insertOAuthIdentity inserts an identity row through db.

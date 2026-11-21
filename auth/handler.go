@@ -78,6 +78,10 @@ func (h *Handler) Register(
 		if errors.Is(err, ErrInvalidEmail) || errors.Is(err, ErrPasswordTooShort) || errors.Is(err, ErrPasswordTooLong) {
 			return nil, connect.NewError(connect.CodeInvalidArgument, err)
 		}
+		if errors.Is(err, ErrInvalidCredentials) {
+			// Taken over before its session was saved, as in Login.
+			return nil, connect.NewError(connect.CodeUnauthenticated, ErrInvalidCredentials)
+		}
 		return nil, internalError(ctx, "register failed", err)
 	}
 	h.auditSuccess(ctx, req, auditEventRegister, result.UserID)
@@ -218,7 +222,7 @@ func (h *Handler) Verify(
 
 	claims, err := h.service.Verify(ctx, accessToken)
 	if err != nil {
-		return nil, verifyErrorToConnect(ctx, err)
+		return nil, credentialErrorToConnect(ctx, err)
 	}
 
 	resp := connect.NewResponse(&authv1.VerifyResponse{
@@ -342,7 +346,12 @@ func (h *Handler) OAuthCallback(
 		}
 		return nil, cerr
 	}
-	change := accountChange{userID: result.UserID, created: result.IsNewUser, linked: result.Linked}
+	change := accountChange{
+		userID:          result.UserID,
+		created:         result.IsNewUser,
+		linked:          result.Linked,
+		passwordDropped: result.PasswordDropped,
+	}
 	h.auditSignIn(ctx, req, auditEventOAuthSignIn, auditMethodOAuth, change, provider)
 
 	resp := connect.NewResponse(&authv1.OAuthCallbackResponse{
@@ -360,10 +369,11 @@ func (h *Handler) OAuthCallback(
 	return resp, nil
 }
 
-// verifyErrorToConnect maps a Service.Verify error: a rejected credential is
-// Unauthenticated, anything else is an outage the gateway must not read as
-// "log the user out".
-func verifyErrorToConnect(ctx context.Context, err error) *connect.Error {
+// credentialErrorToConnect maps an error from checking an access credential
+// (Service.Verify, or the session check of account actions): a rejected
+// credential is Unauthenticated, anything else is an outage the gateway must
+// not read as "log the user out".
+func credentialErrorToConnect(ctx context.Context, err error) *connect.Error {
 	if errors.Is(err, ErrInvalidCredentials) {
 		return connect.NewError(connect.CodeUnauthenticated, errors.New("invalid token"))
 	}
@@ -492,11 +502,12 @@ func (h *Handler) CreatePersonalAccessToken(
 	req *connect.Request[authv1.CreatePersonalAccessTokenRequest],
 ) (*connect.Response[authv1.CreatePersonalAccessTokenResponse], error) {
 	name := clientAttr("name", req.Msg.Name)
-	userID, err := h.authenticateSession(ctx, req.Header())
+	claims, err := h.authenticateSession(ctx, req.Header())
 	if err != nil {
 		h.auditFailure(ctx, req, auditEventPATCreate, sessionFailureReason(err), name)
 		return nil, err
 	}
+	userID := claims.UserID
 
 	var expiresAt *time.Time
 	if req.Msg.ExpiresAt > 0 {
@@ -504,7 +515,13 @@ func (h *Handler) CreatePersonalAccessToken(
 		expiresAt = &t
 	}
 
-	result, err := h.service.CreatePAT(ctx, userID, req.Msg.Name, req.Msg.Scopes, expiresAt)
+	result, err := h.service.createSessionPAT(ctx, claims, req.Msg.Name, req.Msg.Scopes, expiresAt)
+	if errors.Is(err, ErrInvalidCredentials) {
+		// The session check after the save refused the caller.
+		cerr := credentialErrorToConnect(ctx, err)
+		h.auditFailure(ctx, req, auditEventPATCreate, sessionFailureReason(cerr), name, slog.String("user_id", userID))
+		return nil, cerr
+	}
 	if err != nil {
 		h.auditFailure(ctx, req, auditEventPATCreate, patFailureReason(err), name, slog.String("user_id", userID))
 		return nil, patErrorToConnect(ctx, "create pat", err)
@@ -522,12 +539,15 @@ func (h *Handler) ListPersonalAccessTokens(
 	ctx context.Context,
 	req *connect.Request[authv1.ListPersonalAccessTokensRequest],
 ) (*connect.Response[authv1.ListPersonalAccessTokensResponse], error) {
-	userID, err := h.authenticateSession(ctx, req.Header())
+	claims, err := h.authenticateSession(ctx, req.Header())
 	if err != nil {
 		return nil, err
 	}
 
-	pats, err := h.service.ListPATs(ctx, userID)
+	pats, err := h.service.listSessionPATs(ctx, claims)
+	if errors.Is(err, ErrInvalidCredentials) {
+		return nil, credentialErrorToConnect(ctx, err)
+	}
 	if err != nil {
 		return nil, patErrorToConnect(ctx, "list pats", err)
 	}
@@ -548,12 +568,14 @@ func (h *Handler) RevokePersonalAccessToken(
 	req *connect.Request[authv1.RevokePersonalAccessTokenRequest],
 ) (*connect.Response[authv1.RevokePersonalAccessTokenResponse], error) {
 	patID := clientAttr("pat_id", req.Msg.Id)
-	userID, err := h.authenticateSession(ctx, req.Header())
+	claims, err := h.authenticateSession(ctx, req.Header())
 	if err != nil {
 		h.auditFailure(ctx, req, auditEventPATRevoke, sessionFailureReason(err), patID)
 		return nil, err
 	}
+	userID := claims.UserID
 
+	// shortcut: a takeover between the session check and the delete is not seen; docs/audit.md, pat.revoke.
 	revoked, err := h.service.revokePAT(ctx, userID, req.Msg.Id)
 	if err != nil {
 		h.auditFailure(ctx, req, auditEventPATRevoke, patFailureReason(err), patID, slog.String("user_id", userID))
@@ -565,24 +587,26 @@ func (h *Handler) RevokePersonalAccessToken(
 }
 
 // authenticateSession extracts the Bearer token from the request and resolves
-// the caller's user ID. Only session (JWT) tokens are accepted: PATs cannot
+// the caller's claims. Only session (JWT) tokens are accepted: PATs cannot
 // manage PATs, so a leaked PAT cannot mint replacements or revoke siblings.
-func (h *Handler) authenticateSession(ctx context.Context, header http.Header) (string, error) {
+// A token issued before the account was taken over is refused
+// (Service.verifySession).
+func (h *Handler) authenticateSession(ctx context.Context, header http.Header) (*entity.Claims, error) {
 	accessToken, err := h.accessToken(header)
 	if err != nil {
-		return "", connect.NewError(connect.CodeUnauthenticated, errors.New("missing or invalid authorization"))
+		return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("missing or invalid authorization"))
 	}
 
 	if strings.HasPrefix(accessToken, token.PATPrefix) {
-		return "", connect.NewError(connect.CodePermissionDenied, errors.New("personal access tokens cannot manage tokens"))
+		return nil, connect.NewError(connect.CodePermissionDenied, errors.New("personal access tokens cannot manage tokens"))
 	}
 
-	claims, err := h.service.Verify(ctx, accessToken)
+	claims, err := h.service.verifySession(ctx, accessToken)
 	if err != nil {
-		return "", verifyErrorToConnect(ctx, err)
+		return nil, credentialErrorToConnect(ctx, err)
 	}
 
-	return claims.UserID, nil
+	return claims, nil
 }
 
 // patErrorToConnect maps PAT service errors to connect codes. Unexpected

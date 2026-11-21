@@ -99,7 +99,6 @@ type Service struct {
 	oauthProviders  map[string]oauth.Provider
 	oauthIdentities OAuthIdentityStore
 	challenges      ChallengeStore
-	credentials     CredentialStore
 	oauthConfig     OAuthConfig
 
 	// Wallet sign-in is optional; nil walletProviders means it is disabled.
@@ -110,6 +109,9 @@ type Service struct {
 
 	refreshReuseLeeway time.Duration
 	now                func() time.Time
+	// sleep waits d on the clock now reads (waitPastSecond); tests with a
+	// fake clock replace it so waiting advances that clock.
+	sleep func(ctx context.Context, d time.Duration) error
 }
 
 // DefaultRefreshReuseLeeway is how long a just-rotated refresh token may be
@@ -183,6 +185,7 @@ func NewService(
 
 		refreshReuseLeeway: DefaultRefreshReuseLeeway,
 		now:                time.Now,
+		sleep:              sleepTimer,
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -235,9 +238,13 @@ func (s *Service) Register(ctx context.Context, email, password string) (*Regist
 	}
 
 	// Issue tokens (new session, no parent; fresh users have no roles)
-	tokenPair, err := s.issueTokens(ctx, identity.UserID, identity.Email, nil, "")
+	tokenPair, err := s.issueTokens(ctx, identity.UserID, identity.Email, nil, "", s.now())
 	if err != nil {
 		return nil, &accountError{accountChange{userID: identity.UserID, created: true}, fmt.Errorf("issue tokens: %w", err)}
+	}
+	// A new account has no epoch yet.
+	if err := s.refuseLoginAfterTakeover(ctx, identity.UserID, tokenPair, credentialEpoch{}); err != nil {
+		return nil, &accountError{accountChange{userID: identity.UserID, created: true}, err}
 	}
 
 	return &RegisterResult{
@@ -266,7 +273,13 @@ func (s *Service) Login(ctx context.Context, email, password string) (*LoginResu
 		return nil, &CredentialsError{Reason: ReasonMalformedCredentials}
 	}
 
-	// Authenticate with provider
+	// Read before the password check; see refuseLoginAfterTakeover.
+	before, err := s.loginEpoch(ctx, email)
+	if err != nil {
+		return nil, err
+	}
+	// The session starts when the password is checked.
+	authAt := s.now()
 	req := &entity.AuthRequest{
 		Email:    email,
 		Password: password,
@@ -292,9 +305,12 @@ func (s *Service) Login(ctx context.Context, email, password string) (*LoginResu
 	}
 
 	// Issue tokens (new session, no parent)
-	tokenPair, err := s.issueTokens(ctx, identity.UserID, identity.Email, user.Roles, "")
+	tokenPair, err := s.issueTokens(ctx, identity.UserID, identity.Email, user.Roles, "", authAt)
 	if err != nil {
 		return nil, &accountError{accountChange{userID: identity.UserID}, fmt.Errorf("issue tokens: %w", err)}
+	}
+	if err := s.refuseLoginAfterTakeover(ctx, identity.UserID, tokenPair, before); err != nil {
+		return nil, err
 	}
 
 	return &LoginResult{
@@ -348,14 +364,21 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*entity.Tok
 	if err != nil {
 		return nil, &accountError{accountChange{userID: rt.UserID}, fmt.Errorf("get user: %w", err)}
 	}
+	// A session that began before the epoch belongs to the dropped password's holder.
+	if epochOf(user).sessionStale(rt.CreatedAt) {
+		if err := s.tokenStore.RevokeTokens(ctx, familyRoot(rt)); err != nil {
+			slog.ErrorContext(ctx, "revoke pre-takeover refresh token family", "user_id", rt.UserID, "error", err)
+		}
+		return nil, &accountError{accountChange{userID: rt.UserID}, errSessionEnded}
+	}
 
 	// Rotation and saving the successor are separate steps; a logout or reuse
 	// revocation landing between them ends the session first, and the store
 	// then refuses the successor (SaveRefreshToken contract). This token was
 	// not replayed, so it is not reported as reuse.
-	pair, err := s.issueTokens(ctx, user.ID, user.Email, user.Roles, familyRoot(rt))
+	pair, err := s.issueTokens(ctx, user.ID, user.Email, user.Roles, familyRoot(rt), now)
 	if errors.Is(err, store.ErrTokenRevoked) {
-		return nil, &accountError{accountChange{userID: rt.UserID}, fmt.Errorf("%w: %w", ErrInvalidCredentials, ErrSessionEnded)}
+		return nil, &accountError{accountChange{userID: rt.UserID}, errSessionEnded}
 	}
 	if err != nil {
 		return nil, &accountError{accountChange{userID: rt.UserID}, err}
@@ -614,19 +637,23 @@ func (s *Service) JWKS() *jose.JSONWebKeySet {
 
 // issueTokens generates tokens and saves refresh token to store.
 // parent is empty for new sessions, or contains the family root hash for refreshed tokens.
-func (s *Service) issueTokens(ctx context.Context, userID, email string, roles []string, parent string) (*entity.TokenPair, error) {
+// start is when the credential behind the new refresh token was checked: the
+// password or provider sign-in for a new session, the presented refresh token
+// for a successor. The token is created at start and lives RefreshTokenTTL
+// from it; Refresh refuses one whose start does not follow the account's
+// credential epoch (credentialEpoch.sessionStale).
+func (s *Service) issueTokens(ctx context.Context, userID, email string, roles []string, parent string, start time.Time) (*entity.TokenPair, error) {
 	tokenPair, refreshHash, err := s.issuer.GenerateTokens(userID, email, roles)
 	if err != nil {
 		return nil, fmt.Errorf("generate tokens: %w", err)
 	}
 
-	now := s.now()
 	rt := &entity.RefreshToken{
 		Hash:      refreshHash,
 		UserID:    userID,
 		Parent:    parent,
-		ExpiresAt: now.Add(token.RefreshTokenTTL),
-		CreatedAt: now,
+		ExpiresAt: start.Add(token.RefreshTokenTTL),
+		CreatedAt: start,
 		Revoked:   false,
 	}
 	if err := s.tokenStore.SaveRefreshToken(ctx, rt); err != nil {

@@ -197,36 +197,103 @@ func TestWaitPastSecond(t *testing.T) {
 	})
 }
 
-// claimingPATs runs claim before the first PAT save, as if a takeover
-// committed between the session check and the insert.
+// claimingPATs runs a takeover at one point of a PAT store call, once, as if
+// it committed there: before the save (the claim misses the new PAT), after
+// the save (the claim deletes it), or before a list.
 type claimingPATs struct {
 	*memory.Store
-	claim func(ctx context.Context)
+	beforeSave, afterSave, beforeList func(ctx context.Context)
+}
+
+func once(ctx context.Context, f *func(context.Context)) {
+	if *f != nil {
+		(*f)(ctx)
+		*f = nil
+	}
 }
 
 func (c *claimingPATs) SavePATLimited(ctx context.Context, pat *entity.PersonalAccessToken, limit int, now time.Time) error {
-	if c.claim != nil {
-		c.claim(ctx)
-		c.claim = nil
+	once(ctx, &c.beforeSave)
+	err := c.Store.SavePATLimited(ctx, pat, limit, now)
+	once(ctx, &c.afterSave)
+	return err
+}
+
+func (c *claimingPATs) ListPATs(ctx context.Context, userID string) ([]*entity.PersonalAccessToken, error) {
+	once(ctx, &c.beforeList)
+	return c.Store.ListPATs(ctx, userID)
+}
+
+// claimFunc takes over user-123 of store.
+func claimFunc(t *testing.T, s *memory.Store) func(context.Context) {
+	return func(ctx context.Context) {
+		epoch, err := s.ClaimAccountWithOAuthIdentity(ctx, &entity.OAuthIdentity{
+			ID: "link", UserID: "user-123", Provider: entity.ProviderTypeGoogle, ExternalID: "sub-1",
+		})
+		require.NoError(t, err)
+		require.NotNil(t, epoch)
 	}
-	return c.Store.SavePATLimited(ctx, pat, limit, now)
 }
 
 func TestTakeover_PATCreateRacingClaimRefused(t *testing.T) {
 	ctx := context.Background()
+	for name, stage := range map[string]func(p *claimingPATs, claim func(context.Context)){
+		// The claim misses the new PAT: the re-check deletes it.
+		"claim before the save": func(p *claimingPATs, claim func(context.Context)) { p.beforeSave = claim },
+		// The claim deleted it already: the re-check's delete finds nothing,
+		// which is no internal error.
+		"claim after the save": func(p *claimingPATs, claim func(context.Context)) { p.afterSave = claim },
+	} {
+		t.Run(name, func(t *testing.T) {
+			memStore := memory.New()
+			pats := &claimingPATs{Store: memStore}
+			f := newTakeoverFixture(t, memStore, pats)
+			stage(pats, claimFunc(t, memStore))
+
+			_, err := f.handler.CreatePersonalAccessToken(ctx, createPATRequest("squatter", f.squatter.AccessToken))
+			assert.Equal(t, connect.CodeUnauthenticated, connect.CodeOf(err))
+			list, err := f.store.ListPATs(ctx, "user-123")
+			require.NoError(t, err)
+			assert.Empty(t, list, "the racing PAT is gone")
+		})
+	}
+}
+
+func TestTakeover_PATListRacingClaimRefused(t *testing.T) {
+	ctx := context.Background()
 	memStore := memory.New()
 	pats := &claimingPATs{Store: memStore}
 	f := newTakeoverFixture(t, memStore, pats)
-	pats.claim = func(ctx context.Context) {
-		_, err := f.store.ClaimAccountWithOAuthIdentity(ctx, &entity.OAuthIdentity{
-			ID: "link", UserID: "user-123", Provider: entity.ProviderTypeGoogle, ExternalID: "sub-1",
-		})
-		require.NoError(t, err)
-	}
+	pats.beforeList = claimFunc(t, memStore)
 
-	_, err := f.handler.CreatePersonalAccessToken(ctx, createPATRequest("squatter", f.squatter.AccessToken))
+	req := connect.NewRequest(&authv1.ListPersonalAccessTokensRequest{})
+	req.Header().Set("Authorization", "Bearer "+f.squatter.AccessToken)
+	resp, err := f.handler.ListPersonalAccessTokens(ctx, req)
 	assert.Equal(t, connect.CodeUnauthenticated, connect.CodeOf(err))
-	list, err := f.store.ListPATs(ctx, "user-123")
+	assert.Nil(t, resp, "no rows for a stale session")
+}
+
+// The takeover commits after Register saved the password and before it saved
+// the session: the registrant gets no session.
+func TestTakeover_RegisterRacingClaimRefused(t *testing.T) {
+	ctx := context.Background()
+	memStore := memory.New()
+	tokens := &recordingTokens{Store: memStore}
+	provider := &mockProvider{registerFn: func(ctx context.Context, req *entity.RegisterRequest) (*entity.Identity, error) {
+		require.NoError(t, memStore.Create(ctx, &entity.User{ID: "user-123", Email: req.Email}))
+		require.NoError(t, memStore.SavePasswordHash(ctx, "user-123", "hash"))
+		claimFunc(t, memStore)(ctx)
+		return &entity.Identity{UserID: "user-123", Email: req.Email, Provider: entity.ProviderTypeLocal}, nil
+	}}
+	issuer, err := token.New()
 	require.NoError(t, err)
-	assert.Empty(t, list, "the racing PAT is deleted")
+	svc := NewService(tokens, memStore, issuer, []Provider{provider})
+
+	_, err = svc.Register(ctx, "local@example.com", "SecurePassword123!")
+	require.ErrorIs(t, err, ErrInvalidCredentials)
+
+	require.Len(t, tokens.saved, 1)
+	rt, err := memStore.GetRefreshToken(ctx, tokens.saved[0])
+	require.NoError(t, err)
+	assert.NotNil(t, rt.EndedAt, "the racing session is ended")
 }

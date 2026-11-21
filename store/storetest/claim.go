@@ -103,6 +103,13 @@ func AccountClaims(t *testing.T, newStore NewBackend) {
 		require.NoError(t, err)
 		require.NotNil(t, user.CredentialsChangedAt, "credential epoch set")
 		assert.True(t, epoch.Equal(*user.CredentialsChangedAt), "stored epoch is the returned one, got %v", user.CredentialsChangedAt)
+		// The returned user is a copy: changing its epoch changes nothing stored.
+		*user.CredentialsChangedAt = time.Time{}
+		*epoch = time.Time{}
+		again, err := s.GetByID(ctx, userID)
+		require.NoError(t, err)
+		require.NotNil(t, again.CredentialsChangedAt)
+		assert.False(t, again.CredentialsChangedAt.IsZero(), "stored epoch unchanged")
 
 		identity, err := s.GetOAuthIdentity(ctx, entity.ProviderTypeGoogle, "sub-1")
 		require.NoError(t, err)

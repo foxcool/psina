@@ -242,6 +242,11 @@ func (s *Service) Register(ctx context.Context, email, password string) (*Regist
 	if err != nil {
 		return nil, &accountError{accountChange{userID: identity.UserID, created: true}, fmt.Errorf("issue tokens: %w", err)}
 	}
+	// A new account has no epoch; one set now means a takeover committed
+	// after the password was saved, as in Login.
+	if err := s.refuseLoginAfterTakeover(ctx, identity.UserID, tokenPair, credentialEpoch{}); err != nil {
+		return nil, &accountError{accountChange{userID: identity.UserID, created: true}, err}
+	}
 
 	return &RegisterResult{
 		UserID:    identity.UserID,

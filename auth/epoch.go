@@ -135,9 +135,9 @@ func (s *Service) loginEpoch(ctx context.Context, email string) (credentialEpoch
 	}
 }
 
-// refuseLoginAfterTakeover ends the session just issued if the account was
-// taken over while the login ran: its epoch differs from the one read before
-// the password check. No clocks are compared. A takeover committed before
+// refuseLoginAfterTakeover ends the session just issued (by Login, or by
+// Register with before as never) if the account was taken over while it ran:
+// its epoch differs from the one read before the password check. No clocks are compared. A takeover committed before
 // the password read leaves no password to check; one committed before the
 // session was saved is seen here; one committed after the save ends the
 // session itself (the postgres claim makes the save wait for it otherwise).
@@ -165,10 +165,26 @@ func (s *Service) createSessionPAT(ctx context.Context, claims *entity.Claims, n
 		return nil, err
 	}
 	if err := s.checkSessionEpoch(ctx, claims); err != nil {
-		if _, delErr := s.patStore.DeletePAT(ctx, claims.UserID, result.Token.ID); delErr != nil {
+		// Not found: the claim deleted it already.
+		_, delErr := s.patStore.DeletePAT(ctx, claims.UserID, result.Token.ID)
+		if delErr != nil && !errors.Is(delErr, store.ErrTokenNotFound) {
 			return nil, fmt.Errorf("delete pat after takeover: %w", delErr)
 		}
 		return nil, err
 	}
 	return result, nil
+}
+
+// listSessionPATs is ListPATs for a caller authenticated by claims. A takeover
+// committed between the session check and the read is caught by checking
+// again after it: a stale caller gets no rows.
+func (s *Service) listSessionPATs(ctx context.Context, claims *entity.Claims) ([]*entity.PersonalAccessToken, error) {
+	pats, err := s.ListPATs(ctx, claims.UserID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.checkSessionEpoch(ctx, claims); err != nil {
+		return nil, err
+	}
+	return pats, nil
 }

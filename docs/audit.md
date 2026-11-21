@@ -55,11 +55,11 @@ Password registration (`Register` RPC).
 
 | Field | Values |
 | ----- | ------ |
-| `reason` | `user_exists`, `invalid_email`, `password_too_short`, `password_too_long`, `internal_error` |
+| `reason` | `user_exists`, `invalid_email`, `password_too_short`, `password_too_long`, `no_password` (a takeover, see `password.dropped`, dropped the new password before the session was saved; the session is ended), `internal_error` |
 
 A successful `register` is also the creation of the account; no `user.created`
-is written for it. A failed `register` with `user_id` (`internal_error`) created
-the account but issued no session.
+is written for it. A failed `register` with `user_id` (`internal_error`,
+`no_password`) created the account but issued no session.
 
 ### `login`
 
@@ -247,6 +247,10 @@ Personal access token revocation (`RevokePersonalAccessToken` RPC).
 | `name`, `expires_at` | Success: the revoked token's name and expiry, as in `pat.create` |
 | `user_id` | On success; on failure once the session was authenticated |
 | `reason` | `invalid_session`, `pat_not_allowed`, `pat_disabled`, `not_found` (no token with this id owned by the caller), `internal_error` |
+
+A takeover committing between the session check and the delete is not seen:
+an access token issued before it can still revoke one PAT the owner created
+in that window.
 
 ## Not Audited
 

@@ -233,6 +233,8 @@ func registerFailureReason(err error) string {
 		return "password_too_short"
 	case errors.Is(err, ErrPasswordTooLong):
 		return "password_too_long"
+	case errors.Is(err, ErrInvalidCredentials):
+		return ReasonNoPassword
 	default:
 		return reasonInternalError
 	}

@@ -78,6 +78,10 @@ func (h *Handler) Register(
 		if errors.Is(err, ErrInvalidEmail) || errors.Is(err, ErrPasswordTooShort) || errors.Is(err, ErrPasswordTooLong) {
 			return nil, connect.NewError(connect.CodeInvalidArgument, err)
 		}
+		if errors.Is(err, ErrInvalidCredentials) {
+			// Taken over before its session was saved, as in Login.
+			return nil, connect.NewError(connect.CodeUnauthenticated, ErrInvalidCredentials)
+		}
 		return nil, internalError(ctx, "register failed", err)
 	}
 	h.auditSuccess(ctx, req, auditEventRegister, result.UserID)
@@ -540,7 +544,10 @@ func (h *Handler) ListPersonalAccessTokens(
 		return nil, err
 	}
 
-	pats, err := h.service.ListPATs(ctx, claims.UserID)
+	pats, err := h.service.listSessionPATs(ctx, claims)
+	if errors.Is(err, ErrInvalidCredentials) {
+		return nil, credentialErrorToConnect(ctx, err)
+	}
 	if err != nil {
 		return nil, patErrorToConnect(ctx, "list pats", err)
 	}
@@ -568,6 +575,9 @@ func (h *Handler) RevokePersonalAccessToken(
 	}
 	userID := claims.UserID
 
+	// The session check just ran; nothing holds it through the delete, so a
+	// takeover committing in between lets this token revoke one more PAT
+	// (docs/audit.md, pat.revoke).
 	revoked, err := h.service.revokePAT(ctx, userID, req.Msg.Id)
 	if err != nil {
 		h.auditFailure(ctx, req, auditEventPATRevoke, patFailureReason(err), patID, slog.String("user_id", userID))

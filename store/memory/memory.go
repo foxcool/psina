@@ -129,6 +129,10 @@ func (s *Store) GetByEmail(ctx context.Context, email string) (*entity.User, err
 func copyUser(user *entity.User) *entity.User {
 	cp := *user
 	cp.Roles = slices.Clone(user.Roles)
+	if user.CredentialsChangedAt != nil {
+		at := *user.CredentialsChangedAt
+		cp.CredentialsChangedAt = &at
+	}
 	return &cp
 }
 
@@ -484,8 +488,10 @@ func (s *Store) ClaimAccountWithOAuthIdentity(ctx context.Context, identity *ent
 	// its clock after taking its locks.
 	now := time.Now()
 	delete(s.passwordHashes, userID)
-	// Readers get copies, and usersByEmail shares this pointer.
-	s.users[userID].CredentialsChangedAt = &now
+	// usersByEmail shares this user; the stored epoch is not the returned one,
+	// so the caller cannot change it.
+	stored := now
+	s.users[userID].CredentialsChangedAt = &stored
 	for _, token := range s.refreshTokens {
 		if token.UserID == userID {
 			token.Revoked = true

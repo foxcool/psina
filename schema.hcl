@@ -37,6 +37,14 @@ table "users" {
     default = sql("now()")
   }
 
+  // When a provider-verified sign-in took the account from the holder of its
+  // unproven password. Access tokens issued and sessions started before it are
+  // refused for account actions. NULL: never.
+  column "credentials_changed_at" {
+    type = timestamptz
+    null = true
+  }
+
   primary_key {
     columns = [column.id]
   }

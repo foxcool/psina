@@ -67,7 +67,7 @@ func (c *countingChallenges) SaveChallenge(ctx context.Context, ch *entity.Chall
 func setupOAuthService(t *testing.T, cfg OAuthConfig, providers ...oauth.Provider) (*Service, *memory.Store) {
 	t.Helper()
 	memStore := memory.New()
-	return newOAuthService(t, memStore, WithOAuth(providers, memStore, memStore, memStore, cfg)), memStore
+	return newOAuthService(t, memStore, WithOAuth(providers, memStore, memStore, cfg)), memStore
 }
 
 // newOAuthService builds a service over memStore with the given OAuth wiring.
@@ -159,9 +159,9 @@ func TestOAuth_LinkOrCreate(t *testing.T) {
 		wantNew  bool
 	}{
 		{name: "verified email links passwordless account", info: verifiedInfo("sub-1", "local@example.com"), existing: true},
-		// Pre-account takeover: whoever registered the address with a password
-		// may not own it, so a verified sign-in must not join that account.
-		{name: "password account is not linked", info: verifiedInfo("sub-1", "local@example.com"), existing: true, password: true, wantErr: ErrOAuthAccountHasPassword},
+		// The password holder may not own the address; the verified owner
+		// takes the account over (TestOAuth_PasswordAccountTakeover).
+		{name: "password account is taken over", info: verifiedInfo("sub-1", "local@example.com"), existing: true, password: true},
 		{name: "unverified email does not link", info: oauth.UserInfo{ExternalID: "sub-1", Email: "local@example.com"}, existing: true, wantErr: ErrOAuthEmailUnverified},
 		{name: "unverified email does not create", info: oauth.UserInfo{ExternalID: "sub-1", Email: "fresh@example.com"}, wantErr: ErrOAuthEmailUnverified},
 		{name: "auto-link disabled", cfg: OAuthConfig{DisableAutoLinkEmail: true}, info: verifiedInfo("sub-1", "local@example.com"), existing: true, wantErr: ErrOAuthLinkDisabled},
@@ -193,6 +193,110 @@ func TestOAuth_LinkOrCreate(t *testing.T) {
 			if tt.existing {
 				assert.Equal(t, local.ID, res.UserID)
 			}
+		})
+	}
+}
+
+func TestOAuth_PasswordAccountTakeover(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now()
+
+	// setup stores a password account for local@example.com with a live
+	// session and a PAT, as its registrant would have.
+	setup := func(t *testing.T, info oauth.UserInfo) (*Service, *memory.Store) {
+		t.Helper()
+		svc, memStore := setupOAuthService(t, OAuthConfig{}, newFakeGoogle(info))
+		require.NoError(t, memStore.Create(ctx, &entity.User{ID: "local-user", Email: "local@example.com"}))
+		require.NoError(t, memStore.SavePasswordHash(ctx, "local-user", "hash"))
+		require.NoError(t, memStore.SaveRefreshToken(ctx, &entity.RefreshToken{
+			Hash: "squatter-session", UserID: "local-user", ExpiresAt: now.Add(time.Hour),
+		}))
+		require.NoError(t, memStore.SavePAT(ctx, &entity.PersonalAccessToken{
+			ID: "pat-1", Hash: "squatter-pat", UserID: "local-user", Name: "ci",
+		}))
+		return svc, memStore
+	}
+	assertSquatterKept := func(t *testing.T, memStore *memory.Store) {
+		t.Helper()
+		_, err := memStore.GetPasswordHash(ctx, "local-user")
+		require.NoError(t, err, "password kept")
+		rt, err := memStore.GetRefreshToken(ctx, "squatter-session")
+		require.NoError(t, err)
+		assert.False(t, rt.Revoked, "session kept")
+		_, err = memStore.GetPAT(ctx, "squatter-pat")
+		require.NoError(t, err, "PAT kept")
+		_, err = memStore.GetOAuthIdentity(ctx, entity.ProviderTypeGoogle, "sub-1")
+		assert.ErrorIs(t, err, store.ErrOAuthIdentityNotFound, "not linked")
+	}
+
+	t.Run("verified email takes over the password account", func(t *testing.T) {
+		svc, memStore := setup(t, verifiedInfo("sub-1", "local@example.com"))
+
+		res, err := svc.OAuthCallback(ctx, startFlow(t, svc))
+		require.NoError(t, err)
+		assert.Equal(t, "local-user", res.UserID)
+		assert.False(t, res.IsNewUser)
+		assert.True(t, res.Linked)
+		assert.True(t, res.PasswordDropped)
+
+		_, err = memStore.GetPasswordHash(ctx, "local-user")
+		assert.ErrorIs(t, err, store.ErrCredentialNotFound, "password dropped")
+		rt, err := memStore.GetRefreshToken(ctx, "squatter-session")
+		require.NoError(t, err)
+		assert.True(t, rt.Revoked, "squatter session ended")
+		_, err = memStore.GetPAT(ctx, "squatter-pat")
+		assert.ErrorIs(t, err, store.ErrTokenNotFound, "squatter PAT deleted")
+		identity, err := memStore.GetOAuthIdentity(ctx, entity.ProviderTypeGoogle, "sub-1")
+		require.NoError(t, err)
+		assert.Equal(t, "local-user", identity.UserID)
+
+		// The owner's own new session survives the takeover.
+		_, err = svc.Refresh(ctx, res.TokenPair.RefreshToken)
+		require.NoError(t, err)
+	})
+
+	refused := []struct {
+		name    string
+		info    oauth.UserInfo
+		stage   func(t *testing.T, memStore *memory.Store)
+		wantErr error
+	}{
+		{
+			name: "account with an oauth identity",
+			info: verifiedInfo("sub-1", "local@example.com"),
+			stage: func(t *testing.T, memStore *memory.Store) {
+				require.NoError(t, memStore.SaveOAuthIdentity(ctx, &entity.OAuthIdentity{
+					ID: "gh", UserID: "local-user", Provider: entity.ProviderTypeGitHub, ExternalID: "42",
+				}))
+			},
+			wantErr: ErrOAuthAccountHasPassword,
+		},
+		{
+			name: "account with a wallet identity",
+			info: verifiedInfo("sub-1", "local@example.com"),
+			stage: func(t *testing.T, memStore *memory.Store) {
+				require.NoError(t, memStore.SaveWalletIdentity(ctx, &entity.WalletIdentity{
+					ID: "w", UserID: "local-user", Chain: "ethereum", Address: "0x0000000000000000000000000000000000000001",
+				}))
+			},
+			wantErr: ErrOAuthAccountHasPassword,
+		},
+		{
+			name:    "provider reports the email unverified",
+			info:    oauth.UserInfo{ExternalID: "sub-1", Email: "local@example.com"},
+			wantErr: ErrOAuthEmailUnverified,
+		},
+	}
+	for _, tt := range refused {
+		t.Run(tt.name+" changes nothing", func(t *testing.T) {
+			svc, memStore := setup(t, tt.info)
+			if tt.stage != nil {
+				tt.stage(t, memStore)
+			}
+
+			_, err := svc.OAuthCallback(ctx, startFlow(t, svc))
+			require.ErrorIs(t, err, tt.wantErr)
+			assertSquatterKept(t, memStore)
 		})
 	}
 }
@@ -251,7 +355,7 @@ func TestOAuth_StateExpired(t *testing.T) {
 	google := newFakeGoogle(verifiedInfo("sub-1", "user@example.com"))
 	memStore := memory.New()
 	svc := newOAuthService(t, memStore,
-		WithOAuth([]oauth.Provider{google}, memStore, memStore, memStore, OAuthConfig{StateTTL: time.Minute}),
+		WithOAuth([]oauth.Provider{google}, memStore, memStore, OAuthConfig{StateTTL: time.Minute}),
 		WithClock(clock.Now))
 
 	req := startFlow(t, svc)
@@ -282,7 +386,7 @@ func TestOAuth_GetURL(t *testing.T) {
 	google := newFakeGoogle(verifiedInfo("sub-1", "user@example.com"))
 	memStore := memory.New()
 	challenges := &countingChallenges{ChallengeStore: memStore}
-	svc := newOAuthService(t, memStore, WithOAuth([]oauth.Provider{google}, memStore, challenges, memStore, OAuthConfig{}))
+	svc := newOAuthService(t, memStore, WithOAuth([]oauth.Provider{google}, memStore, challenges, OAuthConfig{}))
 
 	_, err := svc.GetOAuthURL(ctx, entity.ProviderTypeGoogle, "https://evil.example.com/cb")
 	require.ErrorIs(t, err, oauth.ErrRedirectURINotAllowed)
@@ -315,7 +419,7 @@ func TestOAuth_DuplicateProviderPanics(t *testing.T) {
 	google := newFakeGoogle(verifiedInfo("sub-1", "user@example.com"))
 	memStore := memory.New()
 	assert.PanicsWithValue(t, `auth: duplicate oauth provider "google"`, func() {
-		WithOAuth([]oauth.Provider{google, google}, memStore, memStore, memStore, OAuthConfig{})
+		WithOAuth([]oauth.Provider{google, google}, memStore, memStore, OAuthConfig{})
 	})
 }
 
@@ -323,7 +427,7 @@ func TestOAuth_NilStorePanics(t *testing.T) {
 	google := newFakeGoogle(verifiedInfo("sub-1", "user@example.com"))
 	memStore := memory.New()
 	assert.Panics(t, func() {
-		WithOAuth([]oauth.Provider{google}, memStore, memStore, nil, OAuthConfig{})
+		WithOAuth([]oauth.Provider{google}, memStore, nil, OAuthConfig{})
 	})
 }
 
@@ -347,7 +451,7 @@ func TestOAuth_ConcurrentLinkWins(t *testing.T) {
 	google := newFakeGoogle(verifiedInfo("sub-1", "fresh@example.com"))
 	memStore := memory.New()
 	svc := newOAuthService(t, memStore,
-		WithOAuth([]oauth.Provider{google}, &raceIdentities{OAuthIdentityStore: memStore}, memStore, memStore, OAuthConfig{}))
+		WithOAuth([]oauth.Provider{google}, &raceIdentities{OAuthIdentityStore: memStore}, memStore, OAuthConfig{}))
 
 	winner := &entity.User{ID: "winner", Email: "winner@example.com"}
 	require.NoError(t, memStore.Create(ctx, winner))
@@ -391,7 +495,7 @@ func TestOAuth_ConcurrentRegistration(t *testing.T) {
 	issuer, err := token.New()
 	require.NoError(t, err)
 	svc := NewService(memStore, users, issuer, []Provider{&mockProvider{}},
-		WithOAuth([]oauth.Provider{google}, memStore, memStore, memStore, OAuthConfig{}))
+		WithOAuth([]oauth.Provider{google}, memStore, memStore, OAuthConfig{}))
 
 	res, err := svc.OAuthCallback(ctx, startFlow(t, svc))
 	require.NoError(t, err)
@@ -481,7 +585,7 @@ func TestOAuth_CreateConflict(t *testing.T) {
 			var winner string
 			identities := &hookIdentities{Store: memStore, onCreate: tt.onCreate(t, memStore, &winner)}
 			google := newFakeGoogle(verifiedInfo("sub-1", "fresh@example.com"))
-			svc := newOAuthService(t, memStore, WithOAuth([]oauth.Provider{google}, identities, memStore, memStore, OAuthConfig{}))
+			svc := newOAuthService(t, memStore, WithOAuth([]oauth.Provider{google}, identities, memStore, OAuthConfig{}))
 
 			res, err := svc.OAuthCallback(ctx, startFlow(t, svc))
 			if tt.wantErr != nil {
@@ -505,27 +609,30 @@ func TestOAuth_CreateConflict(t *testing.T) {
 	}
 }
 
-// failingCredentials fails every password lookup.
-type failingCredentials struct{ CredentialStore }
+// failingClaim fails every link to an existing account.
+type failingClaim struct{ *memory.Store }
 
-func (failingCredentials) GetPasswordHash(context.Context, string) (string, error) {
-	return "", errors.New("db down")
+func (failingClaim) ClaimAccountWithOAuthIdentity(context.Context, *entity.OAuthIdentity) (*time.Time, error) {
+	return nil, errors.New("db down")
 }
 
-func TestOAuth_AutoLinkCredentialLookupFails(t *testing.T) {
+func TestOAuth_AutoLinkFails(t *testing.T) {
 	ctx := context.Background()
 	memStore := memory.New()
 	google := newFakeGoogle(verifiedInfo("sub-1", "user@example.com"))
 	svc := newOAuthService(t, memStore,
-		WithOAuth([]oauth.Provider{google}, memStore, memStore, failingCredentials{}, OAuthConfig{}))
+		WithOAuth([]oauth.Provider{google}, failingClaim{memStore}, memStore, OAuthConfig{}))
 	require.NoError(t, memStore.Create(ctx, &entity.User{ID: "u1", Email: "user@example.com"}))
+	require.NoError(t, memStore.SavePasswordHash(ctx, "u1", "hash"))
 
 	_, err := svc.OAuthCallback(ctx, startFlow(t, svc))
 	require.Error(t, err)
 	assert.NotErrorIs(t, err, ErrOAuthAccountHasPassword)
 
 	_, err = memStore.GetOAuthIdentity(ctx, entity.ProviderTypeGoogle, "sub-1")
-	assert.ErrorIs(t, err, store.ErrOAuthIdentityNotFound, "an unknown password state does not link")
+	assert.ErrorIs(t, err, store.ErrOAuthIdentityNotFound, "a failed claim does not link")
+	_, err = memStore.GetPasswordHash(ctx, "u1")
+	assert.NoError(t, err, "a failed claim keeps the password")
 }
 
 // failingLink fails every attempt to store an identity link and counts user
@@ -558,7 +665,7 @@ func TestOAuth_FailedLinkLeavesNoUser(t *testing.T) {
 	issuer, err := token.New()
 	require.NoError(t, err)
 	svc := NewService(memStore, stores, issuer, []Provider{&mockProvider{}},
-		WithOAuth([]oauth.Provider{google}, stores, memStore, memStore, OAuthConfig{}))
+		WithOAuth([]oauth.Provider{google}, stores, memStore, OAuthConfig{}))
 
 	_, err = svc.OAuthCallback(ctx, startFlow(t, svc))
 	require.ErrorIs(t, err, errLinkFailed)

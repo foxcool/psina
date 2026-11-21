@@ -11,4 +11,9 @@ type User struct {
 	Roles     []string
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	// CredentialsChangedAt is when the account was last taken from the holder
+	// of its credentials (a provider-verified sign-in dropped its unproven
+	// password). Access tokens issued and sessions started before it are
+	// refused for account actions. nil: never.
+	CredentialsChangedAt *time.Time
 }

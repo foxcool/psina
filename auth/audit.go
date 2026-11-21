@@ -31,16 +31,19 @@ import (
 //	user_agent   client User-Agent, truncated
 //	user_id      the account, when known
 const (
-	auditEventRegister     = "register"
-	auditEventLogin        = "login"
-	auditEventOAuthSignIn  = "oauth.sign_in"
-	auditEventOAuthLink    = "oauth.link"
-	auditEventWalletSignIn = "wallet.sign_in"
-	auditEventUserCreated  = "user.created"
-	auditEventLogout       = "logout"
-	auditEventRefresh      = "refresh" // failures only: a successful refresh is routine
-	auditEventPATCreate    = "pat.create"
-	auditEventPATRevoke    = "pat.revoke"
+	auditEventRegister    = "register"
+	auditEventLogin       = "login"
+	auditEventOAuthSignIn = "oauth.sign_in"
+	auditEventOAuthLink   = "oauth.link"
+	// auditEventPasswordDropped: a provider-verified sign-in took over a
+	// password account whose ownership nothing proved.
+	auditEventPasswordDropped = "password.dropped"
+	auditEventWalletSignIn    = "wallet.sign_in"
+	auditEventUserCreated     = "user.created"
+	auditEventLogout          = "logout"
+	auditEventRefresh         = "refresh" // failures only: a successful refresh is routine
+	auditEventPATCreate       = "pat.create"
+	auditEventPATRevoke       = "pat.revoke"
 )
 
 // auditMethod is how a user.created account signed in.
@@ -114,6 +117,9 @@ type accountChange struct {
 	userID  string
 	created bool
 	linked  bool // auto-linked a provider account to an existing user
+	// passwordDropped: the link took over a password account (see
+	// OAuthCallbackResult.PasswordDropped).
+	passwordDropped bool
 }
 
 // accountError is a failure after the service found or created the account.
@@ -197,6 +203,9 @@ func (h *Handler) auditAccountChange(ctx context.Context, req connect.AnyRequest
 	case change.created:
 		h.auditSuccess(ctx, req, auditEventUserCreated, change.userID, slog.String("method", string(method)), attr)
 	case change.linked:
+		if change.passwordDropped {
+			h.auditSuccess(ctx, req, auditEventPasswordDropped, change.userID, attr)
+		}
 		h.auditSuccess(ctx, req, auditEventOAuthLink, change.userID, attr)
 	}
 }

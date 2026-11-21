@@ -570,7 +570,9 @@ func TestHandler_StorageFailureIsInternal(t *testing.T) {
 	handler := NewHandler(NewService(broken, broken, issuer, []Provider{provider}, WithPAT(broken, PATConfig{})))
 	ctx := context.Background()
 
-	// A session JWT needs no store, so the PAT RPCs get past authentication.
+	// The session check reads only the user, which works, so the PAT RPCs get
+	// past authentication to the broken PAT store.
+	require.NoError(t, broken.Create(ctx, &entity.User{ID: "user-123", Email: "down@example.com"}))
 	session, _, err := issuer.GenerateTokens("user-123", "down@example.com", nil)
 	require.NoError(t, err)
 	withSession := func(header http.Header) { header.Set("Authorization", "Bearer "+session.AccessToken) }

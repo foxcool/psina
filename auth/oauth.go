@@ -37,8 +37,10 @@ var (
 	// and automatic linking is turned off.
 	ErrOAuthLinkDisabled = errors.New("account exists and automatic oauth linking is disabled")
 	// ErrOAuthAccountHasPassword means an account with the provider's email
-	// exists and holds a password, so it is not linked automatically. Its
-	// password holder could link the provider explicitly, but no such flow exists yet.
+	// holds a password and already has an OAuth or wallet identity, so it is
+	// not linked automatically. (A password account without one is taken over
+	// instead.) Its password holder could link the provider explicitly, but no
+	// such flow exists yet.
 	ErrOAuthAccountHasPassword = errors.New("an account with this email has a password and is not linked automatically")
 )
 
@@ -60,18 +62,16 @@ type OAuthConfig struct {
 }
 
 // WithOAuth enables OAuth sign-in through the given providers, keyed by
-// ProviderName(). credentials tells password accounts apart: auto-link skips
-// them. All stores are required; a nil store or a duplicate name is a wiring
-// bug and panics at startup rather than on the first sign-in.
+// ProviderName(). Both stores are required; a nil store or a duplicate name is
+// a wiring bug and panics at startup rather than on the first sign-in.
 func WithOAuth(
 	providers []oauth.Provider,
 	identities OAuthIdentityStore,
 	challenges ChallengeStore,
-	credentials CredentialStore,
 	cfg OAuthConfig,
 ) ServiceOption {
-	if identities == nil || challenges == nil || credentials == nil {
-		panic("auth: WithOAuth needs identity, challenge and credential stores")
+	if identities == nil || challenges == nil {
+		panic("auth: WithOAuth needs identity and challenge stores")
 	}
 	if cfg.StateTTL == 0 {
 		cfg.StateTTL = DefaultOAuthStateTTL
@@ -87,7 +87,6 @@ func WithOAuth(
 		s.oauthProviders = registry
 		s.oauthIdentities = identities
 		s.challenges = challenges
-		s.credentials = credentials
 		s.oauthConfig = cfg
 	}
 }
@@ -120,6 +119,9 @@ type OAuthCallbackResult struct {
 	// Linked reports that this sign-in attached the provider account to an
 	// existing user found by email (auto-link).
 	Linked bool
+	// PasswordDropped reports that the link took over a password account
+	// whose ownership nothing proved: its password, sessions and PATs are gone.
+	PasswordDropped bool
 }
 
 // oauthUserOrigin tells how resolveOAuthUser found the user.
@@ -128,7 +130,8 @@ type oauthUserOrigin int
 const (
 	oauthUserExisting oauthUserOrigin = iota // provider account already linked
 	oauthUserCreated
-	oauthUserLinked // auto-linked to an account with the same email
+	oauthUserLinked  // auto-linked to an account with the same email
+	oauthUserClaimed // linked after dropping the account's unproven password
 )
 
 // oauthProvider resolves an enabled provider.
@@ -231,18 +234,35 @@ func (s *Service) OAuthCallback(ctx context.Context, req OAuthCallbackRequest) (
 	}
 
 	// Email and roles come from the user store, not the provider: they may differ.
-	change := accountChange{userID: user.ID, created: origin == oauthUserCreated, linked: origin == oauthUserLinked}
-	pair, err := s.issueTokens(ctx, user.ID, user.Email, user.Roles, "")
+	change := accountChange{
+		userID:          user.ID,
+		created:         origin == oauthUserCreated,
+		linked:          origin == oauthUserLinked || origin == oauthUserClaimed,
+		passwordDropped: origin == oauthUserClaimed,
+	}
+	if change.passwordDropped {
+		// linkOAuthUser put the epoch the claim returned on user. Access tokens
+		// of its second count as stale; the owner's must be issued after it.
+		epoch := user.CredentialsChangedAt
+		if epoch == nil {
+			return nil, &accountError{change, errors.New("claim returned no credential epoch")}
+		}
+		if err := s.waitPastSecond(ctx, *epoch); err != nil {
+			return nil, &accountError{change, err}
+		}
+	}
+	pair, err := s.issueTokens(ctx, user.ID, user.Email, user.Roles, "", s.now())
 	if err != nil {
 		return nil, &accountError{change, fmt.Errorf("issue tokens: %w", err)}
 	}
 
 	return &OAuthCallbackResult{
-		UserID:    user.ID,
-		Email:     user.Email,
-		TokenPair: pair,
-		IsNewUser: change.created,
-		Linked:    change.linked,
+		UserID:          user.ID,
+		Email:           user.Email,
+		TokenPair:       pair,
+		IsNewUser:       change.created,
+		Linked:          change.linked,
+		PasswordDropped: change.passwordDropped,
 	}, nil
 }
 
@@ -356,13 +376,18 @@ func (s *Service) createOAuthUser(ctx context.Context, provider, externalID, ema
 }
 
 // linkOAuthUser attaches a provider account to an existing user found by
-// email (auto-link), if checkAutoLink allows it.
+// email (auto-link). The store decides, atomically with the link, whether the
+// account holds a password to drop or is refused (ClaimAccountWithOAuthIdentity),
+// so a password saved concurrently is not missed.
+// shortcut: Register saves the password after creating the user, so a link
+// landing between the two leaves both; closing it needs Register to create the
+// user with its password atomically.
 func (s *Service) linkOAuthUser(ctx context.Context, user *entity.User, provider, externalID, email string) (*entity.User, oauthUserOrigin, error) {
-	if err := s.checkAutoLink(ctx, user.ID); err != nil {
-		return nil, oauthUserExisting, &accountError{accountChange{userID: user.ID}, err}
+	if s.oauthConfig.DisableAutoLinkEmail {
+		return nil, oauthUserExisting, &accountError{accountChange{userID: user.ID}, ErrOAuthLinkDisabled}
 	}
 
-	err := s.oauthIdentities.SaveOAuthIdentity(ctx, &entity.OAuthIdentity{
+	epoch, err := s.oauthIdentities.ClaimAccountWithOAuthIdentity(ctx, &entity.OAuthIdentity{
 		ID:         uuid.NewString(),
 		UserID:     user.ID,
 		Provider:   provider,
@@ -371,37 +396,21 @@ func (s *Service) linkOAuthUser(ctx context.Context, user *entity.User, provider
 		CreatedAt:  s.now(),
 	})
 	switch {
+	case err == nil && epoch != nil:
+		// The store's epoch, not a clock read here: it was taken after the
+		// claim's locks, so everything of the password holder predates it.
+		user.CredentialsChangedAt = epoch
+		return user, oauthUserClaimed, nil
 	case err == nil:
 		return user, oauthUserLinked, nil
+	case errors.Is(err, store.ErrUserHasIdentity):
+		return nil, oauthUserExisting, &accountError{accountChange{userID: user.ID}, ErrOAuthAccountHasPassword}
 	case errors.Is(err, store.ErrOAuthIdentityExists):
 		// A concurrent callback for the same provider account linked it first.
 		winner, err := s.oauthIdentityUser(ctx, provider, externalID)
 		return winner, oauthUserExisting, err
 	default:
-		return nil, oauthUserExisting, fmt.Errorf("save oauth identity: %w", err)
-	}
-}
-
-// checkAutoLink decides whether a first OAuth sign-in may attach to an
-// existing account found by email. A password account is refused: local
-// registration does not verify email, so whoever registered the address
-// first may not own it, and linking would hand them the provider's sign-in
-// (pre-account takeover). Its owner proves control by signing in instead.
-// shortcut: a password saved after this check (a registration racing the
-// sign-in) is not seen; closing it needs the check and the link in one
-// transaction.
-func (s *Service) checkAutoLink(ctx context.Context, userID string) error {
-	if s.oauthConfig.DisableAutoLinkEmail {
-		return ErrOAuthLinkDisabled
-	}
-	_, err := s.credentials.GetPasswordHash(ctx, userID)
-	switch {
-	case err == nil:
-		return ErrOAuthAccountHasPassword
-	case errors.Is(err, store.ErrCredentialNotFound):
-		return nil
-	default:
-		return fmt.Errorf("get password hash: %w", err)
+		return nil, oauthUserExisting, fmt.Errorf("claim account: %w", err)
 	}
 }
 

@@ -149,7 +149,7 @@ func run() error {
 		return fmt.Errorf("create oauth providers: %w", err)
 	}
 	if len(oauthProviders) > 0 {
-		serviceOpts = append(serviceOpts, auth.WithOAuth(oauthProviders, oauthIdentityStore, challengeStore, credStore,
+		serviceOpts = append(serviceOpts, auth.WithOAuth(oauthProviders, oauthIdentityStore, challengeStore,
 			auth.OAuthConfig{DisableAutoLinkEmail: !config.OAuth.AutoLinkEmail}))
 		slog.Info("oauth sign-in enabled", "providers", len(oauthProviders), "auto_link_email", config.OAuth.AutoLinkEmail)
 	}

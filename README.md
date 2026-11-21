@@ -159,7 +159,7 @@ Environment variables (prefix `PSINA_`). An empty value for a boolean (`PSINA_CO
 | `PSINA_OAUTH_GITHUB_CLIENTID` | _(empty)_ | GitHub OAuth app client id; set to enable GitHub sign-in |
 | `PSINA_OAUTH_GITHUB_CLIENTSECRET` | _(empty)_ | GitHub OAuth app client secret |
 | `PSINA_OAUTH_GITHUB_REDIRECTURIS` | _(empty)_ | Allowed redirect URIs, comma-separated (exact match) |
-| `PSINA_OAUTH_AUTOLINKEMAIL` | `true` | Link a first OAuth sign-in to an existing account with the same verified email. A password account without an OAuth or wallet link is taken over: its password, sessions and PATs are dropped and access tokens issued before are refused for account actions (local registration does not verify email); one with such a link is refused. Trusts provider-verified email as ownership: see the caveat in [docs/audit.md](docs/audit.md#passworddropped) |
+| `PSINA_OAUTH_AUTOLINKEMAIL` | `true` | Link a first OAuth sign-in to an existing account with the same verified email; takeover rules in [docs/audit.md](docs/audit.md#passworddropped) |
 | `PSINA_WALLET_DOMAIN` | _(empty)_ | SIWE domain (e.g. `app.example.com`); set to enable wallet sign-in |
 | `PSINA_WALLET_URI` | _(empty)_ | SIWE URI (e.g. `https://app.example.com`); required with the domain |
 | `PSINA_WALLET_STATEMENT` | _(empty)_ | Text shown to the signer; optional, single line |

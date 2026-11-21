@@ -727,9 +727,7 @@ func (s *Store) checkClaim(ctx context.Context, tx pgx.Tx, identity *entity.OAut
 // dropCredentials deletes the password and PATs, ends every refresh session
 // and sets the credential epoch, which it returns. Roots are locked again: one
 // saved between the claim's two lock statements is locked now, so the UPDATE
-// sees every successor (as in RevokeTokens). The epoch is the database clock
-// read here, after the locks: anything the password holder obtained before
-// the claim took them predates it.
+// sees every successor (as in RevokeTokens).
 func (s *Store) dropCredentials(ctx context.Context, tx pgx.Tx, userID string) (*time.Time, error) {
 	for _, stmt := range []struct{ op, sql string }{
 		{"drop password", fmt.Sprintf(`DELETE FROM %s WHERE user_id = $1`, s.tableLocalCredentials)},

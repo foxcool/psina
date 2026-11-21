@@ -11,15 +11,7 @@ import (
 	"github.com/foxcool/psina/token"
 )
 
-// A takeover (OAuthIdentityStore.ClaimAccountWithOAuthIdentity) drops an
-// unproven password and sets the account's credential epoch. Whatever the
-// password holder obtained before the epoch is stale and refused: access
-// tokens for account actions, refresh sessions, and a login that raced the
-// takeover. The epoch comes from the store's clock (the database's, for
-// postgres) and is read after the claim's locks; access tokens and session
-// starts come from the service clock. The two must agree to well under a
-// second (NTP); a skew of d lets things issued within d of the takeover pass
-// the time comparisons. The login check compares epoch reads, not times.
+// Epoch and token-time rules, and the clock assumption: docs/audit.md, password.dropped.
 
 // errSessionEnded refuses a session or access token that the account's
 // credential epoch, or a logout racing a refresh, has ended.
@@ -38,8 +30,7 @@ func epochOf(user *entity.User) credentialEpoch {
 
 // tokenStale reports whether an access token with this iat may predate the
 // epoch. A token of the epoch's own second counts as before: it cannot be told
-// apart from one issued a moment before the takeover. OAuthCallback waits that
-// second out before issuing the owner's tokens.
+// apart from one issued a moment before the takeover.
 func (e credentialEpoch) tokenStale(iat int64) bool {
 	return e.at != nil && iat <= e.at.Unix()
 }
@@ -62,9 +53,8 @@ func sleepTimer(ctx context.Context, d time.Duration) error {
 	}
 }
 
-// waitPastSecond waits until the service clock has left epoch's iat second,
-// so a token issued afterwards is not tokenStale. It re-reads the clock after
-// every sleep; a clock that does not move is an error, never a false "done".
+// waitPastSecond waits until the service clock has left epoch's iat second.
+// Re-reads the clock after each sleep; a clock that does not advance is an error.
 func (s *Service) waitPastSecond(ctx context.Context, epoch time.Time) error {
 	next := epoch.Truncate(iatResolution).Add(iatResolution)
 	for {
@@ -84,8 +74,7 @@ func (s *Service) waitPastSecond(ctx context.Context, epoch time.Time) error {
 
 // verifySession is Verify for account actions (PAT management): it also
 // refuses an access token issued before the account was taken over. Verify
-// itself (ForwardAuth, every proxied request) stays stateless; such a token
-// keeps passing there until it expires.
+// stays stateless (ForwardAuth); see docs/audit.md, password.dropped.
 func (s *Service) verifySession(ctx context.Context, accessToken string) (*entity.Claims, error) {
 	claims, err := s.Verify(ctx, accessToken)
 	if err != nil {
@@ -136,11 +125,8 @@ func (s *Service) loginEpoch(ctx context.Context, email string) (credentialEpoch
 }
 
 // refuseLoginAfterTakeover ends the session just issued (by Login, or by
-// Register with before as never) if the account was taken over while it ran:
-// its epoch differs from the one read before the password check. No clocks are compared. A takeover committed before
-// the password read leaves no password to check; one committed before the
-// session was saved is seen here; one committed after the save ends the
-// session itself (the postgres claim makes the save wait for it otherwise).
+// Register with before as never) if the account's epoch moved since before
+// the password check: a takeover ran during the sign-in.
 func (s *Service) refuseLoginAfterTakeover(ctx context.Context, userID string, pair *entity.TokenPair, before credentialEpoch) error {
 	user, err := s.userStore.GetByID(ctx, userID)
 	if err != nil {
@@ -157,8 +143,7 @@ func (s *Service) refuseLoginAfterTakeover(ctx context.Context, userID string, p
 
 // createSessionPAT is CreatePAT for a caller authenticated by claims. A
 // takeover committed between the session check and the save may have missed
-// the new token (the postgres claim blocks the save until it commits), so the
-// check runs again; the token is deleted unless it passes.
+// the new token, so the check runs again; the token is deleted unless it passes.
 func (s *Service) createSessionPAT(ctx context.Context, claims *entity.Claims, name string, scopes []string, expiresAt *time.Time) (*PATResult, error) {
 	result, err := s.CreatePAT(ctx, claims.UserID, name, scopes, expiresAt)
 	if err != nil {

@@ -155,8 +155,7 @@ pat:
   maxTTL: 0s         # 0s = unlimited
   touchInterval: 1m  # last-used update throttle; -1ns = every verify
 oauth:
-  autoLinkEmail: true # link to an account with the same verified email; takes over a password account without an identity
-                      # (trusts provider-verified email; caveat in docs/audit.md, password.dropped)
+  autoLinkEmail: true # link to the account with the same verified email; takeover rules: docs/audit.md
   google:            # enabled when clientID is set; all three required together
     clientID: ""
     clientSecret: ""

@@ -242,8 +242,7 @@ func (s *Service) Register(ctx context.Context, email, password string) (*Regist
 	if err != nil {
 		return nil, &accountError{accountChange{userID: identity.UserID, created: true}, fmt.Errorf("issue tokens: %w", err)}
 	}
-	// A new account has no epoch; one set now means a takeover committed
-	// after the password was saved, as in Login.
+	// A new account has no epoch yet.
 	if err := s.refuseLoginAfterTakeover(ctx, identity.UserID, tokenPair, credentialEpoch{}); err != nil {
 		return nil, &accountError{accountChange{userID: identity.UserID, created: true}, err}
 	}
@@ -274,14 +273,12 @@ func (s *Service) Login(ctx context.Context, email, password string) (*LoginResu
 		return nil, &CredentialsError{Reason: ReasonMalformedCredentials}
 	}
 
-	// Read before the password: a takeover committing after this read changes
-	// the epoch, and refuseLoginAfterTakeover sees that.
+	// Read before the password check; see refuseLoginAfterTakeover.
 	before, err := s.loginEpoch(ctx, email)
 	if err != nil {
 		return nil, err
 	}
-	// The session starts when the password is checked (Refresh compares it
-	// with the epoch).
+	// The session starts when the password is checked.
 	authAt := s.now()
 	req := &entity.AuthRequest{
 		Email:    email,
@@ -367,9 +364,7 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*entity.Tok
 	if err != nil {
 		return nil, &accountError{accountChange{userID: rt.UserID}, fmt.Errorf("get user: %w", err)}
 	}
-	// A session that started before a takeover belongs to whoever held the
-	// dropped password. The claim ends every session it sees; this catches one
-	// saved after it by a sign-in that began before it.
+	// A session that began before the epoch belongs to the dropped password's holder.
 	if epochOf(user).sessionStale(rt.CreatedAt) {
 		if err := s.tokenStore.RevokeTokens(ctx, familyRoot(rt)); err != nil {
 			slog.ErrorContext(ctx, "revoke pre-takeover refresh token family", "user_id", rt.UserID, "error", err)

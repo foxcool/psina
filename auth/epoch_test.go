@@ -22,8 +22,6 @@ func TestCredentialEpoch(t *testing.T) {
 	t.Run("access token", func(t *testing.T) {
 		assert.False(t, never.tokenStale(1))
 		assert.True(t, epoch.tokenStale(999), "second before")
-		// iat has whole seconds: 1000 may be 1000.1 (before) or 1000.7
-		// (after), so the epoch's own second counts as before.
 		assert.True(t, epoch.tokenStale(1000), "same second")
 		assert.False(t, epoch.tokenStale(1001), "next second")
 	})

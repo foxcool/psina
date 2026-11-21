@@ -31,12 +31,10 @@ import (
 //	user_agent   client User-Agent, truncated
 //	user_id      the account, when known
 const (
-	auditEventRegister    = "register"
-	auditEventLogin       = "login"
-	auditEventOAuthSignIn = "oauth.sign_in"
-	auditEventOAuthLink   = "oauth.link"
-	// auditEventPasswordDropped: a provider-verified sign-in took over a
-	// password account whose ownership nothing proved.
+	auditEventRegister        = "register"
+	auditEventLogin           = "login"
+	auditEventOAuthSignIn     = "oauth.sign_in"
+	auditEventOAuthLink       = "oauth.link"
 	auditEventPasswordDropped = "password.dropped"
 	auditEventWalletSignIn    = "wallet.sign_in"
 	auditEventUserCreated     = "user.created"
@@ -114,11 +112,9 @@ func (e *CredentialsError) Is(target error) bool {
 
 // accountChange is the account a sign-in acted on and what it did to it.
 type accountChange struct {
-	userID  string
-	created bool
-	linked  bool // auto-linked a provider account to an existing user
-	// passwordDropped: the link took over a password account (see
-	// OAuthCallbackResult.PasswordDropped).
+	userID          string
+	created         bool
+	linked          bool // auto-linked a provider account to an existing user
 	passwordDropped bool
 }
 

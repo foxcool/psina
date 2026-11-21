@@ -40,9 +40,7 @@ func (c *claimAfterPasswordCheck) Authenticate(ctx context.Context, req *entity.
 	return identity, err
 }
 
-// The failing order against postgres: the claim's epoch (database clock) is
-// earlier than the login's start (service clock an hour ahead), and the claim
-// commits before the login saves its session.
+// Same race as TestTakeover_LoginRacingClaimRefused, against postgres.
 func TestIntegration_LoginRacingClaimRefused(t *testing.T) {
 	ctx := context.Background()
 	testDB.MustTruncate(t)

@@ -37,10 +37,8 @@ var (
 	// and automatic linking is turned off.
 	ErrOAuthLinkDisabled = errors.New("account exists and automatic oauth linking is disabled")
 	// ErrOAuthAccountHasPassword means an account with the provider's email
-	// holds a password and already has an OAuth or wallet identity, so it is
-	// not linked automatically. (A password account without one is taken over
-	// instead.) Its password holder could link the provider explicitly, but no
-	// such flow exists yet.
+	// holds a password and an OAuth or wallet identity, so it is not linked
+	// automatically; no explicit link flow exists yet.
 	ErrOAuthAccountHasPassword = errors.New("an account with this email has a password and is not linked automatically")
 )
 
@@ -241,8 +239,7 @@ func (s *Service) OAuthCallback(ctx context.Context, req OAuthCallbackRequest) (
 		passwordDropped: origin == oauthUserClaimed,
 	}
 	if change.passwordDropped {
-		// linkOAuthUser put the epoch the claim returned on user. Access tokens
-		// of its second count as stale; the owner's must be issued after it.
+		// Tokens of the epoch's second are stale: the owner's are issued after it.
 		epoch := user.CredentialsChangedAt
 		if epoch == nil {
 			return nil, &accountError{change, errors.New("claim returned no credential epoch")}
@@ -397,8 +394,6 @@ func (s *Service) linkOAuthUser(ctx context.Context, user *entity.User, provider
 	})
 	switch {
 	case err == nil && epoch != nil:
-		// The store's epoch, not a clock read here: it was taken after the
-		// claim's locks, so everything of the password holder predates it.
 		user.CredentialsChangedAt = epoch
 		return user, oauthUserClaimed, nil
 	case err == nil:

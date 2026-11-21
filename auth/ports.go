@@ -132,21 +132,14 @@ type OAuthIdentityStore interface {
 	// Returns store.ErrUserExists or store.ErrOAuthIdentityExists on a conflict.
 	CreateUserWithOAuthIdentity(ctx context.Context, user *entity.User, identity *entity.OAuthIdentity) error
 
-	// ClaimAccountWithOAuthIdentity links identity to its user, an existing
-	// account found by the provider-verified email. If that account holds a
-	// password and no OAuth or wallet identity, nothing proves the password
-	// holder owns the email (local registration does not verify it), so the
-	// provider's owner takes the account over: the password is deleted, every
-	// refresh session ended, every PAT deleted and the user's
-	// CredentialsChangedAt set, together with the link, atomically. The epoch
-	// is read from the store's clock inside the transaction, after its locks,
-	// and returned; nil means no password was dropped (the account is only
-	// linked). The ownership rule lives in the store because its check and
-	// these writes must be one transaction. Returns, checked in
-	// this order, store.ErrUserNotFound for a missing user,
-	// store.ErrOAuthIdentityExists for a taken provider account and
-	// store.ErrUserHasIdentity for a password account that already has an
-	// identity; on any error nothing changes.
+	// ClaimAccountWithOAuthIdentity links identity to the account found by its
+	// provider-verified email. An account with a password and no OAuth or
+	// wallet identity is taken over in the same transaction: password deleted,
+	// sessions ended, PATs deleted, CredentialsChangedAt set from the store's
+	// clock after its locks and returned (nil: nothing was dropped). The rule
+	// lives in the store because the check and the writes must be atomic.
+	// Errors, checked in this order: store.ErrUserNotFound,
+	// store.ErrOAuthIdentityExists, store.ErrUserHasIdentity; nothing changes.
 	ClaimAccountWithOAuthIdentity(ctx context.Context, identity *entity.OAuthIdentity) (passwordDroppedAt *time.Time, err error)
 
 	// ListOAuthIdentities returns all OAuth identities linked to a user,

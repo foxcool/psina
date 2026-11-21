@@ -575,9 +575,7 @@ func (h *Handler) RevokePersonalAccessToken(
 	}
 	userID := claims.UserID
 
-	// The session check just ran; nothing holds it through the delete, so a
-	// takeover committing in between lets this token revoke one more PAT
-	// (docs/audit.md, pat.revoke).
+	// shortcut: a takeover between the session check and the delete is not seen; docs/audit.md, pat.revoke.
 	revoked, err := h.service.revokePAT(ctx, userID, req.Msg.Id)
 	if err != nil {
 		h.auditFailure(ctx, req, auditEventPATRevoke, patFailureReason(err), patID, slog.String("user_id", userID))

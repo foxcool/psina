@@ -20,8 +20,7 @@ import (
 func AccountClaims(t *testing.T, newStore NewBackend) {
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Second)
-	// The epoch comes from the store's clock (the database's, for postgres),
-	// which may drift a little from the test's.
+	// Allows for drift between the store's clock and the test's.
 	const clockSlack = 2 * time.Second
 
 	newIdentity := func(userID, externalID string) *entity.OAuthIdentity {
@@ -103,7 +102,7 @@ func AccountClaims(t *testing.T, newStore NewBackend) {
 		require.NoError(t, err)
 		require.NotNil(t, user.CredentialsChangedAt, "credential epoch set")
 		assert.True(t, epoch.Equal(*user.CredentialsChangedAt), "stored epoch is the returned one, got %v", user.CredentialsChangedAt)
-		// The returned user is a copy: changing its epoch changes nothing stored.
+		// The returned epoch must not alias the stored one.
 		*user.CredentialsChangedAt = time.Time{}
 		*epoch = time.Time{}
 		again, err := s.GetByID(ctx, userID)

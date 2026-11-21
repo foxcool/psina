@@ -484,8 +484,6 @@ func (s *Store) ClaimAccountWithOAuthIdentity(ctx context.Context, identity *ent
 		return nil, nil
 	}
 
-	// The epoch is read under the lock, after every check, as postgres reads
-	// its clock after taking its locks.
 	now := time.Now()
 	delete(s.passwordHashes, userID)
 	// usersByEmail shares this user; the stored epoch is not the returned one,

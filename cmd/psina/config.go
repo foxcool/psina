@@ -60,7 +60,7 @@ type Config struct {
 		TouchInterval time.Duration `koanf:"touchinterval"` // Min interval between last-used updates; -1 = every verify (default: 1m)
 	} `koanf:"pat"`
 	OAuth struct {
-		AutoLinkEmail bool              `koanf:"autolinkemail"` // Link a first sign-in to an account with the same verified email, taking over an unproven password account; trusts provider-verified email, caveat in docs/audit.md (default: true)
+		AutoLinkEmail bool              `koanf:"autolinkemail"` // Link a first sign-in to the account with the same verified email; takeover rules in docs/audit.md (default: true)
 		Google        OAuthClientConfig `koanf:"google"`
 		GitHub        OAuthClientConfig `koanf:"github"`
 	} `koanf:"oauth"`

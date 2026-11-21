@@ -1,0 +1,8 @@
+# Default rules plus one path exception: atlas.sum holds migration content
+# hashes, which the generic-api-key rule reads as keys on every new migration.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Atlas migration checksums"
+paths = ['''^migrations/atlas\.sum$''']
